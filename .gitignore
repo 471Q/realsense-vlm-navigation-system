@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# VS Code
+.vscode/
+
+# Data, logs, and outputs
+outputs/
+**/outputs/
+*.log
+*.tmp
+*.bak
+
+# Checkpoints and large model files
+*.pt
+*.onnx
+*.ckpt
+*.bin
+*.gguf
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter and IPython
+.ipynb_checkpoints/
+
+# Python packaging
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Local tools & cache
+**/__pycache__/
+*.swp
+*.swo
+
+# Video and raw sensor data
+*.mp4
+*.bag
+
+# Application-specific
+smart_walker/models/
+smart_walker/tools/

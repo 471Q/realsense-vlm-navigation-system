@@ -1,0 +1,73 @@
+# =========================
+# Per-frame Pipeline Parameters
+# =========================
+
+open_vocab:
+  # Text prompts sent to an open-vocabulary detector (can be expanded anytime).
+  prompts:
+    - person
+    - wheelchair
+    - walker
+    - pram
+    - trolley
+    - stretcher
+    - bed
+    - chair
+    - table
+    - bin
+    - cabinet
+    - rack
+    - iv pole
+    - door
+    - stairs
+    - ramp
+    - wet floor sign
+    - drop-off
+
+depth:
+  mode: auto            # "rgbd" | "monocular" | "auto"
+  metric_bins_m:
+    very_close: [0.0, 0.7]
+    near:       [0.7, 1.5]
+    mid:        [1.5, 3.0]
+    far:        [3.0, 99.0]
+  monocular_bins_norm:   # 0..1 (smaller = nearer), used if no metric depth
+    very_close: [0.00, 0.20]
+    near:       [0.20, 0.40]
+    mid:        [0.40, 0.70]
+    far:        [0.70, 1.01]
+
+bearing:
+  left_max:  0.33       # bbox centre / image width
+  right_min: 0.66
+
+free_space:
+  central_wedge_deg: 20  # +/- degrees around centreline
+  sample_rows: 12
+  min_gap_width_m: 0.60  # treat qualitatively if only monocular depth
+
+uncertainty_thresholds:
+  depth_std_norm_gt: 0.25
+  low_light_gray_mean_lt: 40
+
+risk_rules_baseline:
+  stop:
+    nearest_obstacle_m_lt: 0.70
+    corridor_min_width_m_lt: 0.60
+    hazard_within_m_lte: 2.0
+  caution:
+    nearest_obstacle_m_lt: 1.50
+    multi_near_objects_count_gte: 2
+    high_uncertainty: true
+
+output_schema_fields:
+  - frame_id
+  - timestamp_ms
+  - caption
+  - risk
+  - objects[].{id,raw_label,canonical_class,ontology_class,conf,bbox_xyxy,distance_m,distance_bin,bearing}
+  - free_space.{corridor_min_width_m,nearest_obstacle_m}
+  - hazards[]
+  - uncertainty.{depth_std,low_light}
+  - source_depth
+  - explain.{rules_fired,min_distance_m,class_counts}

@@ -1,0 +1,50 @@
+# =========================
+# Open-world Safety Ontology
+# =========================
+
+ontology:
+  # A small, stable set of safety-relevant buckets.
+  - name: agent
+    canonical: [person]
+    prompts: ["person", "human", "staff", "nurse", "doctor", "patient", "bystander"]
+  - name: mobility_aid
+    canonical: [wheelchair, walker, pram]
+    prompts: ["wheelchair", "mobility scooter", "walker", "walking frame", "rollator", "pram", "stroller", "buggy", "pushchair"]
+  - name: rolling_obstacle
+    canonical: [trolley, stretcher, bed]
+    prompts: ["trolley", "cart", "meal cart", "linen cart", "gurney", "stretcher", "hospital bed", "bed", "equipment cart", "oxygen cylinder trolley"]
+  - name: static_obstacle
+    canonical: [chair, table, bin, cabinet, rack, iv_pole, signage_stand]
+    prompts: ["chair", "table", "desk", "bench", "bin", "trash can", "cabinet", "shelf", "rack", "IV pole", "signage stand", "pillar", "post", "tripod"]
+  - name: portal
+    canonical: [door, doorway]
+    prompts: ["door", "doorway", "automatic door", "swing door", "sliding door"]
+  - name: hazard
+    canonical: [stairs_up, stairs_down, ramp, wet_floor_sign, drop_off]
+    prompts: ["stairs", "staircase", "steps", "ramp", "wet floor sign", "caution sign", "spill", "drop-off", "edge", "escalator"]
+  - name: unknown_obstacle
+    canonical: [unknown]
+    prompts: []
+
+synonyms_to_canonical:
+  cart: trolley
+  meal_cart: trolley
+  linen_cart: trolley
+  gurney: stretcher
+  hospital_bed: bed
+  buggy: pram
+  pushchair: pram
+  iv pole: iv_pole
+  trash can: bin
+
+mapping:
+  # First try embedding similarity (no LLM), then optional LLM fallback.
+  embed_match:
+    model_hint: "clip"         # just a hint for later; we’ll pick an available model in code
+    threshold: 0.28            # cosine similarity threshold to accept a canonical match
+    top_k: 3
+  llm_fallback:
+    enabled: true
+    temperature: 0.0
+    max_tokens: 64
+    # The LLM will be constrained to return ONE of the ontology names above.

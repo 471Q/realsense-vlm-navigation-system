@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-walker"
+version = "0.1.0"
+description = "Per-frame RGB-D facts pipeline for smart_walker"
+readme = "README.md"
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+include = ["smart_walker*"]
