@@ -360,7 +360,7 @@ def _ensure_suggest(adv: Optional[str], sug: Optional[str], content: str, fallba
     """Ensure caption contains a 'Suggest: ...' clause; append fallback when missing."""
     try:
         if 'suggest:' in (content or '').lower():
-            # Optionally normalize tokens for SAFE/CAUTION/STOP
+            # Optionally normalize tokens for CAUTION/SAFE
             try:
                 adv2, sug2 = _parse_advice(content)
                 if adv2 == 'CAUTION' and sug2 in ('left', 'right'):
@@ -369,25 +369,18 @@ def _ensure_suggest(adv: Optional[str], sug: Optional[str], content: str, fallba
                                   content)
                 if adv2 == 'SAFE' and sug2 in ('left', 'right'):
                     return re.sub(r"(?i)\bSuggest:\s*(left|right)\b", "Suggest: continue", content)
-                # For STOP, prefer backing up when all forward lanes are blocked.
-                if adv2 == 'STOP':
-                    # Any STOP+continue or STOP+sideways suggestion should reduce to 'back'
-                    # when fallback (auto_suggest) says 'back' (i.e. no safe lane).
-                    fb = (fallback or '').lower()
-                    if fb == 'back':
-                        return re.sub(r"(?i)\bSuggest:\s*([a-z\-]+)\b", "Suggest: back", content)
-                    # Otherwise keep existing STOP normalization rules
-                    if sug2 in ('stay-left', 'stay-right'):
-                        return re.sub(r"(?i)\bSuggest:\s*stay\-(left|right)\b",
-                                      lambda m: f"Suggest: {m.group(1).lower()}", content)
-                    if sug2 in ('continue',):
-                        tok = (fallback or 'back')
-                        tok = tok.lower()
-                        if tok in ('stay-left', 'stay-right'):
-                            tok = 'left' if tok == 'stay-left' else 'right'
-                        if tok not in ('left', 'right', 'back'):
-                            tok = 'back'
-                        return re.sub(r"(?i)\bSuggest:\s*continue\b", f"Suggest: {tok}", content)
+                if adv2 == 'STOP' and sug2 in ('stay-left', 'stay-right'):
+                    return re.sub(r"(?i)\bSuggest:\s*stay\-(left|right)\b",
+                                  lambda m: f"Suggest: {m.group(1).lower()}", content)
+                # New: avoid contradictory STOP + continue → use fallback or 'back'
+                if adv2 == 'STOP' and sug2 in ('continue',):
+                    tok = (fallback or 'back')
+                    tok = tok.lower()
+                    if tok in ('stay-left', 'stay-right'):
+                        tok = 'left' if tok == 'stay-left' else 'right'
+                    if tok not in ('left', 'right', 'back'):
+                        tok = 'back'
+                    return re.sub(r"(?i)\bSuggest:\s*continue\b", f"Suggest: {tok}", content)
             except Exception:
                 pass
             return content
@@ -927,52 +920,6 @@ def main():
                 risk = r["risk"]
                 facts_with_risk = dict(facts)
                 facts_with_risk["risk"] = risk
-                # Override risk/decision using the same 3-lane depth logic that
-                # drives the safe-path badge so all cues stay in sync.
-                try:
-                    lane_risk: str | None = None
-                    if latest_depth is not None and isinstance(latest_depth, np.ndarray):
-                        H_lr, W_lr = latest_depth.shape[:2]
-                        yy1_lr, yy2_lr = int(0.55 * H_lr), int(0.95 * H_lr)
-                        xL1_lr, xL2_lr = 0, int(W_lr/3)
-                        xC1_lr, xC2_lr = int(W_lr/3), int(2*W_lr/3)
-                        xR1_lr, xR2_lr = int(2*W_lr/3), W_lr
-                        dL_lr = sw.median_depth_in_box(
-                            latest_depth, xL1_lr, yy1_lr, xL2_lr, yy2_lr)
-                        dC_lr = sw.median_depth_in_box(
-                            latest_depth, xC1_lr, yy1_lr, xC2_lr, yy2_lr)
-                        dR_lr = sw.median_depth_in_box(
-                            latest_depth, xR1_lr, yy1_lr, xR2_lr, yy2_lr)
-                        if getattr(args, 'mirror_view', False):
-                            dL_lr, dR_lr = dR_lr, dL_lr
-
-                        def _num_lr(v):
-                            try:
-                                return float(v) if isinstance(v, (int, float)) and np.isfinite(v) else -1.0
-                            except Exception:
-                                return -1.0
-
-                        CLEAR_T_lr = float(
-                            getattr(args, 'clear_threshold_m', 1.8))
-                        isL_lr = _num_lr(dL_lr) >= CLEAR_T_lr
-                        isC_lr = _num_lr(dC_lr) >= CLEAR_T_lr
-                        isR_lr = _num_lr(dR_lr) >= CLEAR_T_lr
-                        cc_lr = sum([isL_lr, isC_lr, isR_lr])
-                        if cc_lr == 3:
-                            lane_risk = 'safe'
-                        elif cc_lr == 0:
-                            lane_risk = 'stop'
-                        else:
-                            lane_risk = 'caution'
-                    if lane_risk is not None:
-                        # Keep risk in sync with the 3-lane safe-path view, but do
-                        # NOT clear captions here; a correct STOP caption should
-                        # remain visible until the usual reconfirm window.
-                        risk = lane_risk
-                        facts_with_risk["risk"] = lane_risk
-                except Exception:
-                    pass
-
                 decision, _why = sw.arbiter_decision(
                     effective_dir, facts_with_risk, cfg)
                 last_decision = decision
@@ -1170,6 +1117,19 @@ def main():
                                     # fallback
                                     auto_suggest = 'continue' if is_C else (
                                         'left' if is_L else 'right')
+                            # Detect "stuck" cases: intent pushing into blocked direction repeatedly
+                            stuck_flag = False
+                            if str(risk).lower() == 'stop' and pressing_dir != 'idle':
+                                # Heuristic: if pressing forward into a blocked center lane
+                                if pressing_dir == 'forward' and st_C == 'blocked':
+                                    stuck_flag = True
+                                # Or pressing left/right into a blocked side lane while others are constrained/blocked
+                                if pressing_dir == 'left' and st_L == 'blocked' and st_C != 'clear' and st_R != 'clear':
+                                    stuck_flag = True
+                                if pressing_dir == 'right' and st_R == 'blocked' and st_C != 'clear' and st_L != 'clear':
+                                    stuck_flag = True
+                            if stuck_flag:
+                                lines.append("stuck: true")
                             # mirror suggestion tokens if requested (swap left/right within combos)
                             if getattr(args, 'mirror_view', False):
                                 mirror_map = {
@@ -1224,6 +1184,13 @@ def main():
                         lines.append(f"ask: take {dialog['proposed_dir']}?")
                     if dialog.get("last_reply"):
                         lines.append(f"user_reply: {dialog['last_reply']}")
+                    # If we have detected a stuck case, explicitly ask the VLM for help to get unstuck
+                    try:
+                        if 'stuck: true' in lines:
+                            lines.append(
+                                "help_request: user appears stuck; propose how to get unstuck using available space or suggest small camera movements to reassess unseen areas.")
+                    except Exception:
+                        pass
                     user_txt = "\n".join(lines)
                     try:
                         can_enqueue = (not vlm_inflight) and vlm_q.empty()
@@ -1383,8 +1350,6 @@ def main():
                         except Exception:
                             return -1.0
                     frame_safe_token = None
-                    # Depth-based advisory level derived from lane medians
-                    frame_advisory = None  # 'SAFE' | 'CAUTION' | 'STOP'
                     if latest_depth is not None:
                         H2, W2 = latest_depth.shape[:2]
                         yy1, yy2 = int(0.55 * H2), int(0.95 * H2)
@@ -1401,39 +1366,10 @@ def main():
                             d_L, d_R = d_R, d_L
                         CLEAR_T = float(
                             getattr(args, 'clear_threshold_m', 1.8))
-                        # Simple lane-based risk logic matched to safe-path badge:
-                        #   is_* True  -> lane is CLEAR (>= CLEAR_T)
-                        #   is_* False -> lane is BLOCKED (< CLEAR_T)
                         is_L = _num(d_L) >= CLEAR_T
                         is_C = _num(d_C) >= CLEAR_T
                         is_R = _num(d_R) >= CLEAR_T
-                        vals = [v for v in (_num(d_L), _num(
-                            d_C), _num(d_R)) if v >= 0]
-
-                        # Derive advisory from clear/blocked pattern only:
-                        #   SAFE    -> all three lanes clear
-                        #   CAUTION -> at least one blocked, at least one clear
-                        #   STOP    -> all three blocked
                         cc = sum([is_L, is_C, is_R])
-                        if cc == 3:
-                            frame_advisory = 'SAFE'
-                        elif cc == 0:
-                            frame_advisory = 'STOP'
-                        else:
-                            frame_advisory = 'CAUTION'
-
-                        # If all three bands are blocked, force immediate VLM reassessment
-                        # and hint that all lanes are blocked around the nearest distance.
-                        try:
-                            if vals and cc == 0:
-                                last_vlm_ts = 0.0
-                                if current_ticket is not None:
-                                    mn = min(vals)
-                                    current_ticket['last_scene_snippet'] = (
-                                        f"lanes3 STOP; all lanes blocked at ~{mn:.2f}m (L/C/R {vals[0]:.2f}/{vals[1]:.2f}/{vals[2]:.2f}m)")
-                        except Exception:
-                            pass
-                        # Safe-path token from the same clear/blocked pattern
                         if cc == 0:
                             frame_safe_token = 'back'
                         elif cc == 3:
@@ -1464,12 +1400,6 @@ def main():
                             r"Suggest:\s*([a-z\-]+)", last_caption, flags=re.IGNORECASE)
                         if m:
                             safe_token = m.group(1).lower()
-                    # If we did not get a fresh depth-based advisory this frame,
-                    # try to reuse the last VLM advice so colours stay consistent.
-                    if frame_advisory is None and last_caption:
-                        adv_tmp, _sug_tmp = _parse_advice(last_caption)
-                        if adv_tmp in ('SAFE', 'CAUTION', 'STOP'):
-                            frame_advisory = adv_tmp
 
                     if safe_token:
                         mapping = {
@@ -1491,30 +1421,8 @@ def main():
                         bw, bh = tw + pad*2, th + pad*2
                         x2, y1 = wtop - 10, 6
                         x1, y2 = x2 - bw, y1 + bh
-
-                        # Colour scheme tied to depth/VLM advisory:
-                        #   - Any clear band (not NONE):
-                        #       SAFE/unknown -> green, CAUTION -> yellow
-                        #   - No clear band (NONE):
-                        #       SAFE/CAUTION -> yellow, STOP -> red
-                        bn_none = 'none' in band_name.lower()
-                        adv = (frame_advisory or '').upper()
-                        if not adv:
-                            # Default to CAUTION when we only know there is no clear band
-                            adv = 'CAUTION' if bn_none else 'SAFE'
-                        if not bn_none:
-                            if adv == 'CAUTION':
-                                col = (0, 215, 255)  # yellow
-                            elif adv == 'STOP':
-                                # red (very rare: STOP but a band flagged clear)
-                                col = (0, 0, 255)
-                            else:
-                                col = (0, 180, 0)   # green
-                        else:
-                            if adv == 'STOP':
-                                col = (0, 0, 255)    # red
-                            else:
-                                col = (0, 215, 255)  # yellow
+                        col = (0, 180, 0) if 'none' not in band_name.lower() else (
+                            0, 0, 215)
                         overlay2 = vis.copy()
                         cv2.rectangle(overlay2, (x1, y1), (x2, y2), col, -1)
                         cv2.addWeighted(overlay2, 0.85, vis, 0.15, 0, vis)

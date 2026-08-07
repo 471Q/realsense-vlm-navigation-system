@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sL \"https://huggingface.co/api/models/Qwen/Qwen3-VL-4B-Instruct-GGUF\")",
+      "Bash(mkdir -p models/llm/qwen3-vl-4b/hf_repo models/llm/qwen3-vl-4b/mmproj)",
+      "Bash(curl -sL -o models/llm/qwen3-vl-4b/hf_repo/Qwen3VL-4B-Instruct-Q4_K_M.gguf __TRACKED_VAR__/Qwen3VL-4B-Instruct-Q4_K_M.gguf)",
+      "Bash(curl -sL -o models/llm/qwen3-vl-4b/mmproj/mmproj-Qwen3VL-4B-Instruct-F16.gguf __TRACKED_VAR__/mmproj-Qwen3VL-4B-Instruct-F16.gguf)",
+      "Bash(sed -i -e 's/Benchmark Qwen2\\\\.5-VL 3B and LLaVA-1\\\\.5 7B/Benchmark a Qwen VLM \\(default Qwen3-VL 4B\\) and LLaVA-1.5 7B/' -e 's/\"\"\"Benchmark Qwen2\\\\.5-VL 3B \\(multimodal\\)/\"\"\"Benchmark the selected Qwen VLM \\(multimodal\\)/' scripts/benchmark_vlm.py)",
+      "Bash(python -m py_compile scripts/benchmark_vlm.py smart_walker/scripts/realsense_vlm_on_change_qwen.py smart_walker/scripts/realsense_vlp_on_change_qwen.py)",
+      "Bash(sed -i -e 's/qwen2\\\\.5-vl-3b-mmproj-\\\\*\\\\.gguf/mmproj-Qwen3VL-4B-Instruct-*.gguf/g' -e 's/qwen2\\\\.5-vl-3b-instruct-\\\\*\\\\.gguf/Qwen3VL-4B-Instruct-*.gguf/g' -e 's/qwen2\\\\.5-vl-3b-instruct/qwen3-vl-4b-instruct/g' -e 's/Qwen2\\\\.5-VL/Qwen3-VL/g' -e 's/Qwen2-VL 3B/Qwen3-VL 4B/g' -e s/Qwen2-VL/Qwen3-VL/g realsense_vlp_on_change_qwen.py)",
+      "Bash(python -m py_compile realsense_vlp_on_change_qwen.py)",
+      "Read(//d/Swinburne/PostGrad/PhD/models/llm/**)",
+      "Bash(break)",
+      "PowerShell(& \"d:\\\\Swinburne\\\\PostGrad\\\\PhD\\\\Implementation\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\atiqu\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Swinburne-PostGrad-PhD-Implementation\\\\fea4b83a-8c3f-4440-9775-54f7601a6791\\\\scratchpad\\\\smoke_qwen3vl.py\")",
+      "Bash(./tools/llama_cpp/llama-server.exe --help)",
+      "Bash(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv)",
+      "PowerShell($env:GGML_LOG_LEVEL=\"debug\"; & \"d:\\\\Swinburne\\\\PostGrad\\\\PhD\\\\Implementation\\\\smart_walker\\\\tools\\\\llama_cpp\\\\llama-server.exe\" --version 2>&1 | Select-String -Pattern \"cuda|backend|failed\" | Select-Object -First 10; Write-Output \"--- dependency probe ---\"; try { [System.Reflection.Assembly]::LoadFile\\(\"x\"\\) } catch {}; $r = & where.exe cudart64_12.dll 2>$null; if \\($r\\) { Write-Output \"cudart on PATH: $r\" } else { Write-Output \"cudart64_12.dll NOT on PATH\" })",
+      "Bash(curl -sL \"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b6937\")",
+      "Bash(curl -sL -o cudart.zip \"https://github.com/ggml-org/llama.cpp/releases/download/b6937/cudart-llama-bin-win-cuda-12.4-x64.zip\")",
+      "Bash(unzip -l cudart.zip)",
+      "Bash(unzip -n cudart.zip -d /d/Swinburne/PostGrad/PhD/Implementation/smart_walker/tools/llama_cpp/)",
+      "PowerShell($p=\"d:\\\\Swinburne\\\\PostGrad\\\\PhD\\\\Implementation\\\\.venv\\\\Scripts\\\\python.exe\"; $s=\"C:\\\\Users\\\\atiqu\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Swinburne-PostGrad-PhD-Implementation\\\\fea4b83a-8c3f-4440-9775-54f7601a6791\\\\scratchpad\\\\smoke_qwen3vl.py\"; & $p $s; & $p $s; & $p $s)",
+      "PowerShell($p = Get-Process llama-server -ErrorAction SilentlyContinue; if \\($p\\) { Write-Output \"still running: $\\($p.Id\\) - stopping\"; $p | Stop-Process -Force } else { Write-Output \"no llama-server process running\" }; $c = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Write-Output \"port 8080 still listening\" } else { Write-Output \"port 8080 free\" })",
+      "Bash(/d/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/python.exe \"C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/fea4b83a-8c3f-4440-9775-54f7601a6791/scratchpad/sweep.py\")",
+      "Bash(python -m py_compile scripts/realsense_vlm_on_change_qwen.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile scripts/realsense_vlp_on_change_qwen.py smart_walker_vlp/realsense_vlp_on_change_qwen.py)",
+      "Bash(/d/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/python.exe \"C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/fea4b83a-8c3f-4440-9775-54f7601a6791/scratchpad/geom_eval.py\")",
+      "Bash(/d/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/python.exe \"C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/fea4b83a-8c3f-4440-9775-54f7601a6791/scratchpad/geom_eval2.py\")"
+    ]
+  }
+}

@@ -1,0 +1,275 @@
+% Chapter 4: Implementation
+% This file documents the implementation details for the smart-walker
+% VLM-based navigation system.
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{listings}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\title{Chapter 4: Implementation\\Vision-Language Model Based Smart-Walker Guidance System}
+\author{(Author)}
+\date{\\(PhD Thesis)}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+\maketitle
+
+\section{Development Tools and System Requirements}
+
+\subsection{Host Computing Platform}
+This research was implemented and evaluated on a single mobile workstation representative of an upper-bound assistive robotics control computer. Table~\ref{tab:laptop-spec} summarises the key hardware characteristics.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{l p{8cm}}
+    \toprule
+    Component & Specification \\
+    \midrule
+    CPU & Intel Core i7 (12th Gen, H-series) \\
+    GPU & NVIDIA GeForce RTX 3060 Laptop GPU (6~GiB VRAM) \\
+    RAM & 16~GiB DDR4 system memory \\
+    Storage & 1~TB NVMe SSD \\
+    OS & Windows 11 (64-bit) \\
+    Python & 3.10 (virtual environment, \code{venv}) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Host laptop specifications used for implementation and benchmarking.}
+  \label{tab:laptop-spec}
+\end{table}
+
+\subsection{Intel RealSense RGB-D Sensor}
+The RGB-D perception stack is built around an Intel RealSense depth camera, which provides synchronized colour and depth frames. Table~\ref{tab:realsense-spec} lists the key parameters that influence the downstream pipeline.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{l p{8cm}}
+    \toprule
+    Feature & Specification (typical) \\
+    \midrule
+    RGB resolution & 1280~\(\times\)~720 at up to 30~FPS \\
+    Depth resolution & 640~\(\times\)~480 at up to 30~FPS \\
+    Depth range & \(\approx 0.2\)--10~m (scene dependent) \\
+    Field of view & Horizontal \(\approx 87^\circ\), vertical \(\approx 58^\circ\) \\
+    Interface & USB~3.0 \\
+    SDK & Intel RealSense SDK 2.0 (C++/Python bindings) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Representative RealSense RGB-D camera characteristics used in this research.}
+  \label{tab:realsense-spec}
+\end{table}
+
+\subsection{Key Python Packages and Roles}
+The implementation relies on a focused set of Python libraries that together provide sensor access, perception, reasoning, benchmarking, and user interface capabilities. Rather than treating these as interchangeable tooling, this research designed the pipeline around a small number of carefully chosen packages whose behaviour is well understood and whose versions are pinned in the project \code{requirements.txt} and \code{pyproject.toml} files.
+
+At the lowest level, \code{pyrealsense2} exposes the Intel RealSense SDK 2.0 functionality to Python. This package is responsible for configuring the RGB and depth streams, querying camera intrinsics (focal lengths and principal point), and delivering synchronised frames into the processing loop. All depth measurements and subsequent geometric reasoning ultimately depend on the correctness and stability of this interface. In particular, this research uses \code{pyrealsense2} to obtain raw depth units and to convert them into metres using the sensor-specific scale factor provided by the SDK.
+
+On top of the raw sensor interface, the \code{numpy} package provides vectorised array operations for manipulating depth maps and intermediate numerical quantities. Median filtering, masking of invalid depth values, trimming of extreme samples, and computation of summary statistics all use \code{numpy} arrays. The ability to write concise, broadcasted operations over entire regions of interest is critical for keeping the depth-path computations both readable and efficient. Where appropriate, \code{numpy} arrays are converted into \code{torch} tensors to feed neural networks, but core depth reasoning remains in the \code{numpy} domain.
+
+The \code{opencv-python} bindings (OpenCV) are used for image-space operations that sit between raw sensor data and higher-level perception. RGB frames are resized and letterboxed to the input resolution expected by YOLOv8, colour channels are re-ordered when necessary, and debugging visualisations (bounding boxes, lane overlays, text annotations) are rendered using OpenCV primitives. OpenCV also assists in generating synthetic or test patterns when a physical camera is unavailable, enabling deterministic experiments.
+
+The \code{torch} package underpins all deep learning components in this research. Both YOLOv8 and the vision-language models (LLaVA and Qwen2.5-VL) are instantiated as \code{torch.nn.Module} instances, with \code{torch} controlling device placement (CPU or CUDA), mixed-precision arithmetic, gradient modes (inference-only in this case), and memory management. The research leverages \code{torch} utilities for measuring peak GPU memory, synchronising CUDA streams before timing, and converting \code{numpy} arrays into tensors for batched processing.
+
+While YOLOv8 can be used via custom checkpoints, this research adopts the \code{ultralytics} package for model loading and inference utilities. This package simplifies running YOLOv8n with minimal boilerplate: it handles input normalisation, non-maximum suppression, and mapping raw model outputs into bounding boxes with class labels and confidences. As a result, the implementation can focus on fusing detections with depth, rather than re-implementing detection post-processing.
+
+For multimodal captioning, the \code{transformers} library from Hugging Face provides model and processor interfaces for both LLaVA-1.5 7B and Qwen2.5-VL 3B. Processors handle tokenisation and image pre-processing; model classes expose \code{generate()} for auto-regressive decoding. The flexibility of \code{transformers} makes it straightforward to swap models while preserving the same high-level integration pattern: construct a chat-like prompt, encode the image, and generate a short sequence of tokens under specific decoding constraints.
+
+Because vision-language models can be large, the \code{accelerate} package is used to assist with device placement and, where relevant, mixed-precision execution. \code{accelerate} simplifies selecting an appropriate device map (for example, automatically sharding weights across available GPUs) and reduces boilerplate when experimenting with CPU-only versus GPU runs. Closely related, \code{timm} supplies reusable vision backbones and utility functions that some multimodal models depend on internally, particularly when they are authored against the timm ecosystem.
+
+Another lightweight but important dependency is \code{einops}, which provides a concise language for reshaping and reordering tensor dimensions. Several multimodal models internally rearrange patch embeddings and visual tokens; using \code{einops} makes these transformations explicit and less error-prone. Although much of this complexity is encapsulated within model definitions, understanding the role of \code{einops} is useful when interpreting the attention patterns and feature maps produced by the vision encoders.
+
+For measurement and benchmarking, \code{psutil} offers cross-platform access to process-level statistics, particularly resident set size (RSS) on the CPU. The benchmark script uses \code{psutil} to quantify how much host memory is consumed when different models and quantisation schemes are active. Combined with GPU memory measurements from \code{torch}, this enables a full picture of resource usage during caption generation.
+
+Finally, a lightweight graphical toolkit such as \code{PyQt} or the standard \code{tkinter} library provides the user interface layer. These toolkits are used to display the RGB stream with overlaid annotations, show current captions and Suggest tokens, and expose simple controls for starting and stopping experiments. The UI is deliberately kept minimal so that the majority of complexity resides in the underlying perception and reasoning modules, but it remains essential for making the system observable to human evaluators.
+
+\section{Development Strategy}
+
+This research followed an iterative and exploratory development strategy aligned with agile principles. Rather than attempting to design the entire system upfront, implementation proceeded in short cycles that each introduced one new capability (for example, lane-based depth reasoning or a new VLM) and then validated it empirically with recorded data and live trials.
+
+Each cycle can be summarised as a four-step loop. In the planning phase, the research identified a narrow capability to add or refine, such as introducing a conservative lower band for depth measurements, implementing caption ticketing, or migrating to Qwen2.5-VL. Implementation then extended existing Python modules and configuration files with minimal, testable changes rather than wholesale rewrites. Evaluation followed immediately on curated bag files and on live camera streams, with logs capturing both quantitative signals (such as frame timing and memory usage) and qualitative behaviours (such as how intelligible captions appeared). Finally, reflection closed the loop: failure modes were analysed, thresholds or prompts were adjusted, and the next increment was selected based on observed shortcomings.
+
+This chapter documents the resulting implementation in thematic stages, mirroring the actual progression from a depth-only prototype to a full vision-language guided smart-walker. Subsequent sections describe each theme in detail.
+
+\section{Progressive Implementation of RealSense Depth and Depth Paths}
+
+The implementation of the smart-walker pipeline started from a depth-centric prototype that ignored vision-language models entirely. This early phase focused on acquiring reliable depth measurements, converting them into physically meaningful quantities, and exploring how different ``depth paths'' (regions and sampling strategies) affected the stability of guidance.
+
+\subsection{Frame Acquisition and Buffering}
+
+RealSense frames were acquired using a dedicated Python script that opened a pipeline, configured depth and colour streams, and then iterated over frames in a loop. Rather than processing every incoming frame identically, this research introduced an explicit notion of a processing cadence measured in frames. Depth processing was performed on every incoming depth frame in order to preserve temporal continuity of the lane medians, providing a smooth estimate of how free space evolved in front of the walker. YOLOv8 object detection, by contrast, was executed less frequently, for example on every third to fifth RGB frame, to limit GPU load; between detection steps, the most recent detection results were carried forward. This separation between depth and detection frequencies was important because depth computations are predominantly linear in the number of pixels and relatively cheap compared to convolutional inference, so they can be run more often without saturating the GPU.
+
+\subsection{Depth Regions and Paths}
+
+The next step was to carve the depth image into semantically meaningful regions, or ``paths'', that correspond to potential traversal corridors. This research adopted a lower-band corridor region-of-interest (ROI) and then divided it horizontally into three coarse lanes (left, middle, right), as already formalised in Chapter~3.
+
+For each frame, several distinct depth paths were evaluated. A near-floor corridor band captured the bottom portion of the image height and was limited to a forward distance of a few metres, focusing computation on the region most relevant for immediate traversal. Within this band, three horizontal lane bands corresponding to left, middle, and right were defined, providing coarse but interpretable structure over the field of view. In addition, a lower-band region was carved out inside each detection bounding box and used to compute conservative object distances that emphasised ground-level contact rather than upper-body features. Sampling density (stride) within each band and the minimum number of valid depth samples required for a median were tuned empirically using recorded bag files. Early experiments showed that too sparse sampling produced unstable medians, while extremely dense sampling offered little additional stability at a high computational cost.
+
+\subsection{Lane Medians and Temporal Smoothing}
+
+For each lane band, this research computed a trimmed median distance: invalid and extreme values (for example zeros or far-outliers) were discarded before taking the median. To avoid jitter from frame to frame, an exponential moving average (EMA) was applied to the lane medians, as described previously. The EMA factor was chosen such that sudden obstacles still triggered a timely response, while minor sensor noise did not cause the suggestion to oscillate. The advisory logic then mapped lane medians to a symbolic clearance vector $(c_L, c_M, c_R)$, which in turn was mapped deterministically to a Suggest token such as \code{continue}, \code{left}, or \code{back}. At this stage no language model was involved; the system simply overlaid textual suggestions on the video stream.
+
+\subsection{Number of Frames Considered}
+
+Although the depth pipeline operated continuously, guidance decisions were effectively based on a short temporal window of recent frames due to the EMA. Empirically, an EMA over the last 5--10 frames (at 15--30~FPS) provided a stable yet responsive behaviour. For object detection, an update every 5--10 frames (roughly 2--3~Hz) was found sufficient for walking speeds associated with a smart-walker. These design choices informed later decisions on how often captions should be refreshed, so that language outputs would remain consistent with the underlying physical state.
+
+\subsection{Depth Computation Pseudocode}
+
+Listing~\ref{lst:depth-core} presents simplified pseudocode for the core depth computations used throughout the implementation. The code is organised into three key routines: projection from pixels into 3D space, computation of a conservative lower-band median distance for each detection, and estimation of lane medians inside the corridor region-of-interest.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{p{15cm}}
+  	oprule
+\begin{lstlisting}[language=Python,basicstyle=\ttfamily\small]
+def project(u, v, Z, fx, fy, cx, cy):
+  X = (u - cx) * Z / fx
+  Y = (v - cy) * Z / fy
+  return X, Y, Z
+
+def lower_band_median(Z, bbox, alpha, stride, min_samples):
+  x1, y1, x2, y2 = bbox
+  y_lower = y2 - alpha * (y2 - y1)
+  samples = []
+  for v in range(int(y_lower), y2, stride):
+    for u in range(x1, x2, stride):
+      z = Z[v, u]
+      if is_valid(z):
+        samples.append(z)
+  if len(samples) < min_samples:
+    return fallback_distance(Z, bbox)
+  return median(trim_extremes(samples))
+
+def lane_median(Z, roi_mask, lane_mask):
+  values = []
+  for (u, v) in roi_mask & lane_mask:
+    z = Z[v, u]
+    if is_valid(z):
+      values.append(z)
+  if not values:
+    return UNKNOWN
+  values = trim_extremes(values)
+  return median(values)
+\end{lstlisting}\\
+  \bottomrule
+  \end{tabular}
+  \caption{Core depth computations: projection, conservative lower-band distance, and lane median estimation (schematic pseudocode).}
+  \label{lst:depth-core}
+\end{table}
+
+In the projection routine, pixel coordinates $(u,v)$ and a depth value $Z$ are mapped into metric coordinates $(X,Y,Z)$ using a pinhole camera model. This operation is used when geometric reasoning requires distances in metres rather than raw pixel positions, for example when estimating the lateral offset of an obstacle from the optical axis.
+
+The \code{lower\_band\_median} function illustrates how this research computes conservative distances for detected objects. Given a bounding box, the function restricts sampling to the lower band defined by the fraction \code{alpha} of the box height, iterates over pixels at a configurable stride, and collects only valid depth readings. If the number of valid measurements is insufficient, the routine falls back to a more conservative estimate, such as a full-box median or the minimum non-zero depth, ensuring that distance estimates err on the side of safety. Otherwise, it trims extreme values and returns the median, which is robust to noise and outliers.
+
+Finally, the \code{lane\_median} routine sketches how lane-wise distances are computed within the corridor ROI. Here, \code{roi\_mask} encodes the vertical band of interest and \code{lane\_mask} encodes one of the horizontal lanes; their intersection defines the pixels to sample. As with object distances, invalid readings are discarded and extremes are trimmed before taking the median. This yields a stable representative distance per lane, which is then fed into the EMA-based temporal smoothing and, ultimately, into the advisory and Suggest token mapping.
+
+\subsection{YOLOv8 Integration and Depth Fusion}
+
+In parallel with the depth-path design, this research integrated YOLOv8n as the semantic perception backbone. The detector was treated as a reusable, well-tested component rather than as an object of study in itself. Using the \code{ultralytics} package, a pretrained YOLOv8n checkpoint was loaded once at start-up and kept in memory for the duration of a run. RGB frames from the RealSense camera were resized and letterboxed to the detector's expected input resolution using OpenCV, normalised to the range $[0,1]$, and passed through the YOLOv8 interface to obtain a set of detections per processed frame.
+
+Each YOLOv8 detection consisted of a bounding box, a class label, and a confidence score. To make these detections useful for navigation, they were immediately fused with the depth map. The fusion step re-used the lower-band median machinery described earlier: for every detection, the corresponding bounding box was intersected with the depth image, a lower fraction of the box (the part closest to the floor) was sampled at a configurable stride, and a conservative median distance in metres was computed. If too few valid depth samples were available, a fallback strategy produced a pessimistic estimate rather than returning an undefined value. As a result, each detection was enriched with a depth-derived distance attribute.
+
+The fusion did not stop at distances. For each enriched detection, the horizontal overlap between the bounding box and the predefined lane masks was analysed to determine which lanes (left, middle, right) were affected. This produced per-object lane flags that, when aggregated across all detections, indicated where obstacles intruded into the corridor. In addition, the pixel coordinates of the box centre were projected into an approximate bearing angle using the camera intrinsics, yielding a directional description (for example ``slightly left of centre'') that could later be used in captions.
+
+From an implementation perspective, YOLOv8 inference was invoked at a lower cadence than depth updates in order to respect the GPU budget on the RTX~3060 Laptop GPU. Detection was typically run every third to fifth RGB frame, while intermediate frames re-used the most recent set of detections. This design exploited the fact that large obstacles and corridor geometry evolve slowly at walking speed, while avoiding the latency and VRAM overhead of re-running YOLOv8 on every frame. The depth pipeline continued to run on every frame, ensuring that lane medians and advisory states remained temporally smooth even when detections were updated less frequently.
+
+The resulting enriched detection objects---containing class, confidence, bounding box, conservative distance, lane flags, and bearing---formed a bridge between raw perception and higher-level reasoning. On the deterministic side, they fed into the hazard selection logic that marked objects as threats if their distances fell below configurable safety radii in particular lanes. On the generative side, the same facts were summarised into a compact textual ``fact packet'' that was attached to the vision-language model prompt. In this way, YOLOv8 and RealSense depth jointly supported both precise Suggest tokens and human-readable explanations of why a particular suggestion was issued.
+
+\section{LLaVA-Based Captioning and Policy Creation}
+
+Once the depth and advisory pipeline produced reliable Suggest tokens, this research introduced a first vision-language component based on LLaVA-1.5 7B. The objective in this phase was not yet efficiency, but expressiveness: the question was whether a large multimodal model could render the depth-derived advisory state into human-friendly natural language while following a strict caption template. From the outset, caption generation was architected as an asynchronous service: the vision-language model ran in a separate worker thread or process, receiving requests over a queue and returning completed captions via callbacks or futures. This decoupling ensured that the real-time perception loop (depth, YOLOv8, advisory logic, and UI refresh) could continue at camera frame rate even when a caption request was still in flight, preventing occasional long VLM inference times from freezing the video or delaying new sensor data.
+
+\subsection{Initial Integration with LLaVA 7B}
+
+The integration used a local LLaVA-1.5 7B checkpoint loaded through the \code{transformers} library. A dedicated Python script constructed prompts that combined three elements: a short system instruction describing the assistive navigation goal; a plain-text summarisation of the current lane medians, clearance flags, advisory level (SAFE/CAUTION/STOP), and Suggest token; and a reference image from the RealSense RGB stream. LLaVA was then asked to generate a single-sentence caption ending in a designated ``Suggest:'' token. Early prompts allowed free-form language, which often led to long, conversational answers. As a result, this research progressively tightened the prompt into a caption policy describing exactly what the model was allowed to say.
+
+\subsection{Caption Policy and Validation}
+
+The caption policy specified, among other constraints, that the output must be exactly one sentence and that the sentence must end with ``\code{Suggest: <TOKEN>.}'' where \code{<TOKEN>} is one of a small, predefined set such as \code{continue}, \code{left}, \code{right}, or \code{back}. When the advisory state was SAFE, the caption was instructed to avoid explicit distances and object names so as not to overstate risk. When the advisory state was CAUTION or STOP, the caption was instead asked to briefly mention key obstacles and approximate ranges. Validation at this stage was qualitative and log-based. The system recorded generated captions alongside the depth facts and Suggest tokens, and these logs were inspected for consistency between the Suggest token embedded in the caption and the upstream advisory, for the presence of hallucinated objects not present in the depth or detection data, and for violations of the one-sentence constraint or missing Suggest tokens. Repeated prompt refinement reduced, but did not entirely eliminate, such violations, motivating the introduction of a post-processing policy layer.
+
+\section{Progressive Implementation with LLaVA 7B}
+
+The next phase concentrated on making LLaVA-based captioning behave sensibly in a streaming setting where the scene evolves over time. Two central questions were addressed: how often captions should be refreshed, and how to manage the computational cost of the 7B model on the available laptop GPU. A third, closely related question concerned how to integrate a comparatively slow captioning process without blocking the rest of the pipeline. The asynchronous design introduced earlier was therefore refined and stress-tested: caption requests were enqueued with tickets and advisory snapshots, while the main loop simply displayed the most recent caption that had completed, or a placeholder when no caption was yet available. This arrangement preserved responsiveness of depth-based Suggest tokens and ensured that latency spikes in the VLM did not accumulate into backlogs.
+
+\subsection{Caption Refresh Cadence}
+
+If captions were updated on every frame, small changes in the detection set or depth medians caused distracting rephrasing, even when the underlying advisory state remained unchanged. Conversely, updating captions too rarely made the system feel unresponsive. This research therefore tied caption refresh to changes in high-level state rather than to raw frame rate.
+
+Concretely, a caption was refreshed only when the advisory state (SAFE/CAUTION/STOP) or the Suggest token changed, or when a fixed maximum number of frames had elapsed since the last caption (for example, between thirty and sixty frames), ensuring periodic updates even in steady scenes. In practice, this meant that under stable conditions captions might be regenerated at approximately one to two hertz, whereas during rapid changes, such as an obstacle entering the corridor, they could be updated more frequently.
+
+\subsection{Managing Computational Load}
+
+Running LLaVA-1.5 7B locally on the RTX~3060 Laptop GPU required careful resource management. This research experimented with using half-precision (fp16) weights to reduce VRAM usage, reducing input image resolution to 256~px on the shortest side to limit visual encoder cost, and capping \code{max\_new\_tokens} to a small value (for example, between 32 and 48) to restrict response length. Despite these measures, generation latency and VRAM usage remained noticeably high, particularly when the detector and depth pipeline also occupied GPU memory. This tension motivated the search for a more compact model and ultimately for quantisation.
+
+\section{Caption Ticketing System}
+
+As the system started to operate over longer sequences of frames, a new problem surfaced: captions arriving out of order or being displayed after the underlying scene had already changed. Because language model inference is relatively slow compared to raw frame acquisition, a caption corresponding to frame~$t$ might only be ready when the UI is already displaying frame~$t+N$.
+
+To address this, this research introduced a simple \emph{ticketing system}. Each caption request was assigned a monotonically increasing ticket identifier and carried a snapshot of the advisory state at the time of submission. When a caption response arrived, it was only accepted if its ticket matched the latest outstanding ticket.
+
+This mechanism ensured that old captions could not overwrite newer ones, that the displayed caption always corresponded to the most recent advisory state that had been sent to the vision-language model, and that diagnostic logs could be aligned by ticket, simplifying debugging of rare ordering bugs. The ticketing system was implemented in the captioning wrapper script, independently of whether LLaVA or Qwen2.5-VL was used underneath.
+
+\section{Intermediate Prototypes and Observed Behaviour}
+
+Throughout development, this research maintained a sequence of intermediate prototypes, each representing a coherent stage in the evolution of the system. A first depth-only prototype visualised lane medians and Suggest tokens without any language output and served as a baseline for evaluating purely geometric reasoning. A second, LLaVA-based prototype produced rich one-sentence captions but exhibited higher latency and occasional hallucinations. A third, ticketed caption prototype integrated the ordering mechanism so that captions and video frames remained aligned, and the user interface behaved more predictably. Informal user trials with these prototypes revealed several qualitative trends. Participants found even the depth-only overlay helpful for understanding where the system ``thought'' free space existed. LLaVA captions improved perceived transparency but sometimes introduced unnecessary narrative detail. The ticketed system reduced confusing mismatches between visual and textual information, particularly when obstacles appeared or disappeared quickly.
+
+These observations informed the decision to seek a more efficient VLM that could offer comparable descriptive quality with tighter control over latency and formatting.
+
+\section{Quantisation and Migration to Qwen2.5-VL}
+
+The final major implementation phase focused on replacing LLaVA-1.5 7B with a more compact model (Qwen2.5-VL 3B) and applying quantisation to make real-time deployment more feasible on edge-like hardware.
+
+\subsection{Quantisation Experiments}
+
+This research first explored 4-bit weight-only quantisation using the \code{bitsandbytes} library. The goal was to reduce VRAM consumption while keeping caption quality acceptable. Experiments were conducted using a dedicated benchmarking script that measured latency, throughput (tokens per second), GPU peak memory, and CPU memory across multiple runs for each model and configuration.
+
+On the RTX~3060 Laptop GPU, 4-bit quantisation of Qwen2.5-VL 3B preserved functional behaviour while reducing peak GPU memory compared to full-precision baselines. For LLaVA-1.5 7B, 4-bit quantisation helped but did not fully resolve VRAM pressure when combined with YOLOv8 and RealSense processing. Table~\ref{tab:quant-comparison} summarises the most relevant aggregate metrics from these experiments.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{lcccc}
+    	oprule
+    Model and configuration & Median latency per caption (s) & Median generated tokens & Median throughput (tokens/s) & Peak GPU memory (GiB) \\
+    \midrule
+    LLaVA-1.5 7B, 4-bit (48 tokens) & 2.13 & 15 & 7.03 & 4.22 \\
+    Qwen2.5-VL 3B, 4-bit (48 tokens) & 1.63 & 20 & 12.28 & 2.31 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Measured median time to generate one navigation caption, number of generated tokens, throughput, and peak GPU memory usage for LLaVA-1.5 7B and Qwen2.5-VL 3B using 4-bit weight-only quantisation on the RTX~3060 Laptop GPU (maximum of 48 new tokens). Values are derived directly from the benchmark logs in the project outputs.}
+  \label{tab:quant-comparison}
+\end{table}
+
+In these micro-benchmarks, the \code{max\_new\_tokens} parameter was set to 48, matching the upper bound used in the navigation prototype. The models typically produced shorter outputs in practice, with median generated lengths of 15 tokens for LLaVA-1.5 7B and 20 tokens for Qwen2.5-VL 3B under the 4-bit configuration. Because decoding time grows approximately linearly with the number of generated tokens for fixed model and hardware, extending the caption policy to permit, for example, up to 80 new tokens would be expected to increase median decoding latency by a factor on the order of $80 / 20 \approx 4$ relative to the Qwen2.5-VL 3B measurements in Table~\ref{tab:quant-comparison}, all else being equal.
+
+It is also important to distinguish model-only latency from end-to-end system latency. The figures reported in Table~\ref{tab:quant-comparison} measure only the time spent inside the \code{generate()} call, from just before decoding starts until the final token is produced, and they exclude prompt construction, fact-packet assembly, queueing and ticketing overhead, and user interface updates. When these additional components are included, the time from a new image entering the live smart-walker pipeline to a caption appearing on screen is observed to be closer to 5--7~seconds. The micro-benchmark therefore underestimates user-perceived latency, but remains useful for comparing models and quantisation settings under controlled conditions and for motivating the choice of Qwen2.5-VL 3B as a better fit for the target hardware.
+
+\subsection{Benchmark-Driven Model Selection}
+
+Using the micro-benchmark results (reported in a separate technical appendix) and the qualitative summary in Table~\ref{tab:quant-comparison}, this research compared Qwen2.5-VL 3B and LLaVA-1.5 7B on the target laptop. Qwen2.5-VL 3B provided lower median latency and higher tokens-per-second throughput while using substantially less GPU memory. These properties made it a better fit for the smart-walker setting, where compute resources must be shared with perception.
+
+Consequently, Qwen2.5-VL 3B was adopted as the primary captioning model. The caption policy and ticketing system previously developed for LLaVA were reused almost unchanged, with only minor adjustments to account for Qwen's different prompt template.
+
+\subsection{Integration of Qwen2.5-VL}
+
+The Qwen2.5-VL integration followed the same high-level pattern as the LLaVA integration: a system prompt, a structured facts section containing lane medians and advisory states, and the RealSense image were fed into the model as a single chat-like input. The output was post-processed to enforce the caption policy, correcting or rejecting any responses that violated the one-sentence or Suggest-token requirements.
+
+With quantisation and a carefully chosen generation configuration (short maximum length, low temperature), Qwen2.5-VL 3B delivered captions that were sufficiently descriptive for navigation while respecting the latency and resource constraints of the host platform.
+
+\section{User Interface Components}
+
+The final prototype exposed system state through a lightweight graphical user interface. The UI was designed to make the internal reasoning of the smart-walker legible to observers, without overwhelming them with raw data.
+
+Key UI components included a video panel showing the current RGB frame with overlaid bounding boxes for detected objects and lane segmentation markers; a depth summary panel indicating the current lane medians, clearance flags, and advisory level (SAFE/CAUTION/STOP); and a caption panel displaying the latest one-sentence caption, including the Suggest token, together with the associated ticket identifier for debugging. Additional status indicators conveyed model health (for example, whether the vision-language model was loaded), device status (camera connection), and any safety fallbacks such as forced \code{back} suggestions when depth data were unreliable. By co-locating these elements, the UI allowed experimenters to see, in a single glance, the relationship between sensor input, deterministic reasoning over depth, and the final natural language output produced by the vision-language model. This tight coupling between visual, numerical, and linguistic information supported both qualitative evaluation during trials and structured logging for later analysis.
+
+\end{document}

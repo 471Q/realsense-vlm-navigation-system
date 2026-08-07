@@ -360,7 +360,7 @@ def _ensure_suggest(adv: Optional[str], sug: Optional[str], content: str, fallba
     """Ensure caption contains a 'Suggest: ...' clause; append fallback when missing."""
     try:
         if 'suggest:' in (content or '').lower():
-            # Optionally normalize tokens for SAFE/CAUTION/STOP
+            # Optionally normalize tokens for CAUTION/SAFE
             try:
                 adv2, sug2 = _parse_advice(content)
                 if adv2 == 'CAUTION' and sug2 in ('left', 'right'):
@@ -369,25 +369,18 @@ def _ensure_suggest(adv: Optional[str], sug: Optional[str], content: str, fallba
                                   content)
                 if adv2 == 'SAFE' and sug2 in ('left', 'right'):
                     return re.sub(r"(?i)\bSuggest:\s*(left|right)\b", "Suggest: continue", content)
-                # For STOP, prefer backing up when all forward lanes are blocked.
-                if adv2 == 'STOP':
-                    # Any STOP+continue or STOP+sideways suggestion should reduce to 'back'
-                    # when fallback (auto_suggest) says 'back' (i.e. no safe lane).
-                    fb = (fallback or '').lower()
-                    if fb == 'back':
-                        return re.sub(r"(?i)\bSuggest:\s*([a-z\-]+)\b", "Suggest: back", content)
-                    # Otherwise keep existing STOP normalization rules
-                    if sug2 in ('stay-left', 'stay-right'):
-                        return re.sub(r"(?i)\bSuggest:\s*stay\-(left|right)\b",
-                                      lambda m: f"Suggest: {m.group(1).lower()}", content)
-                    if sug2 in ('continue',):
-                        tok = (fallback or 'back')
-                        tok = tok.lower()
-                        if tok in ('stay-left', 'stay-right'):
-                            tok = 'left' if tok == 'stay-left' else 'right'
-                        if tok not in ('left', 'right', 'back'):
-                            tok = 'back'
-                        return re.sub(r"(?i)\bSuggest:\s*continue\b", f"Suggest: {tok}", content)
+                if adv2 == 'STOP' and sug2 in ('stay-left', 'stay-right'):
+                    return re.sub(r"(?i)\bSuggest:\s*stay\-(left|right)\b",
+                                  lambda m: f"Suggest: {m.group(1).lower()}", content)
+                # New: avoid contradictory STOP + continue → use fallback or 'back'
+                if adv2 == 'STOP' and sug2 in ('continue',):
+                    tok = (fallback or 'back')
+                    tok = tok.lower()
+                    if tok in ('stay-left', 'stay-right'):
+                        tok = 'left' if tok == 'stay-left' else 'right'
+                    if tok not in ('left', 'right', 'back'):
+                        tok = 'back'
+                    return re.sub(r"(?i)\bSuggest:\s*continue\b", f"Suggest: {tok}", content)
             except Exception:
                 pass
             return content
@@ -779,7 +772,14 @@ def main():
     last_objects = []
     last_hazards = []
 
-    print("[vlm_on_change_qwen] running; triggers on risk/intent change. Q to quit. W/A/S/D for intents.")
+    print("[vlp_on_change_qwen] running; triggers on risk/intent change. Q to quit. W/A/S/D for intents.")
+    # Track repeated STOP advice to detect "stuck" via captions rather than
+    # raw timing. We count consecutive STOP decisions and then ask the user
+    # via Y/N if they feel stuck.
+    consecutive_stop_count: int = 0
+    STUCK_STOP_THRESHOLD: int = 3  # number of STOP captions before asking
+    waiting_stuck_confirm: bool = False
+
     try:
         last_proc_t = 0.0
         proc_period = (1.0 / float(args.process_hz)
@@ -927,52 +927,6 @@ def main():
                 risk = r["risk"]
                 facts_with_risk = dict(facts)
                 facts_with_risk["risk"] = risk
-                # Override risk/decision using the same 3-lane depth logic that
-                # drives the safe-path badge so all cues stay in sync.
-                try:
-                    lane_risk: str | None = None
-                    if latest_depth is not None and isinstance(latest_depth, np.ndarray):
-                        H_lr, W_lr = latest_depth.shape[:2]
-                        yy1_lr, yy2_lr = int(0.55 * H_lr), int(0.95 * H_lr)
-                        xL1_lr, xL2_lr = 0, int(W_lr/3)
-                        xC1_lr, xC2_lr = int(W_lr/3), int(2*W_lr/3)
-                        xR1_lr, xR2_lr = int(2*W_lr/3), W_lr
-                        dL_lr = sw.median_depth_in_box(
-                            latest_depth, xL1_lr, yy1_lr, xL2_lr, yy2_lr)
-                        dC_lr = sw.median_depth_in_box(
-                            latest_depth, xC1_lr, yy1_lr, xC2_lr, yy2_lr)
-                        dR_lr = sw.median_depth_in_box(
-                            latest_depth, xR1_lr, yy1_lr, xR2_lr, yy2_lr)
-                        if getattr(args, 'mirror_view', False):
-                            dL_lr, dR_lr = dR_lr, dL_lr
-
-                        def _num_lr(v):
-                            try:
-                                return float(v) if isinstance(v, (int, float)) and np.isfinite(v) else -1.0
-                            except Exception:
-                                return -1.0
-
-                        CLEAR_T_lr = float(
-                            getattr(args, 'clear_threshold_m', 1.8))
-                        isL_lr = _num_lr(dL_lr) >= CLEAR_T_lr
-                        isC_lr = _num_lr(dC_lr) >= CLEAR_T_lr
-                        isR_lr = _num_lr(dR_lr) >= CLEAR_T_lr
-                        cc_lr = sum([isL_lr, isC_lr, isR_lr])
-                        if cc_lr == 3:
-                            lane_risk = 'safe'
-                        elif cc_lr == 0:
-                            lane_risk = 'stop'
-                        else:
-                            lane_risk = 'caution'
-                    if lane_risk is not None:
-                        # Keep risk in sync with the 3-lane safe-path view, but do
-                        # NOT clear captions here; a correct STOP caption should
-                        # remain visible until the usual reconfirm window.
-                        risk = lane_risk
-                        facts_with_risk["risk"] = lane_risk
-                except Exception:
-                    pass
-
                 decision, _why = sw.arbiter_decision(
                     effective_dir, facts_with_risk, cfg)
                 last_decision = decision
@@ -1170,6 +1124,32 @@ def main():
                                     # fallback
                                     auto_suggest = 'continue' if is_C else (
                                         'left' if is_L else 'right')
+                            # Detect "stuck" cases: sustained pushing into a blocked lane.
+                            stuck_flag = False
+                            now_ts = time.time()
+                            if str(risk).lower() == 'stop' and pressing_dir != 'idle':
+                                # Initialize or continue the stuck timer when user keeps pushing
+                                if stuck_start_ts is None:
+                                    stuck_start_ts = now_ts
+                                # Check direction-specific blockage
+                                pushing_forward_blocked = (
+                                    pressing_dir == 'forward' and st_C == 'blocked')
+                                pushing_left_blocked = (
+                                    pressing_dir == 'left' and st_L == 'blocked' and st_C != 'clear' and st_R != 'clear')
+                                pushing_right_blocked = (
+                                    pressing_dir == 'right' and st_R == 'blocked' and st_C != 'clear' and st_L != 'clear')
+                                if pushing_forward_blocked or pushing_left_blocked or pushing_right_blocked:
+                                    # Require sustained pushing for at least 1.5s to call it "stuck"
+                                    if (now_ts - stuck_start_ts) >= 1.5:
+                                        stuck_flag = True
+                                else:
+                                    # Direction no longer matches a blocked lane; reset timer
+                                    stuck_start_ts = None
+                            else:
+                                # Not in STOP risk or not pushing; reset timer
+                                stuck_start_ts = None
+                            if stuck_flag:
+                                lines.append("stuck: true")
                             # mirror suggestion tokens if requested (swap left/right within combos)
                             if getattr(args, 'mirror_view', False):
                                 mirror_map = {
@@ -1220,10 +1200,59 @@ def main():
                             current_ticket['last_scene_snippet'] = scene_snippet
                     except Exception:
                         pass
+                    # Propagate any existing direction dialog.
                     if dialog.get("pending") and dialog.get("proposed_dir"):
                         lines.append(f"ask: take {dialog['proposed_dir']}?")
                     if dialog.get("last_reply"):
                         lines.append(f"user_reply: {dialog['last_reply']}")
+
+                    # Stuck handling based on repeated STOP captions:
+                    # - We count how many consecutive STOP decisions we've had
+                    #   while the user keeps pressing a direction.
+                    # - When the threshold is reached, we ask the user
+                    #   (via Y/N) if they feel stuck.
+                    # - Only after they confirm (Y) do we tell the VLM that the
+                    #   user is stuck and explicitly request an "unstuck" plan.
+                    try:
+                        pushing = (pressing_dir != 'idle')
+                        is_stop = str(risk).lower() == 'stop'
+                        if is_stop and pushing:
+                            consecutive_stop_count += 1
+                        else:
+                            consecutive_stop_count = 0
+                            waiting_stuck_confirm = False
+
+                        # Trigger stuck confirmation dialog once, when threshold reached.
+                        if (consecutive_stop_count >= STUCK_STOP_THRESHOLD
+                                and not waiting_stuck_confirm
+                                and not dialog.get('pending')):
+                            waiting_stuck_confirm = True
+                            # Reuse the existing yes/no keys: show a note in
+                            # the context so VLM can also be aware.
+                            lines.append(
+                                "stuck_check: user has received repeated STOP advice; asking if they feel stuck (Y/N).")
+
+                        if waiting_stuck_confirm:
+                            # Surface the check in the context; the actual
+                            # Y/N input is already captured by KeyListener
+                            # (s.yes_edge / s.no_edge) and stored in dialog.
+                            lines.append(
+                                "stuck_status: awaiting_user_confirmation")
+                            if dialog.get('last_reply') == 'yes':
+                                # User confirmed they are stuck.
+                                lines.append("stuck: true")
+                                lines.append(
+                                    "help_request: user feels stuck; propose how to get unstuck using safe small moves (back/side) or camera adjustments to reassess unseen areas.")
+                                # Reset after acknowledging.
+                                waiting_stuck_confirm = False
+                                consecutive_stop_count = 0
+                            elif dialog.get('last_reply') == 'no':
+                                # User says they are not stuck; back off.
+                                lines.append("stuck: false")
+                                waiting_stuck_confirm = False
+                                consecutive_stop_count = 0
+                    except Exception:
+                        pass
                     user_txt = "\n".join(lines)
                     try:
                         can_enqueue = (not vlm_inflight) and vlm_q.empty()
@@ -1383,8 +1412,6 @@ def main():
                         except Exception:
                             return -1.0
                     frame_safe_token = None
-                    # Depth-based advisory level derived from lane medians
-                    frame_advisory = None  # 'SAFE' | 'CAUTION' | 'STOP'
                     if latest_depth is not None:
                         H2, W2 = latest_depth.shape[:2]
                         yy1, yy2 = int(0.55 * H2), int(0.95 * H2)
@@ -1401,39 +1428,10 @@ def main():
                             d_L, d_R = d_R, d_L
                         CLEAR_T = float(
                             getattr(args, 'clear_threshold_m', 1.8))
-                        # Simple lane-based risk logic matched to safe-path badge:
-                        #   is_* True  -> lane is CLEAR (>= CLEAR_T)
-                        #   is_* False -> lane is BLOCKED (< CLEAR_T)
                         is_L = _num(d_L) >= CLEAR_T
                         is_C = _num(d_C) >= CLEAR_T
                         is_R = _num(d_R) >= CLEAR_T
-                        vals = [v for v in (_num(d_L), _num(
-                            d_C), _num(d_R)) if v >= 0]
-
-                        # Derive advisory from clear/blocked pattern only:
-                        #   SAFE    -> all three lanes clear
-                        #   CAUTION -> at least one blocked, at least one clear
-                        #   STOP    -> all three blocked
                         cc = sum([is_L, is_C, is_R])
-                        if cc == 3:
-                            frame_advisory = 'SAFE'
-                        elif cc == 0:
-                            frame_advisory = 'STOP'
-                        else:
-                            frame_advisory = 'CAUTION'
-
-                        # If all three bands are blocked, force immediate VLM reassessment
-                        # and hint that all lanes are blocked around the nearest distance.
-                        try:
-                            if vals and cc == 0:
-                                last_vlm_ts = 0.0
-                                if current_ticket is not None:
-                                    mn = min(vals)
-                                    current_ticket['last_scene_snippet'] = (
-                                        f"lanes3 STOP; all lanes blocked at ~{mn:.2f}m (L/C/R {vals[0]:.2f}/{vals[1]:.2f}/{vals[2]:.2f}m)")
-                        except Exception:
-                            pass
-                        # Safe-path token from the same clear/blocked pattern
                         if cc == 0:
                             frame_safe_token = 'back'
                         elif cc == 3:
@@ -1464,12 +1462,6 @@ def main():
                             r"Suggest:\s*([a-z\-]+)", last_caption, flags=re.IGNORECASE)
                         if m:
                             safe_token = m.group(1).lower()
-                    # If we did not get a fresh depth-based advisory this frame,
-                    # try to reuse the last VLM advice so colours stay consistent.
-                    if frame_advisory is None and last_caption:
-                        adv_tmp, _sug_tmp = _parse_advice(last_caption)
-                        if adv_tmp in ('SAFE', 'CAUTION', 'STOP'):
-                            frame_advisory = adv_tmp
 
                     if safe_token:
                         mapping = {
@@ -1491,30 +1483,8 @@ def main():
                         bw, bh = tw + pad*2, th + pad*2
                         x2, y1 = wtop - 10, 6
                         x1, y2 = x2 - bw, y1 + bh
-
-                        # Colour scheme tied to depth/VLM advisory:
-                        #   - Any clear band (not NONE):
-                        #       SAFE/unknown -> green, CAUTION -> yellow
-                        #   - No clear band (NONE):
-                        #       SAFE/CAUTION -> yellow, STOP -> red
-                        bn_none = 'none' in band_name.lower()
-                        adv = (frame_advisory or '').upper()
-                        if not adv:
-                            # Default to CAUTION when we only know there is no clear band
-                            adv = 'CAUTION' if bn_none else 'SAFE'
-                        if not bn_none:
-                            if adv == 'CAUTION':
-                                col = (0, 215, 255)  # yellow
-                            elif adv == 'STOP':
-                                # red (very rare: STOP but a band flagged clear)
-                                col = (0, 0, 255)
-                            else:
-                                col = (0, 180, 0)   # green
-                        else:
-                            if adv == 'STOP':
-                                col = (0, 0, 255)    # red
-                            else:
-                                col = (0, 215, 255)  # yellow
+                        col = (0, 180, 0) if 'none' not in band_name.lower() else (
+                            0, 0, 215)
                         overlay2 = vis.copy()
                         cv2.rectangle(overlay2, (x1, y1), (x2, y2), col, -1)
                         cv2.addWeighted(overlay2, 0.85, vis, 0.15, 0, vis)

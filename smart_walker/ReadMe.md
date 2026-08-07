@@ -33,7 +33,7 @@ For a synchronized, ChatGPT-video-style loop, use a vision-capable model/server 
 
 ```powershell
 # From repo root; sends 1 FPS frames with image+text messages
-python scripts\vlm_realsense_live.py --endpoint http://localhost:8080 --model llava-1.5-7b --hz 1 --width 640 --height 480
+python scripts\vlm_realsense_live.py --endpoint http://127.0.0.1:8080 --model llava-1.5-7b --hz 1 --width 640 --height 480
 ```
 
 Notes:
@@ -90,7 +90,7 @@ python scripts\realsense_shared_control.py --model yolov8n.pt --imgsz 640 --conf
 
 # run the RealSense VLM
 python scripts\realsense_vlm_on_change.py `
-  --endpoint http://localhost:8080 `
+  --endpoint http://127.0.0.1:8080 `
   --model llava-1.5-7b `
   --width 640 --height 480 --fps 15 `
   --image_size 256 --encode jpeg --jpeg_quality 60 `
@@ -100,29 +100,65 @@ python scripts\realsense_vlm_on_change.py `
   --max_tokens 160 `
   --warmup `
   --show
-## Qwen2.5-VL 3B (faster local VLM)
 
-1) Start the local llama.cpp server with Qwen2.5‑VL 3B:
+  
+## Qwen3-VL 4B (current local VLM)
+
+Replaces Qwen2.5-VL 3B: better spatial grounding and OCR at similar latency.
+Requires a llama.cpp build with Qwen3-VL mtmd support (b6800+; this repo ships b6937).
+
+`-NGL 99` puts all 37 layers plus the vision encoder on the GPU, which fits the
+3060's 6 GB with room for YOLOv8. Confirm the startup log shows
+`offloaded 37/37 layers to GPU` and `clip_ctx: CLIP using CUDA0 backend`; if it
+says CPU instead, see "CUDA runtime DLLs" below.
+
+1) Start the local llama.cpp server with Qwen3‑VL 4B:
 
 ```powershell
 & .\scripts\start_llama_server.ps1 `
-  -ModelPath "models\llm\qwen2.5-vl-3b\hf_repo\qwen2.5-vl-3b-instruct-q4_k_m.gguf" `
-  -MmprojPath "models\llm\qwen2.5-vl-3b\mmproj\mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf" `
-  -NGL 24 -Ctx 2048 -Threads 8 -Port 8080 -MainGpu 0 -Verbose
+  -ModelPath "models\llm\qwen3-vl-4b\hf_repo\Qwen3VL-4B-Instruct-Q4_K_M.gguf" `
+  -MmprojPath "models\llm\qwen3-vl-4b\mmproj\mmproj-Qwen3VL-4B-Instruct-F16.gguf" `
+  -NGL 99 -Ctx 2048 -Threads 8 -Port 8080 -MainGpu 0
 ```
 
-3) Run the RealSense VLM client specialized for Qwen2‑VL:
+### CUDA runtime DLLs
+
+`ggml-cuda.dll` needs `cudart64_12.dll`, `cublas64_12.dll` and `cublasLt64_12.dll`
+beside it in `tools\llama_cpp\`. Without them the DLL fails to load *silently* and
+everything runs on CPU. They ship separately from the llama.cpp binaries, in
+`cudart-llama-bin-win-cuda-12.4-x64.zip` on the matching release. Verify with:
+
+```powershell
+.\tools\llama_cpp\llama-server.exe --version   # must print "found 1 CUDA devices"
+```
+
+3) Run the RealSense VLM client specialized for Qwen3‑VL:
 
 ```powershell
 python scripts\realsense_vlm_on_change_qwen.py `
-  --endpoint http://localhost:8080 `
-  --model qwen2.5-vl-3b-instruct `
+  --endpoint http://127.0.0.1:8080 `
+  --model qwen3-vl-4b-instruct `
   --width 640 --height 480 --fps 15 `
-  --image_size 224 --encode jpeg --jpeg_quality 70 `
+  --image_size 448 --encode jpeg --jpeg_quality 70 `
   --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
   --process_hz 2 `
-  --min_interval_s 1.5 `
+  --min_interval_s 0.9 `
   --max_tokens 120 `
   --show `
   --debug_lanes
 ```
+
+--------------------------
+VLP
+
+python scripts\realsense_vlp_on_change_qwen.py `
+  --endpoint http://127.0.0.1:8080 `
+  --model qwen3-vl-4b-instruct `
+  --width 640 --height 480 --fps 15 `
+  --image_size 448 --encode jpeg --jpeg_quality 70 `
+  --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
+  --process_hz 2 `
+  --min_interval_s 0.9 `
+  --max_tokens 120 `
+  --show `
+  --debug_lanes
