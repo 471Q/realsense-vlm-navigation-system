@@ -26,7 +26,17 @@
       "Bash(python -c ' *)",
       "Bash(python -m py_compile scripts/realsense_vlp_on_change_qwen.py smart_walker_vlp/realsense_vlp_on_change_qwen.py)",
       "Bash(/d/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/python.exe \"C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/fea4b83a-8c3f-4440-9775-54f7601a6791/scratchpad/geom_eval.py\")",
-      "Bash(/d/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/python.exe \"C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/fea4b83a-8c3f-4440-9775-54f7601a6791/scratchpad/geom_eval2.py\")"
+      "Bash(/d/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/python.exe \"C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/fea4b83a-8c3f-4440-9775-54f7601a6791/scratchpad/geom_eval2.py\")",
+      "Bash(gh auth *)",
+      "Bash(git ls-remote *)",
+      "Bash(echo \"=== exit $? ===\")",
+      "Bash(git rev-list *)",
+      "Bash(git cat-file *)",
+      "Bash(awk '$1==\"blob\" && $2>5000000 {printf \"%8.1f MB  %s\\\\n\", $2/1048576, $3}')",
+      "Bash(git count-objects *)",
+      "Bash(awk '$1==\"blob\"{s+=$2} END {printf \"blobs: %.1f MB\\\\n\", s/1048576}')",
+      "Bash(git remote *)",
+      "Bash(git credential *)"
     ]
   }
 }
