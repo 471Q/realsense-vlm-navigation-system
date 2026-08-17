@@ -1,4 +1,0 @@
-interface:
-  display_name: "Verify Thesis Paragraph"
-  short_description: "Verify thesis claims against primary papers"
-  default_prompt: "Use $verify-thesis-paragraph to verify and refine this thesis paragraph against the source papers."
