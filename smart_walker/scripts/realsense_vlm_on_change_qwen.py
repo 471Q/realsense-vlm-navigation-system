@@ -112,6 +112,298 @@ def resize_for_vlm(img: np.ndarray, size: int) -> np.ndarray:
     return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
+# Severity ordering over advisories. Higher is more restrictive. Kept as a
+# module-level table rather than inline comparisons so the ordering is stated
+# once, can be read at a glance, and is the single thing to change if a level is
+# ever added.
+ADVISORY_SEVERITY = {'safe': 0, 'caution': 1, 'stop': 2}
+_SEVERITY_TO_ADVISORY = {v: k for k, v in ADVISORY_SEVERITY.items()}
+
+
+def more_severe(a: Optional[str], b: Optional[str]) -> str:
+    """Return whichever advisory is more restrictive.
+
+    The deterministic layer measures obstruction two ways, and the two have
+    complementary blind spots:
+
+      - Per-object distance (YOLO plus lower-band median) is precise about the
+        things it recognises, but YOLOv8's 80 COCO classes contain no wall, door,
+        step, stair, glass, curtain or pole. Facing a blank wall it detects
+        nothing and reports SAFE.
+      - The lane median over an image third sees bulk geometry, so it catches
+        walls and corridor narrowing, but a thin obstacle occupying a few percent
+        of a band does not move that band's median. Facing a broom handle it
+        reports clear.
+
+    Neither is sound alone, and each is blind exactly where the other sees. Taking
+    the more severe of the two yields a composite that is sound where neither
+    component is: SAFE is reported only when both paths agree there is nothing
+    there. An unrecognised advisory is treated as the most severe, so a parsing
+    failure cannot manufacture a permissive result.
+    """
+    sa = ADVISORY_SEVERITY.get((a or '').lower(), ADVISORY_SEVERITY['stop'])
+    sb = ADVISORY_SEVERITY.get((b or '').lower(), ADVISORY_SEVERITY['stop'])
+    # Return a canonical level rather than whichever input string won. Echoing
+    # the input back would propagate an unrecognised value downstream, where it
+    # would score as severe here but fail to match 'stop' in every consumer that
+    # compares against the advisory by name.
+    return _SEVERITY_TO_ADVISORY[max(sa, sb)]
+
+
+# Two measurements this close together are not meaningfully distinguishable at
+# the sensor's stated accuracy, so a caption naming either one is treated as
+# naming the cause. Widening this makes the transparency metric more permissive.
+BINDING_TIE_MARGIN_M = 0.15
+
+_LANE_NAMES = ('left', 'centre', 'right')
+_LANE_STATUS_SEVERITY = {'clear': 0, 'constrained': 1, 'unknown': 2, 'blocked': 3}
+
+
+def identify_binding_fact(objects: Optional[list], lane_state: Optional[dict],
+                          binding: str, mirror_view: bool,
+                          tie_margin_m: float = BINDING_TIE_MARGIN_M) -> dict:
+    """Name the specific measured element that produced the composite advisory.
+
+    The composition in more_severe() records which path was binding, objects or
+    lanes, but not which element within that path. That distinction is required
+    by the transparency metric: an output that names a real but non-causal fact
+    is faithful and still misleading. Reporting a wall at 1.2 m when the system
+    stopped for a chair at 0.5 m is entailed by the Fact Packet and sends the
+    user into the chair.
+
+    Within the object path the causal element is the nearest object carrying a
+    finite distance, since every object rule in the baseline is a threshold on
+    that distance. Within the lane path it is the most severely classified band.
+    Elements within tie_margin_m of the nearest, or sharing the winning lane
+    status, are returned as ties: naming any of them is equally correct, and
+    scoring must accept all of them rather than privileging an arbitrary one.
+
+    The returned distances are already in the user's frame of reference, because
+    the object side labels and the lane depths are mirrored upstream when
+    mirror_view is set. The flag is recorded so a log record can be interpreted
+    without reference to the invocation.
+
+    Returns a dict that is always populated, with 'kind' set to 'none' when no
+    element can be identified, so downstream consumers need no null handling.
+    A 'none' result is never filled in from the non-binding path: attributing the
+    advisory to a path that did not produce it would be a fabricated cause, and
+    the metric is better served by marking the record unscoreable.
+
+    Two object rules are not threshold tests on the nearest distance and are
+    therefore not fully described by the element returned here. 'caution:multi_near'
+    is caused by a count rather than by any single object, and 'caution:uncertainty'
+    is caused by the low-light flag rather than by an object at all. The rules that
+    fired are recorded alongside this result in advisory_sources, and scoring
+    consults them: when uncertainty is the only rule fired, the causal fact is the
+    uncertainty flag and no object name can be correct.
+    """
+    result = {
+        'kind': 'none',
+        'binding': binding,
+        'label': None,
+        'distance_m': None,
+        'side': None,
+        'lane': None,
+        'lane_status': None,
+        'ties': [],
+        'mirror_view': bool(mirror_view),
+        'tie_margin_m': float(tie_margin_m),
+    }
+
+    def _object_candidates():
+        cands = []
+        for idx, o in enumerate(objects or []):
+            d = o.get('distance_m')
+            if not isinstance(d, (int, float)):
+                continue
+            try:
+                d = float(d)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(d):
+                continue
+            name = (o.get('canonical_class') or o.get('display_label')
+                    or o.get('raw_label') or 'obj')
+            b = o.get('bearing')
+            side_raw = str(b[0] if isinstance(b, (list, tuple)) else b).lower(
+            ) if b is not None else ''
+            side = 'left' if 'left' in side_raw else (
+                'right' if 'right' in side_raw else 'center')
+            if mirror_view and side in ('left', 'right'):
+                side = 'right' if side == 'left' else 'left'
+            cands.append({'index': idx, 'label': name,
+                          'distance_m': d, 'side': side})
+        cands.sort(key=lambda c: c['distance_m'])
+        return cands
+
+    def _lane_candidates():
+        if not lane_state:
+            return []
+        status = list(lane_state.get('status') or [])
+        depths = list(lane_state.get('depths') or [])
+        cands = []
+        for i, name in enumerate(_LANE_NAMES):
+            if i >= len(status):
+                continue
+            st = str(status[i]).lower()
+            d = depths[i] if i < len(depths) else None
+            try:
+                d = float(d) if isinstance(
+                    d, (int, float)) and np.isfinite(d) else None
+            except (TypeError, ValueError):
+                d = None
+            cands.append({'lane': name, 'lane_status': st, 'distance_m': d,
+                          'severity': _LANE_STATUS_SEVERITY.get(st, 0)})
+        # Most severe first; among equals the nearest reading leads, treating a
+        # missing reading as farthest so it never displaces a measured band.
+        cands.sort(key=lambda c: (-c['severity'],
+                                  c['distance_m'] if c['distance_m'] is not None else float('inf')))
+        return cands
+
+    use_objects = binding in ('objects', 'both')
+    use_lanes = binding in ('lanes', 'both')
+
+    obj_cands = _object_candidates() if use_objects else []
+    lane_cands = _lane_candidates() if use_lanes else []
+
+    # When both paths agree the advisory, the object path is reported as the
+    # primary cause because it carries a specific nameable entity, while the
+    # lane band it falls in is retained as a tie. A caption naming either is
+    # describing the same obstruction.
+    if obj_cands:
+        top = obj_cands[0]
+        result.update({'kind': 'object', 'label': top['label'],
+                       'distance_m': top['distance_m'], 'side': top['side'],
+                       'index': top['index']})
+        result['ties'] = [
+            {'kind': 'object', 'label': c['label'],
+             'distance_m': c['distance_m'], 'side': c['side'], 'index': c['index']}
+            for c in obj_cands[1:]
+            if c['distance_m'] - top['distance_m'] <= tie_margin_m
+        ]
+        if lane_cands and lane_cands[0]['severity'] > 0:
+            result['ties'].append({'kind': 'lane', 'lane': lane_cands[0]['lane'],
+                                   'lane_status': lane_cands[0]['lane_status'],
+                                   'distance_m': lane_cands[0]['distance_m']})
+        return result
+
+    if lane_cands and lane_cands[0]['severity'] > 0:
+        top = lane_cands[0]
+        result.update({'kind': 'lane', 'lane': top['lane'],
+                       'lane_status': top['lane_status'],
+                       'distance_m': top['distance_m']})
+        result['ties'] = [
+            {'kind': 'lane', 'lane': c['lane'], 'lane_status': c['lane_status'],
+             'distance_m': c['distance_m']}
+            for c in lane_cands[1:] if c['severity'] == top['severity']
+        ]
+        return result
+
+    return result
+
+
+def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
+                       clear_t: float, near_hi: float) -> Optional[dict]:
+    """Partition the lower field of view into three depth bands and classify each.
+
+    This is the single place lane clearance is computed. The risk override, the
+    VLM prompt, the band overlay and the safe-path badge all read this result, so
+    the bands the user sees are by construction the bands the system reasoned
+    over. The logic previously existed as four independent copies, which drifted:
+    two of them applied the mirror correction once and one applied it twice, so
+    under --mirror_view the badge and the caption named opposite directions.
+
+    Bands are read from rows 55% to 95% of the frame: below the horizon, above
+    the immediate foreground where the walker's own frame intrudes.
+
+    Returns None when depth is unavailable. Otherwise a dict carrying the band
+    geometry, the median depth per band, a three-way status per band, the
+    advisory implied by the clear/blocked pattern, and the deterministic
+    suggestion token.
+    """
+    if depth_m is None or not isinstance(depth_m, np.ndarray):
+        return None
+    try:
+        H, W = depth_m.shape[:2]
+        y1 = int(0.55 * H)
+        y2 = int(0.95 * H)
+        xL1, xL2 = 0, int(W / 3)
+        xC1, xC2 = int(W / 3), int(2 * W / 3)
+        xR1, xR2 = int(2 * W / 3), W
+        d_L = sw.median_depth_in_box(depth_m, xL1, y1, xL2, y2)
+        d_C = sw.median_depth_in_box(depth_m, xC1, y1, xC2, y2)
+        d_R = sw.median_depth_in_box(depth_m, xR1, y1, xR2, y2)
+        # Swapping here puts every downstream consumer in the user's frame of
+        # reference. Do not mirror the derived token again later.
+        if mirror_view:
+            d_L, d_R = d_R, d_L
+
+        def _status(d):
+            """blocked / constrained / clear. Unreadable depth is not free space.
+
+            A band with no valid reading resolves to 'unknown' and is treated as
+            not clear, so missing data can never be mistaken for room to move.
+            """
+            if not isinstance(d, (int, float)) or not np.isfinite(d):
+                return 'unknown'
+            if d < near_hi:
+                return 'blocked'
+            if d < clear_t:
+                return 'constrained'
+            return 'clear'
+
+        st_L, st_C, st_R = _status(d_L), _status(d_C), _status(d_R)
+
+        def _num(d):
+            try:
+                return float(d) if isinstance(d, (int, float)) and np.isfinite(d) else -1.0
+            except Exception:
+                return -1.0
+
+        is_L = _num(d_L) >= clear_t
+        is_C = _num(d_C) >= clear_t
+        is_R = _num(d_R) >= clear_t
+        clear_count = sum([is_L, is_C, is_R])
+
+        # Advisory from the clear/blocked pattern alone.
+        if clear_count == 3:
+            advisory = 'SAFE'
+        elif clear_count == 0:
+            advisory = 'STOP'
+        else:
+            advisory = 'CAUTION'
+
+        if clear_count == 0:
+            auto_suggest = 'back'
+        elif clear_count == 3:
+            auto_suggest = 'continue'
+        elif clear_count == 1:
+            auto_suggest = 'continue' if is_C else ('left' if is_L else 'right')
+        else:  # exactly two bands clear
+            if is_C and is_L:
+                auto_suggest = 'mid-left'
+            elif is_C and is_R:
+                auto_suggest = 'mid-right'
+            else:
+                auto_suggest = 'left-right'
+
+        finite = [v for v in (_num(d_L), _num(d_C), _num(d_R)) if v >= 0]
+        return {
+            'rows': (y1, y2),
+            'cols': ((xL1, xL2), (xC1, xC2), (xR1, xR2)),
+            'depths': (d_L, d_C, d_R),
+            'status': (st_L, st_C, st_R),
+            'clear_count': clear_count,
+            'advisory': advisory,
+            'auto_suggest': auto_suggest,
+            'finite_depths_m': finite,
+            'clear_threshold_m': float(clear_t),
+            'near_threshold_m': float(near_hi),
+        }
+    except Exception:
+        return None
+
+
 def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args) -> str:
     """Try multiple encodings/sizes when server says 'failed to process image'."""
     attempts: list[tuple[str, int, int]] = []  # (fmt, quality, size)
@@ -546,6 +838,14 @@ def main():
 
     # Load config & ontology
     cfg = sw.load_yaml(sw.PIPELINE_CFG)
+    # Upper bound of the 'very_close' bin, below which a lane counts as blocked.
+    # Read once: this used to be re-parsed from disk on every VLM trigger, which
+    # put file IO in the per-frame path and made a safety threshold silently
+    # mutable mid-run.
+    try:
+        NEAR_HI = float(cfg['depth']['metric_bins_m']['very_close'][1])
+    except Exception:
+        NEAR_HI = 0.7
     mapper = sw.OntologyMapper(sw.ONTOLOGY_CFG)
 
     # RealSense init
@@ -778,6 +1078,18 @@ def main():
     last_ticket_switch_ts = 0.0
     last_objects = []
     last_hazards = []
+    last_lane_state: Optional[dict] = None
+
+    # Stuck detection, ported from the retired VLP script. Track repeated STOP
+    # advice to detect "stuck" via captions rather than raw timing: count
+    # consecutive STOP decisions, then ask the user via Y/N if they feel stuck.
+    # Every one of these must be initialised here. In the VLP script
+    # stuck_start_ts was not, so the first read raised inside a broad exception
+    # guard and silently discarded auto_suggest in exactly the STOP case.
+    stuck_start_ts: Optional[float] = None
+    consecutive_stop_count: int = 0
+    STUCK_STOP_THRESHOLD: int = 3  # number of STOP captions before asking
+    waiting_stuck_confirm: bool = False
 
     print("[vlm_on_change_qwen] running; triggers on risk/intent change. Q to quit. W/A/S/D for intents.")
     try:
@@ -927,51 +1239,69 @@ def main():
                 risk = r["risk"]
                 facts_with_risk = dict(facts)
                 facts_with_risk["risk"] = risk
-                # Override risk/decision using the same 3-lane depth logic that
-                # drives the safe-path badge so all cues stay in sync.
-                try:
-                    lane_risk: str | None = None
-                    if latest_depth is not None and isinstance(latest_depth, np.ndarray):
-                        H_lr, W_lr = latest_depth.shape[:2]
-                        yy1_lr, yy2_lr = int(0.55 * H_lr), int(0.95 * H_lr)
-                        xL1_lr, xL2_lr = 0, int(W_lr/3)
-                        xC1_lr, xC2_lr = int(W_lr/3), int(2*W_lr/3)
-                        xR1_lr, xR2_lr = int(2*W_lr/3), W_lr
-                        dL_lr = sw.median_depth_in_box(
-                            latest_depth, xL1_lr, yy1_lr, xL2_lr, yy2_lr)
-                        dC_lr = sw.median_depth_in_box(
-                            latest_depth, xC1_lr, yy1_lr, xC2_lr, yy2_lr)
-                        dR_lr = sw.median_depth_in_box(
-                            latest_depth, xR1_lr, yy1_lr, xR2_lr, yy2_lr)
-                        if getattr(args, 'mirror_view', False):
-                            dL_lr, dR_lr = dR_lr, dL_lr
+                # Single computation of lane clearance for this frame. The risk
+                # override below, the VLM prompt, the band overlay and the
+                # safe-path badge all read this one result, so no consumer can
+                # disagree with the state the advisory was derived from.
+                last_lane_state = compute_lane_state(
+                    latest_depth,
+                    mirror_view=bool(getattr(args, 'mirror_view', False)),
+                    clear_t=float(getattr(args, 'clear_threshold_m', 1.8)),
+                    near_hi=NEAR_HI,
+                )
+                if last_lane_state is not None:
+                    facts["lanes3"] = {
+                        "depths_m": list(last_lane_state['depths']),
+                        "status": list(last_lane_state['status']),
+                        "advisory": last_lane_state['advisory'],
+                        "auto_suggest": last_lane_state['auto_suggest'],
+                        "clear_threshold_m": last_lane_state['clear_threshold_m'],
+                        "near_threshold_m": last_lane_state['near_threshold_m'],
+                    }
+                    facts_with_risk["lanes3"] = facts["lanes3"]
 
-                        def _num_lr(v):
-                            try:
-                                return float(v) if isinstance(v, (int, float)) and np.isfinite(v) else -1.0
-                            except Exception:
-                                return -1.0
+                    # Compose the two measurement paths by severity rather than
+                    # letting one replace the other. See more_severe() for why:
+                    # the object path cannot see walls, the lane path cannot see
+                    # thin obstacles, and each is blind where the other sees.
+                    # SAFE survives only when both paths agree.
+                    #
+                    # Captions are deliberately not cleared here; a correct STOP
+                    # caption should remain visible until the usual reconfirm
+                    # window.
+                    advisory_objects = risk
+                    advisory_lanes = last_lane_state['advisory'].lower()
+                    risk = more_severe(advisory_objects, advisory_lanes)
+                    facts_with_risk["risk"] = risk
 
-                        CLEAR_T_lr = float(
-                            getattr(args, 'clear_threshold_m', 1.8))
-                        isL_lr = _num_lr(dL_lr) >= CLEAR_T_lr
-                        isC_lr = _num_lr(dC_lr) >= CLEAR_T_lr
-                        isR_lr = _num_lr(dR_lr) >= CLEAR_T_lr
-                        cc_lr = sum([isL_lr, isC_lr, isR_lr])
-                        if cc_lr == 3:
-                            lane_risk = 'safe'
-                        elif cc_lr == 0:
-                            lane_risk = 'stop'
-                        else:
-                            lane_risk = 'caution'
-                    if lane_risk is not None:
-                        # Keep risk in sync with the 3-lane safe-path view, but do
-                        # NOT clear captions here; a correct STOP caption should
-                        # remain visible until the usual reconfirm window.
-                        risk = lane_risk
-                        facts_with_risk["risk"] = lane_risk
-                except Exception:
-                    pass
+                    # Record which path was binding. The evaluation needs to
+                    # distinguish a correct advisory reached for the right reason
+                    # from one reached by luck, and that is not recoverable from
+                    # the composite alone.
+                    if advisory_objects == advisory_lanes:
+                        binding = 'both'
+                    elif risk == advisory_objects:
+                        binding = 'objects'
+                    else:
+                        binding = 'lanes'
+                    facts["advisory_sources"] = {
+                        "objects": advisory_objects,
+                        "lanes": advisory_lanes,
+                        "composite": risk,
+                        "binding": binding,
+                        "object_rules_fired": list(r.get("rules_fired", [])),
+                        # The specific element within the binding path, not just
+                        # the path. Scoring override transparency requires the
+                        # caption to name the element that caused the advisory,
+                        # and that element cannot be reconstructed after the
+                        # fact because it depends on this frame's depth.
+                        "binding_fact": identify_binding_fact(
+                            out.objects, last_lane_state, binding,
+                            mirror_view=bool(
+                                getattr(args, 'mirror_view', False)),
+                        ),
+                    }
+                    facts_with_risk["advisory_sources"] = facts["advisory_sources"]
 
                 decision, _why = sw.arbiter_decision(
                     effective_dir, facts_with_risk, cfg)
@@ -1093,104 +1423,70 @@ def main():
                     if top_objs:
                         lines.append(f"objects_list: {top_objs}")
                         scene_snippet = f"near: {top_objs}"
-                    # Depth-driven lane clearance (3-band: L, C, R)
-                    try:
-                        if latest_depth is not None and isinstance(latest_depth, np.ndarray):
-                            H, W = latest_depth.shape[:2]
-                            y1 = int(0.55 * H)
-                            y2 = int(0.95 * H)
-                            xL1, xL2 = 0, int(W/3)
-                            xC1, xC2 = int(W/3), int(2*W/3)
-                            xR1, xR2 = int(2*W/3), W
-                            d_L = sw.median_depth_in_box(
-                                latest_depth, xL1, y1, xL2, y2)
-                            d_C = sw.median_depth_in_box(
-                                latest_depth, xC1, y1, xC2, y2)
-                            d_R = sw.median_depth_in_box(
-                                latest_depth, xR1, y1, xR2, y2)
-                            if getattr(args, 'mirror_view', False):
-                                d_L, d_R = d_R, d_L
-                            CLEAR_T = float(
-                                getattr(args, 'clear_threshold_m', 1.8))
+                    # Depth-driven lane clearance, read from the state computed
+                    # once for this frame above.
+                    if last_lane_state is not None:
+                        d_L, d_C, d_R = last_lane_state['depths']
+                        st_L, st_C, st_R = last_lane_state['status']
+                        auto_suggest = last_lane_state['auto_suggest']
 
-                            def _fmt(v):
-                                return (f"{v:.2f}m" if isinstance(v, (int, float)) and np.isfinite(v) else "?")
-                            lines.append(
-                                f"lanes3: L:{_fmt(d_L)}, C:{_fmt(d_C)}, R:{_fmt(d_R)}")
-                            # status categories
+                        def _fmt(v):
+                            return (f"{v:.2f}m" if isinstance(v, (int, float)) and np.isfinite(v) else "?")
+                        lines.append(
+                            f"lanes3: L:{_fmt(d_L)}, C:{_fmt(d_C)}, R:{_fmt(d_R)}")
+                        lines.append(
+                            f"lane_status3: L:{st_L}, C:{st_C}, R:{st_R}")
+                        try:
+                            _src = facts.get("advisory_sources") or {}
+                            if _src.get("binding") == 'objects':
+                                # The lane bands look passable but a detected
+                                # object is what forces the advisory. Say so, or
+                                # the caption will describe an open path.
+                                lines.append(
+                                    f"advisory_reason: detected object, not lane width (objects:{_src.get('objects')}, lanes:{_src.get('lanes')})")
+                            elif _src.get("binding") == 'lanes':
+                                lines.append(
+                                    f"advisory_reason: lane clearance, not a detected object (objects:{_src.get('objects')}, lanes:{_src.get('lanes')})")
+                        except Exception:
+                            pass
+
+                        # Detect "stuck" cases: sustained pushing into a blocked lane.
+                        stuck_flag = False
+                        now_ts = time.time()
+                        if str(risk).lower() == 'stop' and pressing_dir != 'idle':
+                            # Initialize or continue the stuck timer when user keeps pushing
+                            if stuck_start_ts is None:
+                                stuck_start_ts = now_ts
+                            # Check direction-specific blockage
+                            pushing_forward_blocked = (
+                                pressing_dir == 'forward' and st_C == 'blocked')
+                            pushing_left_blocked = (
+                                pressing_dir == 'left' and st_L == 'blocked' and st_C != 'clear' and st_R != 'clear')
+                            pushing_right_blocked = (
+                                pressing_dir == 'right' and st_R == 'blocked' and st_C != 'clear' and st_L != 'clear')
+                            if pushing_forward_blocked or pushing_left_blocked or pushing_right_blocked:
+                                # Require sustained pushing for at least 1.5s to call it "stuck"
+                                if (now_ts - stuck_start_ts) >= 1.5:
+                                    stuck_flag = True
+                            else:
+                                # Direction no longer matches a blocked lane; reset timer
+                                stuck_start_ts = None
+                        else:
+                            # Not in STOP risk or not pushing; reset timer
+                            stuck_start_ts = None
+                        if stuck_flag:
+                            lines.append("stuck: true")
+
+                        lines.append(f"auto_suggest: {auto_suggest}")
+                        if current_ticket is not None:
+                            current_ticket['last_auto_suggest'] = auto_suggest
+                        if scene_snippet is None:
                             try:
-                                near_hi = float(sw.load_yaml(sw.PIPELINE_CFG)[
-                                                'depth']['metric_bins_m']['very_close'][1])
+                                if all(isinstance(v, (int, float)) and np.isfinite(v)
+                                       for v in (d_L, d_C, d_R)):
+                                    scene_snippet = f"lanes3 {d_L:.1f}/{d_C:.1f}/{d_R:.1f}m"
                             except Exception:
-                                near_hi = 0.7
-
-                            def _status(d):
-                                if not isinstance(d, (int, float)) or not np.isfinite(d):
-                                    return 'unknown'
-                                if d < near_hi:
-                                    return 'blocked'
-                                if d < CLEAR_T:
-                                    return 'constrained'
-                                return 'clear'
-                            st_L, st_C, st_R = _status(
-                                d_L), _status(d_C), _status(d_R)
-                            lines.append(
-                                f"lane_status3: L:{st_L}, C:{st_C}, R:{st_R}")
-                            # auto suggest based on combinations
-
-                            def _num(d):
-                                try:
-                                    return float(d) if isinstance(d, (int, float)) and np.isfinite(d) else -1.0
-                                except Exception:
-                                    return -1.0
-                            is_L = _num(d_L) >= CLEAR_T
-                            is_C = _num(d_C) >= CLEAR_T
-                            is_R = _num(d_R) >= CLEAR_T
-                            auto_suggest = None
-                            clear_count = sum([is_L, is_C, is_R])
-                            if clear_count == 0:
-                                auto_suggest = 'back'
-                            elif clear_count == 3:
-                                auto_suggest = 'continue'
-                            elif clear_count == 1:
-                                if is_L:
-                                    auto_suggest = 'left'
-                                elif is_C:
-                                    auto_suggest = 'continue'
-                                else:
-                                    auto_suggest = 'right'
-                            else:  # two clear
-                                if is_C and is_L and not is_R:
-                                    auto_suggest = 'mid-left'
-                                elif is_C and is_R and not is_L:
-                                    auto_suggest = 'mid-right'
-                                elif is_L and is_R and not is_C:
-                                    auto_suggest = 'left-right'
-                                else:
-                                    # fallback
-                                    auto_suggest = 'continue' if is_C else (
-                                        'left' if is_L else 'right')
-                            # mirror suggestion tokens if requested (swap left/right within combos)
-                            if getattr(args, 'mirror_view', False):
-                                mirror_map = {
-                                    'left': 'right', 'right': 'left',
-                                    'stay-left': 'stay-right', 'stay-right': 'stay-left',
-                                    'mid-left': 'mid-right', 'mid-right': 'mid-left',
-                                    'left-right': 'left-right'
-                                }
-                                auto_suggest = mirror_map.get(
-                                    auto_suggest, auto_suggest)
-                            lines.append(f"auto_suggest: {auto_suggest}")
-                            if current_ticket is not None:
-                                current_ticket['last_auto_suggest'] = auto_suggest
-                            if scene_snippet is None:
-                                try:
-                                    if all(np.isfinite([_num(d_L), _num(d_C), _num(d_R)])):
-                                        scene_snippet = f"lanes3 {(_num(d_L)):.1f}/{(_num(d_C)):.1f}/{(_num(d_R)):.1f}m"
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
+                                pass
                     # Append compact per-ticket memory summary to help VLM stay consistent within a ticket
                     try:
                         mem_counts = ((current_ticket or {}).get(
@@ -1224,6 +1520,51 @@ def main():
                         lines.append(f"ask: take {dialog['proposed_dir']}?")
                     if dialog.get("last_reply"):
                         lines.append(f"user_reply: {dialog['last_reply']}")
+
+                    # Stuck handling based on repeated STOP captions:
+                    # - We count how many consecutive STOP decisions we've had
+                    #   while the user keeps pressing a direction.
+                    # - When the threshold is reached, we ask the user
+                    #   (via Y/N) if they feel stuck.
+                    # - Only after they confirm (Y) do we tell the VLM that the
+                    #   user is stuck and explicitly request an "unstuck" plan.
+                    pushing = (pressing_dir != 'idle')
+                    is_stop = str(risk).lower() == 'stop'
+                    if is_stop and pushing:
+                        consecutive_stop_count += 1
+                    else:
+                        consecutive_stop_count = 0
+                        waiting_stuck_confirm = False
+
+                    # Trigger stuck confirmation dialog once, when threshold reached.
+                    if (consecutive_stop_count >= STUCK_STOP_THRESHOLD
+                            and not waiting_stuck_confirm
+                            and not dialog.get('pending')):
+                        waiting_stuck_confirm = True
+                        # Reuse the existing yes/no keys: show a note in
+                        # the context so VLM can also be aware.
+                        lines.append(
+                            "stuck_check: user has received repeated STOP advice; asking if they feel stuck (Y/N).")
+
+                    if waiting_stuck_confirm:
+                        # Surface the check in the context; the actual
+                        # Y/N input is already captured by KeyListener
+                        # (s.yes_edge / s.no_edge) and stored in dialog.
+                        lines.append("stuck_status: awaiting_user_confirmation")
+                        if dialog.get('last_reply') == 'yes':
+                            # User confirmed they are stuck.
+                            lines.append("stuck: true")
+                            lines.append(
+                                "help_request: user feels stuck; propose how to get unstuck using safe small moves (back/side) or camera adjustments to reassess unseen areas.")
+                            # Reset after acknowledging.
+                            waiting_stuck_confirm = False
+                            consecutive_stop_count = 0
+                        elif dialog.get('last_reply') == 'no':
+                            # User says they are not stuck; back off.
+                            lines.append("stuck: false")
+                            waiting_stuck_confirm = False
+                            consecutive_stop_count = 0
+
                     user_txt = "\n".join(lines)
                     try:
                         can_enqueue = (not vlm_inflight) and vlm_q.empty()
@@ -1239,42 +1580,42 @@ def main():
 
             if args.show and latest_color is not None:
                 vis = latest_color.copy()
-                # Optional debug overlay for depth lanes (display only 3 macro bands L/C/R)
-                if getattr(args, 'debug_lanes', False) and latest_depth is not None:
+                # Lane overlay. Renders the state the deterministic layer actually
+                # decided on rather than recomputing it here. Three colours
+                # because the logic has three states; collapsing 'constrained'
+                # into 'blocked' hid the distinction the advisory turns on, so a
+                # 1.5 m gap the user could pass looked identical to a wall.
+                if getattr(args, 'debug_lanes', False) and last_lane_state is not None:
                     try:
-                        H, W = latest_depth.shape[:2]
-                        y1 = int(0.55 * H)
-                        y2 = int(0.95 * H)
-                        xL1, xL2 = 0, int(W/3)
-                        xC1, xC2 = int(W/3), int(2*W/3)
-                        xR1, xR2 = int(2*W/3), W
-                        d_L = sw.median_depth_in_box(
-                            latest_depth, xL1, y1, xL2, y2)
-                        d_C = sw.median_depth_in_box(
-                            latest_depth, xC1, y1, xC2, y2)
-                        d_R = sw.median_depth_in_box(
-                            latest_depth, xR1, y1, xR2, y2)
-                        if getattr(args, 'mirror_view', False):
-                            d_L, d_R = d_R, d_L
-                        CLEAR_T = float(
-                            getattr(args, 'clear_threshold_m', 1.8))
+                        y1, y2 = last_lane_state['rows']
+                        (xL1, xL2), (xC1, xC2), (xR1,
+                                                 xR2) = last_lane_state['cols']
+                        d_L, d_C, d_R = last_lane_state['depths']
+                        st_L, st_C, st_R = last_lane_state['status']
+                        CLEAR_T = last_lane_state['clear_threshold_m']
+                        NEAR_T = last_lane_state['near_threshold_m']
+                        STATUS_COL = {
+                            'clear': (0, 200, 0),          # green: traversable
+                            'constrained': (0, 190, 255),  # amber: tight, slow down
+                            'blocked': (0, 0, 200),        # red: do not enter
+                            'unknown': (120, 120, 120),    # grey: no reading
+                        }
 
-                        def draw_band(x1, y1b, x2, y2b, d, label):
-                            col = (0, 200, 0) if (isinstance(
-                                d, (int, float)) and d >= CLEAR_T) else (0, 0, 200)
+                        def draw_band(x1, y1b, x2, y2b, d, status, label):
+                            col = STATUS_COL.get(status, STATUS_COL['unknown'])
                             overlay = vis.copy()
                             cv2.rectangle(overlay, (x1, y1b),
                                           (x2, y2b), col, -1)
                             cv2.addWeighted(overlay, 0.15, vis, 0.85, 0, vis)
                             txt = '?' if not isinstance(
                                 d, (int, float)) or not np.isfinite(d) else f"{d:.2f}m"
-                            cv2.putText(vis, f"{label}:{txt}", (x1+4, y1b-6),
+                            cv2.putText(vis, f"{label}:{txt} {status}", (x1+4, y1b-6),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 2, cv2.LINE_AA)
-                        draw_band(xL1, y1, xL2, y2, d_L, 'L')
-                        draw_band(xC1, y1, xC2, y2, d_C, 'C')
-                        draw_band(xR1, y1, xR2, y2, d_R, 'R')
-                        cv2.putText(vis, f"CLR>{CLEAR_T:.1f}m", (
-                            10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 215, 255), 1, cv2.LINE_AA)
+                        draw_band(xL1, y1, xL2, y2, d_L, st_L, 'L')
+                        draw_band(xC1, y1, xC2, y2, d_C, st_C, 'C')
+                        draw_band(xR1, y1, xR2, y2, d_R, st_R, 'R')
+                        cv2.putText(vis, f"blocked<{NEAR_T:.1f}m  constrained<{CLEAR_T:.1f}m  clear>={CLEAR_T:.1f}m",
+                                    (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 215, 255), 1, cv2.LINE_AA)
                     except Exception:
                         pass
                 if last_objects:
@@ -1377,83 +1718,26 @@ def main():
                 cv2.addWeighted(header, 0.8, vis, 0.2, 0, vis)
                 # Top-right safe path badge showing chosen 3-band (or combo) suggestion token (compute every frame)
                 try:
-                    def _num(v):
-                        try:
-                            return float(v) if isinstance(v, (int, float)) and np.isfinite(v) else -1.0
-                        except Exception:
-                            return -1.0
                     frame_safe_token = None
                     # Depth-based advisory level derived from lane medians
                     frame_advisory = None  # 'SAFE' | 'CAUTION' | 'STOP'
-                    if latest_depth is not None:
-                        H2, W2 = latest_depth.shape[:2]
-                        yy1, yy2 = int(0.55 * H2), int(0.95 * H2)
-                        xL1, xL2 = 0, int(W2/3)
-                        xC1, xC2 = int(W2/3), int(2*W2/3)
-                        xR1, xR2 = int(2*W2/3), W2
-                        d_L = sw.median_depth_in_box(
-                            latest_depth, xL1, yy1, xL2, yy2)
-                        d_C = sw.median_depth_in_box(
-                            latest_depth, xC1, yy1, xC2, yy2)
-                        d_R = sw.median_depth_in_box(
-                            latest_depth, xR1, yy1, xR2, yy2)
-                        if getattr(args, 'mirror_view', False):
-                            d_L, d_R = d_R, d_L
-                        CLEAR_T = float(
-                            getattr(args, 'clear_threshold_m', 1.8))
-                        # Simple lane-based risk logic matched to safe-path badge:
-                        #   is_* True  -> lane is CLEAR (>= CLEAR_T)
-                        #   is_* False -> lane is BLOCKED (< CLEAR_T)
-                        is_L = _num(d_L) >= CLEAR_T
-                        is_C = _num(d_C) >= CLEAR_T
-                        is_R = _num(d_R) >= CLEAR_T
-                        vals = [v for v in (_num(d_L), _num(
-                            d_C), _num(d_R)) if v >= 0]
-
-                        # Derive advisory from clear/blocked pattern only:
-                        #   SAFE    -> all three lanes clear
-                        #   CAUTION -> at least one blocked, at least one clear
-                        #   STOP    -> all three blocked
-                        cc = sum([is_L, is_C, is_R])
-                        if cc == 3:
-                            frame_advisory = 'SAFE'
-                        elif cc == 0:
-                            frame_advisory = 'STOP'
-                        else:
-                            frame_advisory = 'CAUTION'
-
+                    if last_lane_state is not None:
+                        frame_advisory = last_lane_state['advisory']
+                        frame_safe_token = last_lane_state['auto_suggest']
                         # If all three bands are blocked, force immediate VLM reassessment
                         # and hint that all lanes are blocked around the nearest distance.
                         try:
-                            if vals and cc == 0:
+                            vals = last_lane_state['finite_depths_m']
+                            if vals and last_lane_state['clear_count'] == 0:
                                 last_vlm_ts = 0.0
                                 if current_ticket is not None:
                                     mn = min(vals)
+                                    lr = " ".join(
+                                        f"{v:.2f}m" for v in vals)
                                     current_ticket['last_scene_snippet'] = (
-                                        f"lanes3 STOP; all lanes blocked at ~{mn:.2f}m (L/C/R {vals[0]:.2f}/{vals[1]:.2f}/{vals[2]:.2f}m)")
+                                        f"lanes3 STOP; all lanes blocked at ~{mn:.2f}m (L/C/R {lr})")
                         except Exception:
                             pass
-                        # Safe-path token from the same clear/blocked pattern
-                        if cc == 0:
-                            frame_safe_token = 'back'
-                        elif cc == 3:
-                            frame_safe_token = 'continue'
-                        elif cc == 1:
-                            if is_C:
-                                frame_safe_token = 'continue'
-                            elif is_L:
-                                frame_safe_token = 'left'
-                            else:
-                                frame_safe_token = 'right'
-                        else:  # two
-                            if is_C and is_L and not is_R:
-                                frame_safe_token = 'mid-left'
-                            elif is_C and is_R and not is_L:
-                                frame_safe_token = 'mid-right'
-                            elif is_L and is_R and not is_C:
-                                frame_safe_token = 'left-right'
-                            else:
-                                frame_safe_token = 'continue'
 
                     # Prefer per-frame token; fall back to stored or caption-based if unavailable
                     safe_token = frame_safe_token

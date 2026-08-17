@@ -149,16 +149,14 @@ python scripts\realsense_vlm_on_change_qwen.py `
 ```
 
 --------------------------
-VLP
 
-python scripts\realsense_vlp_on_change_qwen.py `
-  --endpoint http://127.0.0.1:8080 `
-  --model qwen3-vl-4b-instruct `
-  --width 640 --height 480 --fps 15 `
-  --image_size 448 --encode jpeg --jpeg_quality 70 `
-  --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
-  --process_hz 2 `
-  --min_interval_s 0.9 `
-  --max_tokens 120 `
-  --show `
-  --debug_lanes
+## Retired: the VLP variant
+
+`scripts/realsense_vlp_on_change_qwen.py` and the `smart_walker_vlp/` package were removed
+on 8 August 2026. They were a near-duplicate of the script above, differing only in that
+they lacked the lane-derived risk path and carried the stuck-detection interaction. That
+interaction has been ported into `realsense_vlm_on_change_qwen.py`, so nothing unique
+remains in the retired files. They are recoverable from git history at commit `d9b877a`.
+
+`realsense_vlm_on_change_qwen.py` is the single canonical entry point and is the script the
+evaluation records against.

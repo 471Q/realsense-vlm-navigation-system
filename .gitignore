@@ -51,3 +51,26 @@ dist/
 # Application-specific
 smart_walker/models/
 smart_walker/tools/
+
+# Thesis and journal writing.
+# Everything for both lives under thesis/: the thesis chapters in DTR Thesis/,
+# the journal drafts in Journal Prep/, the source PDFs in Reference/, and the
+# working notes in Claude Session/ and ChatGPT Session/. This is manuscript
+# material rather than code, it is large and binary, and it should not be
+# versioned with the implementation.
+thesis/
+
+# Scratch/working directory at the repo root, used when unzipping .docx
+# files for image extraction, pulling figures out of PDFs for verification,
+# and similar throwaway analysis. Regenerated on demand and never a source
+# of truth, so it should not be versioned.
+/tmp/
+
+# Microsoft Office lock and recovery files, which Word leaves behind while a
+# document is open.
+~$*
+*.asd
+*.wbk
+
+# LibreOffice lock files
+.~lock.*#

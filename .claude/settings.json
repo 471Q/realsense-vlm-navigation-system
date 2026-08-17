@@ -36,7 +36,17 @@
       "Bash(git count-objects *)",
       "Bash(awk '$1==\"blob\"{s+=$2} END {printf \"blobs: %.1f MB\\\\n\", s/1048576}')",
       "Bash(git remote *)",
-      "Bash(git credential *)"
+      "Bash(git credential *)",
+      "Bash(awk '{print $6, $7, $8}')",
+      "Bash(awk '/^## 0\\\\. Running checklist/,/^## 1\\\\./' brainstorm.md)",
+      "Bash(grep -v '^$')",
+      "Bash(awk 'NR>8850 && NR<9000 && \\(length\\($0\\)<95\\) && length\\($0\\)>3' RT_clean.txt)",
+      "Bash(grep -n -o \"^This research is strictly constrained.\\\\{0,220\\\\}\" RT_clean.txt)",
+      "Bash(grep -n -o \"Throughout this thesis, navigational intent alignment denotes.\\\\{0,320\\\\}\" RT_clean.txt)",
+      "Bash(python find.py \"Qwen|QWEN\")",
+      "Bash(sed -i 's/Section 2.5, complete revision, version 2/Section 2.5, complete revision, version 3/' build_s25.py)",
+      "Bash(sed -i 's/^P\\(\"Rewritten 13 August 2026. This replaces version 1 of 10 August/P\\(\"Rewritten 13 August 2026 and extended 14 August. This replaces version 1 of 10 August/' build_s25.py)",
+      "Bash(awk '/Replacement for Table 6/,0' build_s25.py)"
     ]
   }
 }
