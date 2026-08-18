@@ -46,7 +46,15 @@
       "Bash(python find.py \"Qwen|QWEN\")",
       "Bash(sed -i 's/Section 2.5, complete revision, version 2/Section 2.5, complete revision, version 3/' build_s25.py)",
       "Bash(sed -i 's/^P\\(\"Rewritten 13 August 2026. This replaces version 1 of 10 August/P\\(\"Rewritten 13 August 2026 and extended 14 August. This replaces version 1 of 10 August/' build_s25.py)",
-      "Bash(awk '/Replacement for Table 6/,0' build_s25.py)"
+      "Bash(awk '/Replacement for Table 6/,0' build_s25.py)",
+      "Bash(awk '{print $5, $NF}')",
+      "Bash(grep -v \"^\\\\./scripts/realsense_vlm_on_change\\\\.py$\\\\|^\\\\./scripts/realsense_vlm_last_version\\\\.py$\")",
+      "Bash(awk 'NR>=1855' scripts/realsense_vlm_on_change_qwen.py)",
+      "Bash(sed -n '1855,$p' scripts/realsense_vlm_on_change_qwen.py)",
+      "Bash(sed -n '1855,2664p' scripts/realsense_vlm_on_change_qwen.py)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python -m py_compile C:/Users/atiqu/AppData/Local/Temp/claude/d--Swinburne-PostGrad-PhD-Implementation/19194930-3401-4ca9-bd57-7caf8b49af93/scratchpad/new_qwen_script.py)",
+      "Bash(awk '{print $NF}')"
     ]
   }
 }

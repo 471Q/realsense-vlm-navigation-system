@@ -1,0 +1,28 @@
+root ::= ws "{" ws schema-field "," ws reasons-field "," ws visuals-field ws "}" ws
+
+schema-field ::= "\"schema_version\"" ws ":" ws "\"hdsg.vlm_candidate.v1\""
+
+reasons-field ::= "\"reason_clauses\"" ws ":" ws reason-array
+reason-array ::= "[" ws reason-clause ws "]" | "[" ws reason-clause ws "," ws reason-clause ws "]" | "[" ws reason-clause ws "," ws reason-clause ws "," ws reason-clause ws "]" | "[" ws reason-clause ws "," ws reason-clause ws "," ws reason-clause ws "," ws reason-clause ws "]"
+reason-clause ::= "{" ws clause-id-field "," ws requirement-ids-field "," ws fact-ids-field "," ws measurement-ids-field "," ws text-template-field ws "}"
+clause-id-field ::= "\"clause_id\"" ws ":" ws "\"reason:" positive-integer "\""
+requirement-ids-field ::= "\"requirement_ids\"" ws ":" ws single-string-array
+fact-ids-field ::= "\"fact_ids\"" ws ":" ws single-string-array
+measurement-ids-field ::= "\"measurement_ids\"" ws ":" ws optional-single-string-array
+text-template-field ::= "\"text_template\"" ws ":" ws json-string
+
+visuals-field ::= "\"visual_observations\"" ws ":" ws visual-array
+visual-array ::= "[" ws "]" | "[" ws visual-observation (ws "," ws visual-observation)? ws "]"
+visual-observation ::= "{" ws visual-id-field "," ws proposed-label-field "," ws bearing-field ws "}"
+visual-id-field ::= "\"candidate_observation_id\"" ws ":" ws json-string
+proposed-label-field ::= "\"proposed_label\"" ws ":" ws json-string
+bearing-field ::= "\"bearing\"" ws ":" ws ("\"LEFT\"" | "\"CENTRE\"" | "\"RIGHT\"")
+
+single-string-array ::= "[" ws json-string ws "]"
+optional-single-string-array ::= "[" ws "]" | "[" ws json-string ws "]"
+
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+hex ::= [0-9a-fA-F]
+positive-integer ::= [1-9] [0-9]*
+ws ::= [ \t\n\r]*

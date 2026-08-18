@@ -1,5 +1,6 @@
-# Activate the venv 
+# Activate the venv and enter the application folder
 & D:/Swinburne/PostGrad/PhD/Implementation/.venv/Scripts/Activate.ps1
+Set-Location D:/Swinburne/PostGrad/PhD/Implementation/smart_walker
 
 # Test the GPU is detected 
 
@@ -7,7 +8,7 @@
 
 Use the launcher to start llama.cpp with GPU offload. You should see CUDA/cuBLAS in the logs and how many layers were offloaded to the GPU.
 
-PowerShell (from repo root):
+PowerShell (from the `smart_walker` folder):
 
 ```powershell
 # Use script defaults, or pass -ModelPath to a specific GGUF
@@ -20,7 +21,11 @@ PowerShell (from repo root):
 Verify RTX usage:
 
 
-## True VLM (vision-language) live demo
+## True VLM (vision-language) live demo — retired, archived
+
+Development history only. `scripts\vlm_realsense_live.py` was the stage 1 LLaVA-1.5 prototype
+described in the thesis's Chapter 4 development-progression table; it is superseded by the
+canonical Qwen3-VL client below and moved to `scripts\archive\` on 19 August 2026.
 
 For a synchronized, ChatGPT-video-style loop, use a vision-capable model/server (e.g., LLaVA 1.5 7B in llama.cpp vision build or a cloud VLM) and run the RealSense VLM client below.
 
@@ -32,8 +37,8 @@ For a synchronized, ChatGPT-video-style loop, use a vision-capable model/server 
 2) Run the RealSense VLM client:
 
 ```powershell
-# From repo root; sends 1 FPS frames with image+text messages
-python scripts\vlm_realsense_live.py --endpoint http://127.0.0.1:8080 --model llava-1.5-7b --hz 1 --width 640 --height 480
+# Historical. From repo root; sends 1 FPS frames with image+text messages
+python scripts\archive\vlm_realsense_live.py --endpoint http://127.0.0.1:8080 --model llava-1.5-7b --hz 1 --width 640 --height 480
 ```
 
 Notes:
@@ -72,7 +77,8 @@ python scripts\rgbd_facts_with_mapping.py --rgb "outputs\bag_test\color.png" --d
 python scripts\realsense_per_frame_facts.py --model yolov8n.pt --imgsz 640 --conf 0.25
 
 # Run RealSense live stream risk estimation
-python scripts\realsense_per_frame_with_risk.py --model yolov8n.pt --imgsz 640 --conf 0.25
+# Historical. Retired, moved to scripts\archive\ on 19 August 2026.
+python scripts\archive\realsense_per_frame_with_risk.py --model yolov8n.pt --imgsz 640 --conf 0.25
 
 # Run RealSense live stream risk estimation + direction input + simple caption
 python scripts/only_realsense.py --model yolov8n.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty
@@ -89,7 +95,8 @@ python scripts\realsense_shared_control.py --model yolov8n.pt --imgsz 640 --conf
 & .\scripts\start_llama_server.ps1 -ModelPath "models\llm\llava-1.5-7b\llava-v1.5-7b-Q4_K_M.gguf" -MmprojPath "models\llm\llava-1.5-7b\llava-v1.5-7b-mmproj-model-f16.gguf" -NGL 24 -Ctx 2048 -Threads 8 -Port 8080 -MainGpu 0 -Verbose
 
 # run the RealSense VLM
-python scripts\realsense_vlm_on_change.py `
+# Historical. Stage 2 prototype, retired, moved to scripts\archive\ on 19 August 2026.
+python scripts\archive\realsense_vlm_on_change.py `
   --endpoint http://127.0.0.1:8080 `
   --model llava-1.5-7b `
   --width 640 --height 480 --fps 15 `
@@ -132,31 +139,84 @@ everything runs on CPU. They ship separately from the llama.cpp binaries, in
 .\tools\llama_cpp\llama-server.exe --version   # must print "found 1 CUDA devices"
 ```
 
-3) Run the RealSense VLM client specialized for Qwen3‑VL:
+3) Run the canonical HDSG client with the Intel RealSense D455f:
 
 ```powershell
 python scripts\realsense_vlm_on_change_qwen.py `
   --endpoint http://127.0.0.1:8080 `
   --model qwen3-vl-4b-instruct `
+  --model_hash sha256:66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a `
   --width 640 --height 480 --fps 15 `
   --image_size 448 --encode jpeg --jpeg_quality 70 `
   --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
-  --process_hz 2 `
-  --min_interval_s 0.9 `
-  --max_tokens 120 `
+  --process_hz 8 `
+  --max_tokens 220 `
+  --evaluate false `
   --show `
   --debug_lanes
 ```
+
+The recorded hash belongs to the Qwen3-VL GGUF named in the server command above.
+Recalculate and replace it if that model file changes. A run can start without
+`--model_hash`, but its telemetry then records an unverified-model digest and is
+unsuitable for the formal model-comparison results.
+
+The script always uses persistent BoT-SORT tracking. The normal display shows a
+bounding box only after the local movement classifier confirms that a tracked
+object is moving. Add `--debug_objects` to show every detection during calibration.
+
+The More detail button requests more information about the observation supporting
+the current caption. The Reassess button requests a fresh observation. The `M` and
+`R` keys provide equivalent test shortcuts. The interface accepts no free text.
+Caption generation is event driven, so time passing alone does not trigger another
+model call.
+
+Normal development runs use `--evaluate false` and do not write telemetry. In this
+mode, `--eval_name` has no effect if it is also present. To record a named evaluation
+run, change the option and provide the evaluation name:
+
+```powershell
+--evaluate true --eval_name straight_path
+```
+
+The complete JSONL record is then written to
+`logs/straight_path/run_<timestamp>.jsonl`. The evaluation name is also stored in
+every telemetry envelope and as the Fact Packet's scenario identifier. Each distinct
+evaluation path should use its own stable name.
+
+The fixed internal prompts are loaded from
+`config/hdsg_request_catalogue.v1.json`. Adding or enabling another request changes
+the evaluated interface and therefore requires its own validation before use.
+
+Every run writes Full Fact Packets, Restricted Prompt Packets, VLM candidates and
+Authoritative Release Objects to `smart_walker/logs/<run_id>.jsonl`. Only the
+`caption_text` field of an Authoritative Release Object is displayed.
 
 --------------------------
 
 ## Retired: the VLP variant
 
 `scripts/realsense_vlp_on_change_qwen.py` and the `smart_walker_vlp/` package were removed
-on 8 August 2026. They were a near-duplicate of the script above, differing only in that
-they lacked the lane-derived risk path and carried the stuck-detection interaction. That
-interaction has been ported into `realsense_vlm_on_change_qwen.py`, so nothing unique
-remains in the retired files. They are recoverable from git history at commit `d9b877a`.
+on 8 August 2026. They were a near-duplicate of the script above. They lacked the
+lane-derived risk path and used a prototype stuck-detection interaction. The current
+HDSG interface replaces that interaction with fixed More detail and Reassess controls.
+The retired files are recoverable from git history at commit `d9b877a`.
 
 `realsense_vlm_on_change_qwen.py` is the single canonical entry point and is the script the
 evaluation records against.
+
+## Retired: earlier generative-component prototypes, archived
+
+On 19 August 2026, four scripts documenting the thesis's Chapter 4 development-progression
+table (LLaVA-1.5, then Qwen2.5-VL, before the canonical Qwen3-VL client) were moved to
+`scripts\archive\` rather than deleted, since Chapter 4 cites them as development history:
+`vlm_realsense_live.py`, `realsense_per_frame_with_risk.py`, `realsense_vlm_on_change.py`
+and `realsense_vlm_last_version.py`. None is imported by the canonical path. History is
+preserved with `git mv`, so `git log --follow` on a file under `scripts\archive\` reaches
+its full history at the old path.
+
+In the same pass, `realsense_vlm_on_change_qwen.py`'s own retired direct-caption route
+(`_legacy_main` and nine private helper functions, roughly 1,060 lines, unreachable from
+`main()`) was deleted rather than archived, since it was dead code inside the canonical
+file rather than a separate historical script. It remains in git history on the commit
+before this change.

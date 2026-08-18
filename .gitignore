@@ -15,6 +15,7 @@ env/
 # Data, logs, and outputs
 outputs/
 **/outputs/
+**/logs/
 *.log
 *.tmp
 *.bak
@@ -69,6 +70,10 @@ thesis/
 # Local agent/skill configuration at the repo root, tool-specific and
 # personal to whoever is running the assistant, not part of the project.
 /.agents/
+
+# Codex CLI's working artifacts at the repo root, tool-specific and
+# regenerated on demand, not part of the project.
+/.codex_artifacts/
 
 # Microsoft Office lock and recovery files, which Word leaves behind while a
 # document is open.

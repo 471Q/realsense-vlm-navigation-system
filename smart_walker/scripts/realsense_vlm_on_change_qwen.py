@@ -1,8 +1,11 @@
 import argparse
 import base64
+from datetime import datetime, timezone
+import json
 import time
 import re
 import sys
+from pathlib import Path
 from typing import Optional, Tuple
 
 import cv2
@@ -27,9 +30,11 @@ except Exception as e:
 try:
     # Import from the robust shared-control pipeline
     import scripts.realsense_shared_control as sw
+    import scripts.hdsg_runtime as hdsg
 except Exception:
     # Fallback for running directly from scripts folder
     import realsense_shared_control as sw  # type: ignore
+    import hdsg_runtime as hdsg  # type: ignore
 
 
 def _encode_image(img_bgr: np.ndarray, fmt: str = "jpeg", quality: int = 75) -> Tuple[str, str]:
@@ -91,6 +96,10 @@ def _build_payload_from_image_array(img_bgr: np.ndarray, fmt: str, quality: int,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
     )
+    grammar = getattr(args, '_hdsg_grammar', None)
+    if not grammar:
+        raise RuntimeError("The approved HDSG generation constraint is unavailable.")
+    payload["grammar"] = grammar
     return payload, f"{fmt}/q{quality}"
 
 
@@ -426,7 +435,9 @@ def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args) -> str:
             # Stash user text for payload build without threading globals
             # We attach it temporarily to args for _build_payload_from_image_array
             payload, desc = _build_payload_from_image_array(img, fmt, q, args)
-            content = call_vlm(endpoint, payload, timeout=60)
+            content = call_vlm(
+                endpoint, payload, timeout=float(getattr(args, "vlm_timeout_s", 20.0))
+            )
             if desc != '':
                 print(
                     f"[vlm_on_change_qwen] VLM accepted image encoding: {desc}")
@@ -477,1352 +488,824 @@ def _wrap_text(text: str, width: int = 70):
     return lines
 
 
-def _parse_advice(content: str) -> tuple[Optional[str], Optional[str]]:
-    """Parse Advice line from VLM content. Returns (ADVICE, suggested_dir).
-    ADVICE is one of SAFE|CAUTION|STOP (upper) if found. suggested_dir is 'left'|'right' when present in advice text.
-    """
-    try:
-        # Find the Advice line
-        for ln in content.splitlines():
-            # Accept either a colon or a semicolon after the level
-            m = re.match(
-                r"\s*Advice:\s*(SAFE|CAUTION|STOP)\s*[:;]\s*(.*)", ln, flags=re.IGNORECASE)
-            if not m:
-                m = re.match(
-                    r"\s*(SAFE|CAUTION|STOP)\s*[:;]\s*(.*)", ln, flags=re.IGNORECASE)
-            if m:
-                adv = m.group(1).upper()
-                text = (m.group(2) or '').lower()
-                sug = None
-                if 'suggest:' in text:
-                    ms = re.search(r"suggest\s*[:]\s*([a-z\-]+)", text)
-                    if ms:
-                        token = ms.group(1).strip()
-                        if token in ('left', 'right', 'back', 'continue', 'stay-left', 'stay-right', 'mid-left', 'mid-right', 'left-right'):
-                            sug = token
-                else:
-                    if 'left' in text and 'right' not in text:
-                        sug = 'left'
-                    elif 'right' in text and 'left' not in text:
-                        sug = 'right'
-                return adv, sug
-    except Exception:
-        pass
-    return None, None
-
-
-def _strip_suggest(text: str) -> str:
-    """Remove any trailing 'Suggest: <dir>' clause from a caption."""
-    try:
-        return re.sub(r"\s*Suggest:\s*(left|right|back)\.?\s*$", "", text, flags=re.IGNORECASE)
-    except Exception:
-        return text
-
-
-def _humanize_lane_token(token: str) -> str:
-    try:
-        t = (token or '').lower()
-        mapping = {
-            'continue': 'mid',
-            'left': 'left',
-            'right': 'right',
-            'stay-left': 'left',
-            'stay-right': 'right',
-            'mid-left': 'mid-left',
-            'mid-right': 'mid-right',
-            'left-right': 'left-right',
-            'back': 'back',
-        }
-        return mapping.get(t, t)
-    except Exception:
-        return token
-
-
-def _caption_with_human_lane(content: str) -> str:
-    """Replace the Suggest token in the caption with a human-readable lane name matching the badge."""
-    try:
-        if not content:
-            return content
-        # Replace only the token part after 'Suggest:' while keeping punctuation
-
-        def _repl(m):
-            tok = m.group(1)
-            human = _humanize_lane_token(tok)
-            return f"Suggest: {human}"
-        return re.sub(r"(?i)Suggest:\s*([a-z\-]+)", _repl, content)
-    except Exception:
-        return content
-
-
-def _humanize_lane_mentions(content: str) -> str:
-    """Rewrite technical lane references like 'Lane L1/L2/L3' or 'L1' to human terms.
-    - L1 -> left, L2 -> mid, L3 -> right
-    - 'Lane C'/'Lane M' -> middle
-    - 'Lane L'/'Lane R' -> left/right
-    Conservative patterns to avoid touching numbers in distances.
-    """
-    try:
-        s = content
-        # Common forms: 'Lane L1', 'lane l2', 'lane l3'
-        s = re.sub(r"(?i)\blane\s*[-_ ]*l?1\b", "left lane", s)
-        s = re.sub(r"(?i)\blane\s*[-_ ]*l?2\b", "middle lane", s)
-        s = re.sub(r"(?i)\blane\s*[-_ ]*l?3\b", "right lane", s)
-        # 'Lane C' or 'Lane M'
-        s = re.sub(r"(?i)\blane\s*[cm]\b", "middle lane", s)
-        # 'Lane L' / 'Lane R'
-        s = re.sub(r"(?i)\blane\s*l\b", "left lane", s)
-        s = re.sub(r"(?i)\blane\s*r\b", "right lane", s)
-        # Standalone L1/L2/L3 tokens
-        s = re.sub(r"(?i)\bL1\b", "left", s)
-        s = re.sub(r"(?i)\bL2\b", "mid", s)
-        s = re.sub(r"(?i)\bL3\b", "right", s)
-        return s
-    except Exception:
-        return content
-
-
-def _intent_phrase(intent: Optional[str]) -> str:
-    try:
-        i = (intent or '').lower()
-        if i in ('forward', 'fwd', 'up'):
-            return 'forward'
-        if i in ('back', 'backward', 'down'):
-            return 'back'
-        if i == 'left':
-            return 'left'
-        if i == 'right':
-            return 'right'
-        return 'ahead'
-    except Exception:
-        return 'ahead'
-
-
-def _finalize_caption(content: str, adv: Optional[str], intent: Optional[str]) -> str:
-    """Make the caption one clean human sentence.
-    - For SAFE: drop technical 'near:' details; concise path-clear phrasing; keep Suggest token.
-    - For CAUTION/STOP: keep obstacle distances (near: ...); append 'for <intent>' after Suggest.
-    - Fix duplicate punctuation and ensure trailing period.
-    """
-    try:
-        s = content.strip()
-        # Normalize GO -> SAFE
-        if re.search(r"(?i)\bAdvice:\s*GO\b", s):
-            s = re.sub(r"(?i)\bAdvice:\s*GO\b", "Advice: SAFE", s)
-            adv = 'SAFE'
-        # Extract suggest token (already humanized elsewhere)
-        m = re.search(r"(?i)Suggest:\s*([^.;]+)", s)
-        suggest_txt = m.group(1).strip() if m else None
-        # Intent phrase
-        ip = _intent_phrase(intent)
-        # Remove any duplicated punctuation like ';;' or ':;'
-        s = re.sub(r";{2,}", ";", s)
-        s = re.sub(r":;", ";", s)
-        # For SAFE, remove near: ... section and restate succinctly
-        if (adv or '').upper() == 'SAFE':
-            s = re.sub(r"(?i)\s*;?\s*near\s*:[^;\.]*", "", s)
-            # Replace prefix with human phrasing
-            s = re.sub(r"(?i)^Advice:\s*SAFE\s*[:;]?", "SAFE:", s)
-            if suggest_txt:
-                # Keep Suggest token as machine-readable, but make sentence human
-                s = re.sub(r"(?i)Suggest:\s*[^.;]+",
-                           f"Suggest: {suggest_txt}", s)
-                # Prepend concise clause before Suggest
-                base = f"SAFE: path looks clear to move {ip}; "
-                # Remove any leftover reason before Suggest:
-                idx = s.lower().rfind('suggest:')
-                s = base + s[idx:]
-        else:
-            # CAUTION or STOP (or unknown): ensure near: is present; attach 'for <intent>' after Suggest
-            if 'near:' not in s.lower():
-                # leave as-is; _ensure_scene_detail already tried to add one
-                pass
-            if suggest_txt:
-                s = re.sub(r"(?i)Suggest:\s*([^.;]+)",
-                           f"Suggest: {suggest_txt} for {ip}", s)
-        # Ensure single sentence end with a period
-        s = s.rstrip()
-        if not s.endswith(('.', '!', '?')):
-            s = s + '.'
-        return s
-    except Exception:
-        return content
-
-
-def _ensure_suggest(adv: Optional[str], sug: Optional[str], content: str, fallback: Optional[str]) -> str:
-    """Ensure caption contains a 'Suggest: ...' clause; append fallback when missing."""
-    try:
-        if 'suggest:' in (content or '').lower():
-            # Optionally normalize tokens for SAFE/CAUTION/STOP
-            try:
-                adv2, sug2 = _parse_advice(content)
-                if adv2 == 'CAUTION' and sug2 in ('left', 'right'):
-                    return re.sub(r"(?i)\bSuggest:\s*(left|right)\b",
-                                  lambda m: f"Suggest: {'stay-left' if m.group(1).lower() == 'left' else 'stay-right'}",
-                                  content)
-                if adv2 == 'SAFE' and sug2 in ('left', 'right'):
-                    return re.sub(r"(?i)\bSuggest:\s*(left|right)\b", "Suggest: continue", content)
-                # For STOP, prefer backing up when all forward lanes are blocked.
-                if adv2 == 'STOP':
-                    # Any STOP+continue or STOP+sideways suggestion should reduce to 'back'
-                    # when fallback (auto_suggest) says 'back' (i.e. no safe lane).
-                    fb = (fallback or '').lower()
-                    if fb == 'back':
-                        return re.sub(r"(?i)\bSuggest:\s*([a-z\-]+)\b", "Suggest: back", content)
-                    # Otherwise keep existing STOP normalization rules
-                    if sug2 in ('stay-left', 'stay-right'):
-                        return re.sub(r"(?i)\bSuggest:\s*stay\-(left|right)\b",
-                                      lambda m: f"Suggest: {m.group(1).lower()}", content)
-                    if sug2 in ('continue',):
-                        tok = (fallback or 'back')
-                        tok = tok.lower()
-                        if tok in ('stay-left', 'stay-right'):
-                            tok = 'left' if tok == 'stay-left' else 'right'
-                        if tok not in ('left', 'right', 'back'):
-                            tok = 'back'
-                        return re.sub(r"(?i)\bSuggest:\s*continue\b", f"Suggest: {tok}", content)
-            except Exception:
-                pass
-            return content
-        add = sug or fallback
-        if not add:
-            return content
-        token = add.lower()
-        # Normalize by Advice for consistency
-        if adv == 'CAUTION' and token in ('left', 'right'):
-            token = 'stay-left' if token == 'left' else 'stay-right'
-        if adv == 'SAFE' and token in ('left', 'right'):
-            token = 'continue'
-        if adv == 'STOP' and token in ('stay-left', 'stay-right'):
-            token = 'left' if token == 'stay-left' else 'right'
-        if token in ('left', 'right', 'back', 'continue', 'stay-left', 'stay-right', 'mid-left', 'mid-right', 'left-right'):
-            return content.rstrip() + f" Suggest: {token}"
-        return content
-    except Exception:
-        return content
-
-
-def _ensure_scene_detail(content: str, detail: Optional[str]) -> str:
-    """Guarantee a minimal scene description before 'Suggest:'.
-    Rule: if the sentence does NOT contain an explicit distance (e.g., '1.2 m'/'1.2m'),
-    we inject our compact detail (near: objs / lanes L/C/R / nearest x.xm).
-    Direction words alone (left/right) are NOT considered sufficient.
-    """
-    try:
-        if not detail:
-            return content
-        s = (content or "").lower()
-        has_distance = bool(re.search(r"\b\d+(?:\.\d+)?\s*m\b", s))
-        # Prefer to always include specific nearby object detail if provided
-        if detail and detail.lower().startswith('near:'):
-            if 'near:' not in s:
-                idx = s.rfind('suggest:')
-                if idx != -1:
-                    pre = content[:idx].rstrip().rstrip('.')
-                    post = content[idx:]
-                    return f"{pre}; {detail} {post}"
-                return content.rstrip().rstrip('.') + f"; {detail}"
-            return content
-        # Otherwise, if no explicit distance is present, add the generic detail
-        if has_distance:
-            return content
-        # Insert detail just before 'Suggest:' to keep a single sentence
-        idx = s.rfind('suggest:')
-        if idx != -1:
-            pre = content[:idx].rstrip().rstrip('.')
-            post = content[idx:]
-            return f"{pre}; {detail} {post}"
-        return content.rstrip().rstrip('.') + f"; {detail}"
-    except Exception:
-        return content
-
-
-def _is_system_echo(content: str) -> bool:
-    s = (content or "").lower()
-    return (
-        "you are a safety-first vision assistant" in s
-        or "output format (no extra text)" in s
-        or s.startswith("you are a safety-first vision assistant")
-    )
-
-
-def _is_valid_caption(content: str) -> bool:
-    try:
-        if not content:
-            return False
-        lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
-        if not lines:
-            return False
-        if len(lines) == 1:
-            s0 = lines[0].lower()
-            if s0.startswith('advice:'):
-                return True
-            if s0.startswith('safe:') or s0.startswith('caution:') or s0.startswith('stop:'):
-                return True
-            return False
-        if len(lines) >= 2:
-            return (lines[0].lower().startswith('scene:') and lines[1].lower().startswith('advice:'))
+def _parse_bool_argument(value: str | bool) -> bool:
+    """Parses an explicit command-line Boolean value."""
+    if isinstance(value, bool):
+        return value
+    normalised = str(value).strip().lower()
+    if normalised in {"true", "1", "yes", "on"}:
+        return True
+    if normalised in {"false", "0", "no", "off"}:
         return False
-    except Exception:
-        return False
+    raise argparse.ArgumentTypeError("expected true or false")
 
 
 def main():
+    """Runs the authoritative HDSG sensing, generation, validation, and display path."""
     ap = argparse.ArgumentParser(
-        description="Event-driven RealSense -> Qwen3-VL (trigger on risk/intent change)")
-
-    # VLM parameters (defaults adapted for Qwen3-VL 4B)
-    ap.add_argument('--endpoint', type=str, default='http://127.0.0.1:8080',
-                    help='OpenAI-compatible VLM server base URL (llama.cpp)')
-    ap.add_argument('--model', type=str, default='qwen3-vl-4b-instruct',
-                    help='VLM model name/id on server')
-    ap.add_argument('--temperature', type=float, default=0.2)
-    ap.add_argument('--top_p', type=float, default=0.9)
-    ap.add_argument('--max_tokens', type=int, default=120)
-    ap.add_argument('--system', type=str, default=(
-        "You are a safety-first vision assistant for an elderly user's smart walker. "
-        "Use only the provided scene facts; do not invent.\n\n"
-        "Output exactly ONE natural, human-sounding sentence that briefly describes the scene and clearly states the safety decision. "
-        "Always include at least one short concrete detail drawn from the facts (e.g., a specific object with distance and side, or lane clearance). "
-        "Begin with the decision token in uppercase, formatted as either 'Advice: <SAFE|CAUTION|STOP>:' or '<SAFE|CAUTION|STOP>:' followed by a very short reason. "
-        "Always append a concise 'Suggest: ...' at the end. Allowed tokens: 'continue', 'stay-left', 'stay-right', 'left', 'right', 'mid-left', 'mid-right', 'left-right', 'back'. "
-        "Lane model: only three depth bands (LEFT / MID / RIGHT). If two adjacent bands are clear, use a combined token (mid-left or mid-right). If left & right clear but mid blocked, use 'left-right'. If only MID clear, 'continue'. If none clear, 'back'. "
-        "Guidance: for SAFE prefer 'continue' (or the best clear combo); for CAUTION use 'stay-left'/'stay-right' or a combo if two are clear; for STOP use 'left' or 'right' if exactly one side offers slightly more space, otherwise 'back'. "
-        "If a memory_list is provided for this ticket, prefer consistent object names based on it; do not switch names unless clearly contradicted. "
-        "Plain language only; no labels, no lists, no JSON, no line breaks, no extra text."),
-        help="System: one-sentence scene assessment + decision; end with 'Suggest: <...>' using allowed 3-band tokens and combos.")
-    ap.add_argument('--vlm_timeout_s', type=float, default=20.0,
-                    help='Max seconds to wait for a single VLM response')
-    ap.add_argument('--late_accept_s', type=float, default=1.5,
-                    help='Grace window (seconds) to accept late VLM results after a ticket switch for overlay display')
-    ap.add_argument('--strict_caption', action='store_true',
-                    help="Only display captions that start with 'Advice:' or 'SAFE:/CAUTION:/STOP:'; otherwise show raw text")
-
-    # Trigger policy
-    ap.add_argument('--min_interval_s', type=float, default=0.9,
-                    help='Minimum seconds between VLM calls (debounce)')
-
-    # Camera / encoding
-    ap.add_argument('--width', type=int, default=640)
-    ap.add_argument('--height', type=int, default=480)
-    ap.add_argument('--fps', type=int, default=30)
-    ap.add_argument('--image_size', type=int, default=448,
-                    help='Longest side before sending to VLM; aspect ratio is preserved')
-    ap.add_argument('--jpeg_quality', type=int, default=70)
-    ap.add_argument('--encode', choices=['jpeg', 'png'], default='jpeg',
-                    help='Image encoding format for VLM payload (default: jpeg)')
-    ap.add_argument('--process_hz', type=float, default=0.0,
-                    help='Max processing rate for detector/risk. 0 = unlimited.')
-    ap.add_argument('--warmup', action='store_true',
-                    help='Warm up YOLO on CUDA and print CUDA device info')
-
-    # Object detector (reuses shared pipeline)
-    ap.add_argument('--det_model', default='yolov8n.pt')
-    ap.add_argument('--imgsz', type=int, default=640)
-    ap.add_argument('--conf', type=float, default=0.25)
-    ap.add_argument('--track', action='store_true', help='Use tracker IDs')
-    ap.add_argument('--half', action='store_true',
-                    help='Use FP16 if available')
-
-    # UI
-    ap.add_argument('--show', action='store_true',
-                    help='Show preview with overlay')
-    ap.add_argument('--clear_threshold_m', type=float, default=1.8,
-                    help='Minimum clear distance to consider a lane navigable (depth-driven lanes)')
-    ap.add_argument('--debug_lanes', action='store_true',
-                    help='Overlay depth lane ROIs and median values for debugging')
-    ap.add_argument('--mirror_view', action='store_true',
-                    help='Swap left/right semantics to match a mirrored camera view')
-    ap.add_argument('--no_mirror_tag', action='store_true',
-                    help='Suppress the on-screen "MIRROR VIEW" notice while mirror_view is enabled')
+        description="HDSG RealSense D455f depth, YOLO grounding, and constrained VLM guidance"
+    )
+    ap.add_argument("--endpoint", default="http://127.0.0.1:8080")
+    ap.add_argument("--model", default="qwen3-vl-4b-instruct")
+    ap.add_argument("--model_hash", default=None)
+    ap.add_argument("--quantisation", default="Q4_K_M")
+    ap.add_argument("--temperature", type=float, default=0.2)
+    ap.add_argument("--top_p", type=float, default=0.9)
+    ap.add_argument("--max_tokens", type=int, default=220)
+    ap.add_argument("--vlm_timeout_s", type=float, default=20.0)
+    ap.add_argument("--width", type=int, default=640)
+    ap.add_argument("--height", type=int, default=480)
+    ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--image_size", type=int, default=448)
+    ap.add_argument("--jpeg_quality", type=int, default=70)
+    ap.add_argument("--encode", choices=["jpeg", "png"], default="jpeg")
+    ap.add_argument("--process_hz", type=float, default=8.0)
+    ap.add_argument("--det_model", default="yolov8n.pt")
+    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--conf", type=float, default=0.25)
+    ap.add_argument("--half", action="store_true")
+    ap.add_argument("--show", action="store_true")
+    ap.add_argument("--debug_lanes", action="store_true")
+    ap.add_argument("--debug_objects", action="store_true")
+    ap.add_argument("--mirror_view", action="store_true")
+    ap.add_argument("--no_mirror_tag", action="store_true")
+    ap.add_argument("--clear_threshold_m", type=float, default=1.8)
+    ap.add_argument("--sector_choice_tolerance_m", type=float, default=0.10)
+    ap.add_argument("--movement_threshold_m", type=float, default=0.12)
+    ap.add_argument("--stationary_threshold_m", type=float, default=0.05)
+    ap.add_argument("--movement_confirmation_observations", type=int, default=4)
+    ap.add_argument("--more_detail_freshness_s", type=float, default=5.0)
+    ap.add_argument("--reassessment_cooldown_s", type=float, default=1.5)
+    ap.add_argument("--post_reorientation_stable_observations", type=int, default=4)
+    ap.add_argument("--post_reorientation_max_variation_m", type=float, default=0.10)
+    default_telemetry_dir = Path(__file__).resolve().parents[1] / "logs"
+    ap.add_argument("--telemetry_dir", type=Path, default=default_telemetry_dir)
+    ap.add_argument(
+        "--evaluate", nargs="?", const=True, default=False, type=_parse_bool_argument,
+        help="enable complete JSONL evaluation telemetry",
+    )
+    ap.add_argument(
+        "--eval_name", "--eval-name", dest="eval_name", default=None,
+        help="short scenario name used to group evaluation runs",
+    )
+    default_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_candidate.v1.gbnf"
+    default_catalogue = Path(__file__).resolve().parents[1] / "config" / "hdsg_request_catalogue.v1.json"
+    ap.add_argument("--grammar", type=Path, default=default_grammar)
+    ap.add_argument("--request_catalogue", type=Path, default=default_catalogue)
     args = ap.parse_args()
 
-    # Load config & ontology
-    cfg = sw.load_yaml(sw.PIPELINE_CFG)
-    # Upper bound of the 'very_close' bin, below which a lane counts as blocked.
-    # Read once: this used to be re-parsed from disk on every VLM trigger, which
-    # put file IO in the per-frame path and made a safety threshold silently
-    # mutable mid-run.
-    try:
-        NEAR_HI = float(cfg['depth']['metric_bins_m']['very_close'][1])
-    except Exception:
-        NEAR_HI = 0.7
-    mapper = sw.OntologyMapper(sw.ONTOLOGY_CFG)
+    if args.evaluate:
+        if not args.eval_name:
+            ap.error("--eval_name is required when --evaluate is true")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.eval_name):
+            ap.error("--eval_name must contain only letters, numbers, underscores, or hyphens")
 
-    # RealSense init
+    if rs is None:
+        raise RuntimeError("pyrealsense2 is required for the canonical D455f implementation.")
+    try:
+        args._hdsg_grammar = args.grammar.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"The approved generation constraint could not be loaded: {args.grammar}") from error
+    constraint_hash = hdsg.sha256_file(args.grammar)
+    try:
+        request_catalogue = json.loads(args.request_catalogue.read_text(encoding="utf-8"))
+        required_requests = {"AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"}
+        if (request_catalogue.get("catalogue_version") != "hdsg.request_catalogue.v1"
+                or not required_requests.issubset(request_catalogue.get("requests", {}))):
+            raise ValueError("The required evaluated request profiles are absent.")
+        args.system = str(request_catalogue["system_prompt"])
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, KeyError) as error:
+        raise RuntimeError(
+            f"The approved request catalogue could not be loaded: {args.request_catalogue}"
+        ) from error
+    if not args.model_hash:
+        args.model_hash = hdsg.sha256_text(f"unverified-model:{args.model}")
+        print("[hdsg] warning: --model_hash was not supplied; telemetry marks a deterministic unverified-model digest.")
+
+    cfg = sw.load_yaml(sw.PIPELINE_CFG)
+    mapper = sw.OntologyMapper(sw.ONTOLOGY_CFG)
+    try:
+        near_hi = float(cfg["depth"]["metric_bins_m"]["very_close"][1])
+    except Exception:
+        near_hi = 0.7
+    runtime_configuration_hash = hdsg.sha256_text(json.dumps({
+        "pipeline_hash": hdsg.sha256_file(sw.PIPELINE_CFG),
+        "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
+        "constraint_hash": constraint_hash,
+        "clear_threshold_m": args.clear_threshold_m,
+        "sector_choice_tolerance_m": args.sector_choice_tolerance_m,
+        "movement_threshold_m": args.movement_threshold_m,
+        "stationary_threshold_m": args.stationary_threshold_m,
+        "movement_confirmation_observations": args.movement_confirmation_observations,
+        "more_detail_freshness_s": args.more_detail_freshness_s,
+        "reassessment_cooldown_s": args.reassessment_cooldown_s,
+        "post_reorientation_stable_observations": args.post_reorientation_stable_observations,
+        "post_reorientation_max_variation_m": args.post_reorientation_max_variation_m,
+    }, sort_keys=True))
+
+    from queue import Empty, Queue
+    import threading
+    from ultralytics import YOLO
+
     pipe = rs.pipeline()
     rs_cfg = rs.config()
-    rs_cfg.enable_stream(rs.stream.color, args.width,
-                         args.height, rs.format.bgr8, args.fps)
-    rs_cfg.enable_stream(rs.stream.depth, args.width,
-                         args.height, rs.format.z16, args.fps)
+    rs_cfg.enable_stream(rs.stream.color, args.width, args.height, rs.format.bgr8, args.fps)
+    rs_cfg.enable_stream(rs.stream.depth, args.width, args.height, rs.format.z16, args.fps)
     profile = pipe.start(rs_cfg)
-    depth_scale = float(profile.get_device(
-    ).first_depth_sensor().get_depth_scale())
+    depth_scale = float(profile.get_device().first_depth_sensor().get_depth_scale())
     align = rs.align(rs.stream.color)
-    print(f"[vlm_on_change_qwen] depth_scale = {depth_scale:.6f} m/unit")
+    print(f"[hdsg] D455f depth scale = {depth_scale:.6f} m/unit")
 
-    # Queues & threads (reusing shared pipeline workers)
-    from queue import Queue, Empty
-    cap_q: 'Queue[sw.FramePacket]' = Queue(maxsize=1)
-    inf_in: 'Queue[sw.FramePacket]' = Queue(maxsize=1)
-    inf_out: 'Queue[sw.InferPacket]' = Queue(maxsize=1)
+    cap_q: "Queue[sw.FramePacket]" = Queue(maxsize=1)
+    inf_in: "Queue[sw.FramePacket]" = Queue(maxsize=1)
+    inf_out: "Queue[sw.InferPacket]" = Queue(maxsize=1)
+    generation_q: "Queue[dict]" = Queue(maxsize=1)
+    stop_evt = threading.Event()
+    state_lock = threading.Lock()
 
-    stop_evt = __import__('threading').Event()
-
-    # Detector
-    from ultralytics import YOLO
     model = YOLO(args.det_model)
-    # Prefer GPU for detector if available
-    use_cuda = bool(torch is not None and hasattr(
-        torch, 'cuda') and torch.cuda.is_available())
+    use_cuda = bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
     if use_cuda:
-        try:
-            model.to('cuda')
-            if args.half:
-                print("[vlm_on_change_qwen] YOLO on CUDA (FP16)")
-            else:
-                print("[vlm_on_change_qwen] YOLO on CUDA (FP32)")
-        except Exception as e:
-            print(
-                "[vlm_on_change_qwen] Failed to move YOLO to CUDA, staying on CPU:", e)
-    else:
-        if args.half:
-            print(
-                "[vlm_on_change_qwen] --half requested but CUDA is not available; running on CPU FP32.")
-
-    __import__('threading').Thread(target=sw.capture_thread, args=(
-        pipe, align, depth_scale, cap_q, stop_evt, False, None, sw.IMU_MAX_DRAIN_PER_LOOP), daemon=True).start()
-    half_flag = bool(args.half and (torch is not None) and hasattr(
-        torch, 'cuda') and torch.cuda.is_available())
-    __import__('threading').Thread(
-        target=sw.inference_thread,
-        args=(cfg, mapper, model, inf_in, inf_out, stop_evt,
-              args.imgsz, args.conf, half_flag, None, args.track, 'bytetrack.yaml'),
-        daemon=True
+        model.to("cuda")
+    half_flag = bool(args.half and use_cuda)
+    threading.Thread(
+        target=sw.capture_thread,
+        args=(pipe, align, depth_scale, cap_q, stop_evt, False, None, sw.IMU_MAX_DRAIN_PER_LOOP),
+        daemon=True,
     ).start()
+    threading.Thread(
+        target=sw.inference_thread,
+        args=(cfg, mapper, model, inf_in, inf_out, stop_evt, args.imgsz, args.conf,
+              half_flag, None, True, "botsort.yaml"),
+        daemon=True,
+    ).start()
+    keyboard = sw.KeyListener(poll_hz=120).start()
 
-    # Keyboard intent (reuse W/A/S/D scheme)
-    kbd = sw.KeyListener(poll_hz=120).start()
+    motion_tracker = hdsg.MotionTracker(
+        movement_threshold_m=args.movement_threshold_m,
+        stationary_threshold_m=args.stationary_threshold_m,
+        confirmation_observations=max(2, args.movement_confirmation_observations),
+    )
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = f"run_{run_stamp}"
+    telemetry_path: Optional[Path] = None
+    if args.evaluate:
+        evaluation_dir = args.telemetry_dir / str(args.eval_name)
+        evaluation_dir.mkdir(parents=True, exist_ok=True)
+        telemetry_path = evaluation_dir / f"{run_id}.jsonl"
+    telemetry_lock = threading.Lock()
 
-    # --- Async VLM worker to avoid blocking the main loop ---
-    from queue import Queue as _Q
-    vlm_q: '_Q[tuple[np.ndarray, str, int]]' = _Q(maxsize=1)
-    vlm_inflight: bool = False
+    def record(record_type: str, value: dict):
+        if telemetry_path is None:
+            return
+        envelope = {
+            "evaluation_name": args.eval_name,
+            "record_type": record_type,
+            "recorded_at_utc": hdsg.utc_now(),
+            "record": value,
+        }
+        with telemetry_lock:
+            with telemetry_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(envelope, separators=(",", ":"), ensure_ascii=True) + "\n")
 
-    dialog = {
-        "pending": False,
-        "proposed_dir": None,  # 'left' | 'right'
-        "since_ms": 0,
-        "last_reply": None,
-    }
+    latest_release: Optional[dict] = None
+    latest_fact_packet: Optional[dict] = None
+    latest_prompt_packet: Optional[dict] = None
+    active_request_key: Optional[tuple[str, str, str]] = None
+    generation_inflight = False
+    generation_request_id: Optional[str] = None
+    queued_request_id: Optional[str] = None
+    reassessment_inflight = False
+    reassessment_cooldown_until = 0.0
 
-    def _vlm_worker():
-        nonlocal last_caption, last_vlm_ts, vlm_inflight, active_ticket_id, current_ticket
+    def publish_release(release: dict, record_type: str = "authoritative_release"):
+        nonlocal latest_release
+        with state_lock:
+            latest_release = release
+        record(record_type, release)
+
+    def generation_worker():
+        nonlocal generation_inflight, generation_request_id, queued_request_id
+        nonlocal reassessment_inflight, reassessment_cooldown_until
         while not stop_evt.is_set():
             try:
-                item = vlm_q.get(timeout=0.05)
+                request = generation_q.get(timeout=0.05)
             except Empty:
                 continue
+            fact_packet = request["fact_packet"]
+            request_id = fact_packet["interaction"]["request_id"]
+            with state_lock:
+                generation_inflight = True
+                generation_request_id = request_id
+                if queued_request_id == request_id:
+                    queued_request_id = None
+            prompt_packet = request["prompt_packet"]
+            request_key = request["request_key"]
+            candidate = None
+            failure_codes: list[str] = []
+            raw_response: Optional[str] = None
             try:
-                send_np, user_txt, t_id = item
-                vlm_inflight = True
-                mime, b64 = _encode_image(
-                    send_np, fmt=args.encode, quality=int(args.jpeg_quality))
-                setattr(args, '_user_txt_for_payload', user_txt)
-                try:
-                    content = _call_vlm_with_fallbacks(
-                        args.endpoint, send_np, args)
-                finally:
-                    if hasattr(args, '_user_txt_for_payload'):
-                        try:
-                            delattr(args, '_user_txt_for_payload')
-                        except Exception:
-                            pass
+                catalogue_entry = request_catalogue["requests"][fact_packet["interaction"]["request_id"]]
+                args._user_txt_for_payload = hdsg.prompt_packet_text(
+                    prompt_packet, str(catalogue_entry["fixed_instruction"])
+                )
+                raw_response = _call_vlm_with_fallbacks(args.endpoint, request["image"], args)
+                candidate, failure_codes = hdsg.parse_candidate(raw_response)
+                if candidate is not None:
+                    record("vlm_candidate", candidate)
+            except Exception as error:
+                failure_codes = [hdsg.generation_failure_code(error)]
+                print(f"[hdsg] constrained generation failed: {error}")
+            finally:
+                if hasattr(args, "_user_txt_for_payload"):
+                    delattr(args, "_user_txt_for_payload")
 
-                accept_for_ticket = (int(t_id) == int(active_ticket_id))
-                accept_unbound = (int(t_id) == 0)
-                try:
-                    grace = float(getattr(args, 'late_accept_s', 1.5))
-                except Exception:
-                    grace = 1.5
-                recently_switched = (
-                    time.time() - last_ticket_switch_ts) <= grace
+            with state_lock:
+                still_active = active_request_key == request_key
+            if not still_active:
+                failure_codes = ["RG_STALE_CANDIDATE"]
+                candidate = None
+            release = hdsg.build_release(
+                fact_packet,
+                prompt_packet,
+                release_id=request["release_id"],
+                candidate=candidate,
+                failure_codes=failure_codes,
+            )
+            if raw_response is not None and candidate is None:
+                record("rejected_candidate_raw", {
+                    "event_id": fact_packet["identity"]["event_id"],
+                    "response_sha256": hdsg.sha256_text(raw_response),
+                    "reason_codes": release["verification"]["reason_codes"],
+                })
+            if still_active:
+                publish_release(release)
+            else:
+                record("stale_release_not_displayed", release)
+            if fact_packet["interaction"]["request_id"] == "REASSESS":
+                reassessment_inflight = False
+                reassessment_cooldown_until = time.monotonic() + args.reassessment_cooldown_s
+            with state_lock:
+                generation_inflight = False
+                generation_request_id = None
 
-                if accept_for_ticket or accept_unbound or recently_switched:
-                    if _is_system_echo(content):
-                        print(
-                            f"[warn] VLM returned system prompt text; ignoring overlay. Raw len={len(content)}")
-                    elif not _is_valid_caption(content):
-                        if getattr(args, 'strict_caption', False):
-                            print(
-                                f"[warn] VLM returned non-minimal caption; ignoring overlay. First 80 chars: {content[:80]!r}")
-                        else:
-                            print(
-                                f"[info] Accepting non-minimal caption for overlay (strict_caption=off). First 80 chars: {content[:80]!r}")
-                            last_caption = content
-                    else:
-                        adv_tmp, sug_tmp = _parse_advice(content)
-                        # Keep model's suggestion if present; we'll compute a fallback if missing
-                        try:
-                            fallback = (current_ticket or {}).get(
-                                'last_auto_suggest')
-                        except Exception:
-                            fallback = None
-                        content = _ensure_suggest(
-                            adv_tmp, sug_tmp, content, fallback)
-                        content = _caption_with_human_lane(content)
-                        # Ensure a minimal concrete detail is present; fall back to our scene snippet
-                        try:
-                            scene_fallback = (current_ticket or {}).get(
-                                'last_scene_snippet')
-                        except Exception:
-                            scene_fallback = None
-                        content = _ensure_scene_detail(content, scene_fallback)
-                        adv_tmp2, _sug_tmp2 = _parse_advice(content)
-                        intent_dir = (current_ticket or {}).get(
-                            'intent_dir') if current_ticket else None
-                        content = _finalize_caption(
-                            content, adv_tmp2, intent_dir)
-                        last_caption = _humanize_lane_mentions(content)
-                    last_vlm_ts = time.time()
+    threading.Thread(target=generation_worker, daemon=True).start()
 
-                    if accept_for_ticket:
-                        try:
-                            if current_ticket is not None:
-                                current_ticket['last_llm_ts'] = last_vlm_ts
-                        except Exception:
-                            pass
-                        adv, sug = _parse_advice(content)
-                        try:
-                            if current_ticket is not None:
-                                current_ticket['last_advice'] = adv
-                                if adv == 'SAFE':
-                                    current_ticket['status'] = 'moving'
-                                elif adv == 'CAUTION':
-                                    current_ticket['status'] = 'moving'
-                                elif adv == 'STOP':
-                                    current_ticket['status'] = 'blocked'
-                        except Exception:
-                            pass
-                        try:
-                            # Only allow interactive direction proposal for STOP with left/right
-                            if adv == 'STOP' and sug in ('left', 'right'):
-                                dialog.update({
-                                    'pending': True,
-                                    'proposed_dir': sug,
-                                    'since_ms': int(time.time()*1000),
-                                    'last_reply': None,
-                                })
-                            else:
-                                if dialog.get('pending'):
-                                    dialog['pending'] = False
-                                    dialog['proposed_dir'] = None
-                                    dialog['last_reply'] = None
-                        except Exception:
-                            pass
-                        print(
-                            f"[{int(last_vlm_ts*1000)}] VLM (ticket {t_id}) accepted; overlay updated")
-                        # Ensure human lane names after any late normalization
-                        last_caption = _caption_with_human_lane(last_caption)
-                else:
-                    if not getattr(args, 'strict_caption', False):
-                        if _is_system_echo(content):
-                            print(
-                                f"[warn] Stale VLM result echoed system prompt; overlay not updated. ticket={t_id} active={active_ticket_id}")
-                        else:
-                            print(
-                                f"[info] Accepting late/stale VLM caption for overlay (strict_caption=off). ticket={t_id} active={active_ticket_id} First 80 chars: {content[:80]!r}")
-                            adv_tmp3, _sug_tmp3 = _parse_advice(content)
-                            intent_dir2 = (current_ticket or {}).get(
-                                'intent_dir') if current_ticket else None
-                            content2 = _finalize_caption(
-                                content, adv_tmp3, intent_dir2)
-                            last_caption = _humanize_lane_mentions(content2)
-                            last_vlm_ts = time.time()
-                    else:
-                        print(
-                            f"[info] Dropped stale VLM result for ticket {t_id}; active={active_ticket_id}")
-                vlm_inflight = False
-            except Exception as e:
-                print("[vlm_on_change_qwen] VLM worker failed:", e)
-                # Helpful hint for common server error when mmproj is missing
-                try:
-                    msg = str(e).lower()
-                    if 'mmproj' in msg or 'image input is not supported' in msg:
-                        print("[hint] The llama.cpp server reported missing image support. "
-                              "Start the server with a Qwen3-VL mmproj via -MmprojPath, e.g.:\n"
-                              "  & .\\scripts\\start_llama_server.ps1 -ModelPath \"...Qwen3VL-4B-Instruct-*.gguf\" -MmprojPath \"...mmproj-Qwen3VL-4B-Instruct-*.gguf\" ...")
-                except Exception:
-                    pass
-                last_vlm_ts = time.time()
-                vlm_inflight = False
+    sequence = {"event": 0, "observation": 0, "ticket": 0, "prompt": 0, "release": 0}
 
-    __import__('threading').Thread(target=_vlm_worker, daemon=True).start()
+    def allocate(name: str, prefix: str) -> str:
+        sequence[name] += 1
+        return hdsg.next_identifier(prefix, sequence[name])
 
-    prev_risk: Optional[str] = None
-    prev_dir: Optional[str] = None
-    last_vlm_ts = 0.0
-    last_caption: Optional[str] = None
+    def enqueue_request(fact_packet: dict, image: np.ndarray):
+        nonlocal latest_fact_packet, latest_prompt_packet, active_request_key, queued_request_id
+        prompt_id = allocate("prompt", "prompt")
+        request_id = fact_packet["interaction"]["request_id"]
+        catalogue_entry = request_catalogue["requests"].get(request_id)
+        if not catalogue_entry or not catalogue_entry.get("enabled"):
+            raise RuntimeError(f"The request profile is not enabled: {request_id}")
+        if catalogue_entry.get("response_mode") != fact_packet["interaction"]["response_mode"]:
+            raise RuntimeError(f"The request profile mode does not match the Fact Packet: {request_id}")
+        prompt_packet = hdsg.build_prompt_packet(
+            fact_packet,
+            prompt_id=prompt_id,
+            model_id=args.model,
+            model_hash=args.model_hash,
+            quantisation=args.quantisation,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_tokens=args.max_tokens,
+            system_prompt=args.system,
+            constraint_hash=constraint_hash,
+            prompt_profile_id=str(catalogue_entry["prompt_profile_id"]),
+            system_prompt_id=str(request_catalogue["system_prompt_id"]),
+        )
+        prompt_packet["image"]["transform"].update({
+            "longest_side_px": int(args.image_size),
+            "encoding": str(args.encode),
+            "jpeg_quality": int(args.jpeg_quality),
+        })
+        immediate_release_id = allocate("release", "release")
+        final_release_id = allocate("release", "release")
+        request_key = (
+            fact_packet["identity"]["event_id"],
+            fact_packet["identity"]["observation_id"],
+            fact_packet["interaction"]["request_id"],
+        )
+        with state_lock:
+            latest_fact_packet = fact_packet
+            latest_prompt_packet = prompt_packet
+            active_request_key = request_key
+        record("full_fact_packet", fact_packet)
+        record("restricted_prompt_packet", prompt_packet)
+
+        immediate = hdsg.build_release(
+            fact_packet,
+            prompt_packet,
+            release_id=immediate_release_id,
+            candidate=None,
+            failure_codes=["RG_MODEL_UNAVAILABLE"],
+        )
+        publish_release(immediate, "authoritative_interim_release")
+        item = {
+            "fact_packet": fact_packet,
+            "prompt_packet": prompt_packet,
+            "image": resize_for_vlm(image, args.image_size),
+            "request_key": request_key,
+            "release_id": final_release_id,
+        }
+        if generation_q.full():
+            try:
+                generation_q.get_nowait()
+            except Empty:
+                pass
+        generation_q.put_nowait(item)
+        with state_lock:
+            queued_request_id = request_id
+
+    current_ticket_id: Optional[str] = None
+    active_intent = "NONE"
+    last_key_event_ms = -1
     latest_color: Optional[np.ndarray] = None
-    last_decision: str = "GO"
     latest_depth: Optional[np.ndarray] = None
-    last_nearest_m: Optional[float] = None
-    next_ticket_id: int = 1
-    active_ticket_id: int = 0
-    current_ticket = None
-    TICKET_BANNER_UNTIL = 0.0
-    TICKET_BANNER_TEXT: Optional[str] = None
-    CLOSE_BANNER_UNTIL = 0.0
-    CLOSE_BANNER_TEXT: Optional[str] = None
-    DECLINE_COOLDOWN_UNTIL = 0.0
-    last_ticket_switch_ts = 0.0
-    last_objects = []
-    last_hazards = []
-    last_lane_state: Optional[dict] = None
+    display_color: Optional[np.ndarray] = None
+    latest_objects: list[dict] = []
+    latest_sector_facts: Optional[dict] = None
+    latest_authority: Optional[dict] = None
+    latest_observation_id: Optional[str] = None
+    observation_images: dict[str, np.ndarray] = {}
+    previous_selected_sector: Optional[str] = None
+    last_scheduled_signature: Optional[str] = None
+    last_scheduled_authority: Optional[dict] = None
+    pending_signature: Optional[str] = None
+    pending_since = 0.0
+    ui_notice: Optional[str] = None
+    ui_notice_until = 0.0
+    pending_reassessment = False
+    pending_reassessment_input_method = "KEYBOARD_SHORTCUT"
+    reorientation_required = False
+    stabilising = False
+    stable_statuses: Optional[tuple[str, str, str]] = None
+    stable_depths: Optional[tuple[float, float, float]] = None
+    stable_count = 0
+    last_process = 0.0
+    process_period = 1.0 / max(args.process_hz, 0.1)
+    control_regions: dict[str, tuple[int, int, int, int]] = {}
+    mouse_events = {"more_detail": False, "reassess": False, "choice": None}
+    mouse_lock = threading.Lock()
 
-    # Stuck detection, ported from the retired VLP script. Track repeated STOP
-    # advice to detect "stuck" via captions rather than raw timing: count
-    # consecutive STOP decisions, then ask the user via Y/N if they feel stuck.
-    # Every one of these must be initialised here. In the VLP script
-    # stuck_start_ts was not, so the first read raised inside a broad exception
-    # guard and silently discarded auto_suggest in exactly the STOP case.
-    stuck_start_ts: Optional[float] = None
-    consecutive_stop_count: int = 0
-    STUCK_STOP_THRESHOLD: int = 3  # number of STOP captions before asking
-    waiting_stuck_confirm: bool = False
+    def on_mouse(event, x, y, _flags, _parameter):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        with mouse_lock:
+            for control_id, (x1, y1, x2, y2) in control_regions.items():
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    if control_id == "MORE_DETAIL":
+                        mouse_events["more_detail"] = True
+                    elif control_id == "REASSESS":
+                        mouse_events["reassess"] = True
+                    elif control_id in {"LEFT", "RIGHT"}:
+                        mouse_events["choice"] = control_id
+                    break
 
-    print("[vlm_on_change_qwen] running; triggers on risk/intent change. Q to quit. W/A/S/D for intents.")
+    if args.show:
+        cv2.namedWindow("HDSG smart walker", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("HDSG smart walker", on_mouse)
+
+    def trigger_type(previous: Optional[dict], current: dict) -> str:
+        if previous is None:
+            return "MOTION_INTENT_STARTED"
+        for field, name in (
+            ("motion_decision", "MOTION_DECISION_CHANGED"),
+            ("selected_sector", "SELECTED_SECTOR_CHANGED"),
+            ("scene_advisory", "SCENE_ADVISORY_CHANGED"),
+        ):
+            if previous.get(field) != current.get(field):
+                return name
+        if previous.get("action_binding") != current.get("action_binding"):
+            return "BINDING_FACT_CHANGED"
+        if previous.get("_measurement_state") != current.get("_measurement_state"):
+            return "MEASUREMENT_VALIDITY_CHANGED"
+        return "MOVING_OBJECT_CHANGED"
+
+    def create_fact_packet(
+        response_mode: str,
+        request_id: str,
+        event_trigger: str,
+        observation_id: str,
+        timestamp_ms: float,
+        objects: list[dict],
+        sectors: dict,
+        authority: dict,
+        input_method: str = "SYSTEM",
+        control_id: Optional[str] = None,
+    ) -> dict:
+        event_id = allocate("event", "evt")
+        return hdsg.build_fact_packet(
+            run_id=run_id,
+            event_id=event_id,
+            observation_id=observation_id,
+            ticket_id=current_ticket_id,
+            timestamp_ms=timestamp_ms,
+            intent=active_intent,
+            trigger_type=event_trigger,
+            request_id=request_id,
+            response_mode=response_mode,
+            previous_signature=last_scheduled_signature,
+            objects=objects,
+            sectors=sectors,
+            authority=authority,
+            mirror_view=args.mirror_view,
+            detector_model=args.det_model,
+            detector_confidence=args.conf,
+            pipeline_config_path=sw.PIPELINE_CFG,
+            ontology_path=sw.ONTOLOGY_CFG,
+            clear_threshold_m=args.clear_threshold_m,
+            blocked_threshold_m=near_hi,
+            sector_choice_tolerance_m=args.sector_choice_tolerance_m,
+            motion_tracker=motion_tracker,
+            configuration_hash=runtime_configuration_hash,
+            post_reorientation_stable_observations=args.post_reorientation_stable_observations,
+            post_reorientation_max_variation_m=args.post_reorientation_max_variation_m,
+            reassessment_cooldown_ms=args.reassessment_cooldown_s * 1000.0,
+            more_detail_freshness_ms=args.more_detail_freshness_s * 1000.0,
+            scenario_id=args.eval_name if args.evaluate else None,
+            input_method=input_method,
+            control_id=control_id,
+        )
+
+    print("[hdsg] running. W/A/S/D set intent, Space clears intent, M requests more detail, R reassesses, Q quits.")
+    if telemetry_path is None:
+        print("[hdsg] evaluation telemetry is disabled.")
+    else:
+        print(f"[hdsg] evaluation '{args.eval_name}': {telemetry_path}")
     try:
-        last_proc_t = 0.0
-        proc_period = (1.0 / float(args.process_hz)
-                       ) if args.process_hz and args.process_hz > 0 else 0.0
         while True:
-            if hasattr(cv2, 'pollKey'):
+            if hasattr(cv2, "pollKey"):
                 cv2.pollKey()
             else:
                 cv2.waitKey(1)
 
             try:
-                pkt = cap_q.get_nowait()
-                latest_color = pkt.color
-                try:
-                    latest_depth = pkt.depth_m
-                except Exception:
-                    latest_depth = None
-                now = time.time()
-                due_proc = (proc_period <= 0.0) or (
-                    (now - last_proc_t) >= proc_period)
-                if due_proc:
+                frame_packet = cap_q.get_nowait()
+                latest_color = frame_packet.color
+                latest_depth = frame_packet.depth_m
+                now = time.monotonic()
+                if now - last_process >= process_period:
                     while not inf_in.empty():
                         try:
                             inf_in.get_nowait()
                         except Empty:
                             break
-                    inf_in.put(pkt)
-                    last_proc_t = now
+                    inf_in.put(frame_packet)
+                    last_process = now
             except Empty:
                 pass
 
-            out: Optional[sw.InferPacket] = None
-            try:
-                out = inf_out.get_nowait()
-            except Empty:
-                pass
-
-            s = kbd.snapshot()
-            if s.quit_requested:
+            keys = keyboard.snapshot()
+            with mouse_lock:
+                mouse_more_detail = bool(mouse_events["more_detail"])
+                mouse_reassess = bool(mouse_events["reassess"])
+                mouse_choice = mouse_events["choice"]
+                mouse_events.update({"more_detail": False, "reassess": False, "choice": None})
+            if keys.quit_requested:
                 break
-            now_ms = int(time.time() * 1000)
-            active = (now_ms - s.last_press_ms) <= sw.ACTIVE_KEY_WINDOW_MS
-            if dialog.get("pending"):
-                if s.yes_edge:
-                    dialog["last_reply"] = "yes"
-                    dialog["pending"] = False
-                elif s.no_edge:
-                    dialog["last_reply"] = "no"
-                    dialog["pending"] = False
-            if dialog.get("last_reply") == "yes" and dialog.get("proposed_dir"):
-                current_ticket = {
-                    'id': next_ticket_id,
-                    'intent_dir': dialog.get('proposed_dir'),
-                    'status': 'open',
-                    'last_llm_ts': 0.0,
-                    'proposed_dir': None,
-                    'last_user_reply': None,
-                    'start_ts': time.time(),
-                    'mem': {'counts': {}, 'opened_ts': time.time()},
-                }
-                active_ticket_id = next_ticket_id
-                next_ticket_id += 1
-                TICKET_BANNER_TEXT = f"Ticket #{active_ticket_id} opened: going {current_ticket['intent_dir']}"
-                TICKET_BANNER_UNTIL = time.time() + 2.5
-                print(
-                    f"[ticket] opened #{active_ticket_id} going {current_ticket['intent_dir']}")
-                dialog.update({'pending': False, 'proposed_dir': None,
-                              'last_reply': None, 'since_ms': now_ms})
-                last_vlm_ts = 0.0
-                last_ticket_switch_ts = time.time()
-            elif dialog.get("last_reply") == "no" and dialog.get("proposed_dir") and not dialog.get("pending"):
-                dialog.update({'pending': False, 'proposed_dir': None,
-                              'since_ms': now_ms, 'last_reply': None})
-                DECLINE_COOLDOWN_UNTIL = time.time() + 4.0
+            if (mouse_choice in {"LEFT", "RIGHT"} and latest_authority is not None
+                    and latest_authority.get("interaction_state") == "AWAITING_SECTOR_CHOICE"
+                    and mouse_choice in latest_authority.get("selection_options", [])):
+                previous_selected_sector = str(mouse_choice)
+            if keys.last_press_ms != last_key_event_ms:
+                last_key_event_ms = keys.last_press_ms
+                direction = keys.last_edge_dir
+                mapped = {
+                    "forward": "FORWARD",
+                    "left": "LEFT",
+                    "right": "RIGHT",
+                    "backward": "BACKWARD",
+                    "idle": "NONE",
+                }[direction]
+                if mapped == "NONE":
+                    active_intent = "NONE"
+                    current_ticket_id = None
+                    last_scheduled_signature = None
+                else:
+                    active_intent = mapped
+                    current_ticket_id = allocate("ticket", "ticket")
+                    last_scheduled_signature = None
 
-            # Space-to-standby: close any active ticket and return to idle
-            if s.last_edge_dir == 'idle' and active:
-                if current_ticket and current_ticket.get('status') != 'closed':
-                    current_ticket['status'] = 'closed'
-                    current_ticket['result'] = 'standby'
-                    current_ticket['end_ts'] = time.time()
-                    CLOSE_BANNER_TEXT = f"Ticket #{active_ticket_id} closed: standby"
-                    CLOSE_BANNER_UNTIL = time.time() + 2.5
-                    print(
-                        f"[ticket] closed #{active_ticket_id} result=standby")
-                # Reset to idle (no active ticket)
-                current_ticket = None
-                active_ticket_id = 0
-                dialog.update(
-                    {'pending': False, 'proposed_dir': None, 'last_reply': None})
-                last_vlm_ts = 0.0
-                last_ticket_switch_ts = time.time()
-                last_non_idle_dir = 'idle'
-            elif s.last_edge_dir != 'idle':
-                last_non_idle_dir = s.last_edge_dir
-                if current_ticket is None or (current_ticket and current_ticket.get('intent_dir') != s.last_edge_dir):
-                    if current_ticket and current_ticket.get('status') != 'closed':
-                        current_ticket['status'] = 'closed'
-                        current_ticket['result'] = 'switched'
-                        current_ticket['end_ts'] = time.time()
-                        CLOSE_BANNER_TEXT = f"Ticket #{active_ticket_id} closed: switched"
-                        CLOSE_BANNER_UNTIL = time.time() + 2.5
-                        print(
-                            f"[ticket] closed #{active_ticket_id} result=switched")
-                    current_ticket = {
-                        'id': next_ticket_id,
-                        'intent_dir': s.last_edge_dir,
-                        'status': 'open',
-                        'last_llm_ts': 0.0,
-                        'proposed_dir': None,
-                        'last_user_reply': None,
-                        'start_ts': time.time(),
-                        'moving_since': None,
-                        'mem': {'counts': {}, 'opened_ts': time.time()},
-                    }
-                    active_ticket_id = next_ticket_id
-                    next_ticket_id += 1
-                    TICKET_BANNER_TEXT = f"Ticket #{active_ticket_id} opened: going {s.last_edge_dir}"
-                    TICKET_BANNER_UNTIL = time.time() + 2.5
-                    print(
-                        f"[ticket] opened #{active_ticket_id} going {s.last_edge_dir}")
-                    dialog.update(
-                        {'pending': False, 'proposed_dir': None, 'last_reply': None, 'since_ms': now_ms})
-                    last_vlm_ts = 0.0
-                    last_ticket_switch_ts = time.time()
-            else:
-                last_non_idle_dir = prev_dir or 'idle'
-            pressing_dir = getattr(s, 'level_dir', 'idle') or 'idle'
-            intent_for_caption = s.last_edge_dir if active else 'idle'
-            effective_dir = intent_for_caption if intent_for_caption != 'idle' else (
-                last_non_idle_dir or 'idle')
+            more_detail_requested = bool(keys.more_detail_edge or mouse_more_detail)
+            if more_detail_requested:
+                if reassessment_inflight or pending_reassessment:
+                    ui_notice = "More detail is unavailable while reassessment is active."
+                    ui_notice_until = time.monotonic() + 2.0
+                    continue
+                with state_lock:
+                    source_release = latest_release
+                    source_fact = latest_fact_packet
+                age_s = float("inf")
+                if source_fact is not None:
+                    captured = source_fact["observation"]["captured_at_utc"]
+                    try:
+                        captured_dt = datetime.fromisoformat(captured.replace("Z", "+00:00"))
+                        age_s = (datetime.now(timezone.utc) - captured_dt).total_seconds()
+                    except Exception:
+                        age_s = float("inf")
+                if (source_release is None or source_fact is None
+                        or source_fact["identity"]["observation_id"] not in observation_images
+                        or age_s > args.more_detail_freshness_s):
+                    ui_notice = "Current information is too old. Select Reassess."
+                    ui_notice_until = time.monotonic() + 3.0
+                elif source_fact["identity"]["observation_id"] in observation_images:
+                    copied = json.loads(json.dumps(source_fact))
+                    copied["identity"]["event_id"] = allocate("event", "evt")
+                    copied["interaction"].update({
+                        "trigger_type": "USER_REQUESTED",
+                        "request_id": "MORE_DETAIL",
+                        "input_method": "ONSCREEN_CONTROL" if mouse_more_detail else "KEYBOARD_SHORTCUT",
+                        "control_id": "MORE_DETAIL",
+                        "response_mode": "MORE_DETAIL",
+                    })
+                    enqueue_request(
+                        copied,
+                        observation_images[source_fact["identity"]["observation_id"]].copy(),
+                    )
+                    ui_notice = "More detail requested."
+                    ui_notice_until = time.monotonic() + 2.0
 
-            if out is not None:
-                facts = {
-                    "frame_id": 0,
-                    "timestamp_ms": out.ts_ms,
-                    "objects": out.objects,
-                    "free_space": {"corridor_min_width_m": None, "nearest_obstacle_m": None},
-                    "hazards": out.hazards,
-                    "uncertainty": {"depth_std": None, "low_light": False},
-                    "source_depth": "rgbd",
-                    "explain": {"rules_fired": [], "min_distance_m": None, "class_counts": {}}
-                }
-                r = sw.compute_baseline_risk(facts, cfg)
-                risk = r["risk"]
-                facts_with_risk = dict(facts)
-                facts_with_risk["risk"] = risk
-                # Single computation of lane clearance for this frame. The risk
-                # override below, the VLM prompt, the band overlay and the
-                # safe-path badge all read this one result, so no consumer can
-                # disagree with the state the advisory was derived from.
-                last_lane_state = compute_lane_state(
-                    latest_depth,
-                    mirror_view=bool(getattr(args, 'mirror_view', False)),
-                    clear_t=float(getattr(args, 'clear_threshold_m', 1.8)),
-                    near_hi=NEAR_HI,
+            reassess_requested = bool(keys.reassess_edge or mouse_reassess)
+            if reassess_requested:
+                if reassessment_inflight or pending_reassessment or time.monotonic() < reassessment_cooldown_until:
+                    ui_notice = "Reassessment is already active or cooling down."
+                    ui_notice_until = time.monotonic() + 2.0
+                else:
+                    pending_reassessment = True
+                    pending_reassessment_input_method = (
+                        "ONSCREEN_CONTROL" if mouse_reassess else "KEYBOARD_SHORTCUT"
+                    )
+                    reassessment_inflight = True
+                    ui_notice = "Reassessment requested."
+                    ui_notice_until = time.monotonic() + 2.0
+                    if reorientation_required:
+                        stabilising = True
+                        stable_count = 0
+                        stable_statuses = None
+                        stable_depths = None
+
+            try:
+                inference = inf_out.get_nowait()
+            except Empty:
+                inference = None
+
+            if inference is not None:
+                display_color = inference.color.copy()
+                observation_id = allocate("observation", "obs")
+                latest_observation_id = observation_id
+                observation_images[observation_id] = inference.color.copy()
+                while len(observation_images) > 20:
+                    observation_images.pop(next(iter(observation_images)))
+                tracked = motion_tracker.update(inference.color, list(inference.objects), inference.ts_ms)
+                latest_objects = hdsg.normalise_objects(tracked)
+                lane_state = compute_lane_state(
+                    inference.depth_m,
+                    mirror_view=args.mirror_view,
+                    clear_t=args.clear_threshold_m,
+                    near_hi=near_hi,
                 )
-                if last_lane_state is not None:
-                    facts["lanes3"] = {
-                        "depths_m": list(last_lane_state['depths']),
-                        "status": list(last_lane_state['status']),
-                        "advisory": last_lane_state['advisory'],
-                        "auto_suggest": last_lane_state['auto_suggest'],
-                        "clear_threshold_m": last_lane_state['clear_threshold_m'],
-                        "near_threshold_m": last_lane_state['near_threshold_m'],
-                    }
-                    facts_with_risk["lanes3"] = facts["lanes3"]
+                latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
+                baseline_facts = {
+                    "objects": inference.objects,
+                    "free_space": {"corridor_min_width_m": None},
+                    "hazards": inference.hazards,
+                    "uncertainty": {"low_light": False},
+                    "explain": {},
+                }
+                object_result = sw.compute_baseline_risk(baseline_facts, cfg)
+                latest_authority = hdsg.determine_authority(
+                    active_intent,
+                    str(object_result["risk"]).upper(),
+                    latest_sector_facts,
+                    objects=latest_objects,
+                    previous_selected_sector=previous_selected_sector,
+                    sector_choice_tolerance_m=args.sector_choice_tolerance_m,
+                )
+                if latest_authority["selected_sector"] in hdsg.SECTORS:
+                    previous_selected_sector = latest_authority["selected_sector"]
+                reorientation_required = latest_authority["interaction_state"] == "REORIENTATION_REQUIRED"
 
-                    # Compose the two measurement paths by severity rather than
-                    # letting one replace the other. See more_severe() for why:
-                    # the object path cannot see walls, the lane path cannot see
-                    # thin obstacles, and each is blind where the other sees.
-                    # SAFE survives only when both paths agree.
-                    #
-                    # Captions are deliberately not cleared here; a correct STOP
-                    # caption should remain visible until the usual reconfirm
-                    # window.
-                    advisory_objects = risk
-                    advisory_lanes = last_lane_state['advisory'].lower()
-                    risk = more_severe(advisory_objects, advisory_lanes)
-                    facts_with_risk["risk"] = risk
-
-                    # Record which path was binding. The evaluation needs to
-                    # distinguish a correct advisory reached for the right reason
-                    # from one reached by luck, and that is not recoverable from
-                    # the composite alone.
-                    if advisory_objects == advisory_lanes:
-                        binding = 'both'
-                    elif risk == advisory_objects:
-                        binding = 'objects'
+                if stabilising:
+                    statuses = tuple(latest_sector_facts[name]["status"] for name in ("left", "centre", "right"))
+                    valid = all(latest_sector_facts[name]["valid"] for name in ("left", "centre", "right"))
+                    depths = tuple(
+                        float(latest_sector_facts[name]["clearance_m"])
+                        for name in ("left", "centre", "right")
+                    ) if valid else None
+                    within_variation = bool(
+                        valid and stable_depths is not None and depths is not None
+                        and max(
+                            abs(value - reference)
+                            for value, reference in zip(depths, stable_depths)
+                        ) <= args.post_reorientation_max_variation_m
+                    )
+                    if valid and statuses == stable_statuses and within_variation:
+                        stable_count += 1
+                    elif valid:
+                        stable_statuses = statuses
+                        stable_depths = depths
+                        stable_count = 1
                     else:
-                        binding = 'lanes'
-                    facts["advisory_sources"] = {
-                        "objects": advisory_objects,
-                        "lanes": advisory_lanes,
-                        "composite": risk,
-                        "binding": binding,
-                        "object_rules_fired": list(r.get("rules_fired", [])),
-                        # The specific element within the binding path, not just
-                        # the path. Scoring override transparency requires the
-                        # caption to name the element that caused the advisory,
-                        # and that element cannot be reconstructed after the
-                        # fact because it depends on this frame's depth.
-                        "binding_fact": identify_binding_fact(
-                            out.objects, last_lane_state, binding,
-                            mirror_view=bool(
-                                getattr(args, 'mirror_view', False)),
-                        ),
-                    }
-                    facts_with_risk["advisory_sources"] = facts["advisory_sources"]
-
-                decision, _why = sw.arbiter_decision(
-                    effective_dir, facts_with_risk, cfg)
-                last_decision = decision
-                try:
-                    last_nearest_m = sw._safe_min_distance(out.objects)
-                except Exception:
-                    last_nearest_m = None
-                try:
-                    last_objects = list(out.objects)
-                    last_hazards = list(out.hazards)
-                except Exception:
-                    pass
-
-                # Update per-ticket memory of nearby objects (label/side/min_dist/last_seen/count)
-                try:
-                    if current_ticket and current_ticket.get('status') != 'closed':
-                        mem = current_ticket.setdefault(
-                            'mem', {'counts': {}, 'opened_ts': time.time()})
-                        counts = mem.setdefault('counts', {})
-                        now_ts = time.time()
-                        for o in out.objects:
-                            name = o.get("canonical_class") or o.get(
-                                "display_label") or o.get("raw_label") or "obj"
-                            dist = o.get("distance_m")
-                            b = o.get("bearing")
-                            side_raw = str(b[0] if isinstance(
-                                b, (list, tuple)) else b).lower() if b is not None else ""
-                            side = "left" if "left" in side_raw else (
-                                "right" if "right" in side_raw else "center")
-                            # Mirror semantics if requested
-                            if getattr(args, 'mirror_view', False):
-                                if side == 'left':
-                                    side = 'right'
-                                elif side == 'right':
-                                    side = 'left'
-                            if isinstance(dist, (int, float)) and dist <= 3.5:
-                                key = (name, side)
-                                ent = counts.get(key) or {
-                                    "count": 0, "min_dist": float('inf'), "last_seen": 0.0}
-                                ent["count"] = int(ent.get("count", 0)) + 1
-                                try:
-                                    ent["min_dist"] = min(
-                                        float(ent.get("min_dist", float('inf'))), float(dist))
-                                except Exception:
-                                    ent["min_dist"] = float(dist)
-                                ent["last_seen"] = now_ts
-                                counts[key] = ent
-                        # Optional: drop very stale entries (> 15s)
-                        try:
-                            ttl = 15.0
-                            stale = [k for k, v in counts.items() if (
-                                now_ts - float(v.get('last_seen', 0.0))) > ttl]
-                            for k in stale:
-                                counts.pop(k, None)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                if str(risk).lower() != "stop" and dialog.get("pending"):
-                    dialog["pending"] = False
-
-                changed = (risk != prev_risk) or (effective_dir != prev_dir)
-                continuing_push = (str(risk).lower(
-                ) == 'stop' and pressing_dir != 'idle' and pressing_dir == effective_dir)
-                due = (time.time() - last_vlm_ts) >= float(args.min_interval_s)
-                last_llm_ts_val = float(
-                    (current_ticket or {}).get('last_llm_ts') or 0.0)
-                reconfirm_due = bool(current_ticket) and (current_ticket.get(
-                    'status') != 'closed') and (time.time() - last_llm_ts_val >= 10.0)
-                stop_case = (str(risk).lower() == 'stop' and (
-                    continuing_push or dialog.get('pending')))
-                base_send = ((changed or reconfirm_due)
-                             and due) or (stop_case and due)
-                in_hold = bool(current_ticket) and (last_llm_ts_val > 0.0) and (
-                    (time.time() - last_llm_ts_val) < 10.0)
-                ticket_active = bool(current_ticket) and (
-                    current_ticket.get('status') != 'closed')
-                should_send = ticket_active and (
-                    base_send and (not in_hold or stop_case))
-
-                if should_send and latest_color is not None:
-                    send_np = resize_for_vlm(latest_color, args.image_size)
-                    objs_n = len(out.objects)
-                    haz_n = len(out.hazards)
-                    nearest_txt = f"{last_nearest_m:.2f}m" if isinstance(
-                        last_nearest_m, (int, float)) else "?"
-                    obj_summ: list[tuple[float, str]] = []
-                    try:
-                        for o in out.objects:
-                            name = o.get("canonical_class") or o.get(
-                                "display_label") or o.get("raw_label") or "obj"
-                            dist = o.get("distance_m")
-                            b = o.get("bearing")
-                            side_raw = str(b[0] if isinstance(
-                                b, (list, tuple)) else b).lower() if b is not None else ""
-                            side = "left" if "left" in side_raw else (
-                                "right" if "right" in side_raw else "center")
-                            if getattr(args, 'mirror_view', False):
-                                if side == 'left':
-                                    side = 'right'
-                                elif side == 'right':
-                                    side = 'left'
-                            if isinstance(dist, (int, float)):
-                                obj_summ.append(
-                                    (float(dist), f"{name}:{float(dist):.2f}m {side}"))
-                        obj_summ.sort(key=lambda x: x[0])
-                    except Exception:
-                        obj_summ = []
-                    top_objs = ", ".join(
-                        [s for _, s in obj_summ[:3]]) if obj_summ else ""
-                    scene_snippet: Optional[str] = None
-                    lines = [
-                        f"intent: {effective_dir}; decision: {last_decision}; risk: {risk}",
-                        f"objects: {objs_n}; hazards: {haz_n}; nearest: {nearest_txt}",
-                        f"braking: {'yes' if str(risk).lower() == 'stop' else 'no'}; pushing: {'yes' if continuing_push else 'no'}; push_dir: {pressing_dir}",
-                    ]
-                    if top_objs:
-                        lines.append(f"objects_list: {top_objs}")
-                        scene_snippet = f"near: {top_objs}"
-                    # Depth-driven lane clearance, read from the state computed
-                    # once for this frame above.
-                    if last_lane_state is not None:
-                        d_L, d_C, d_R = last_lane_state['depths']
-                        st_L, st_C, st_R = last_lane_state['status']
-                        auto_suggest = last_lane_state['auto_suggest']
-
-                        def _fmt(v):
-                            return (f"{v:.2f}m" if isinstance(v, (int, float)) and np.isfinite(v) else "?")
-                        lines.append(
-                            f"lanes3: L:{_fmt(d_L)}, C:{_fmt(d_C)}, R:{_fmt(d_R)}")
-                        lines.append(
-                            f"lane_status3: L:{st_L}, C:{st_C}, R:{st_R}")
-                        try:
-                            _src = facts.get("advisory_sources") or {}
-                            if _src.get("binding") == 'objects':
-                                # The lane bands look passable but a detected
-                                # object is what forces the advisory. Say so, or
-                                # the caption will describe an open path.
-                                lines.append(
-                                    f"advisory_reason: detected object, not lane width (objects:{_src.get('objects')}, lanes:{_src.get('lanes')})")
-                            elif _src.get("binding") == 'lanes':
-                                lines.append(
-                                    f"advisory_reason: lane clearance, not a detected object (objects:{_src.get('objects')}, lanes:{_src.get('lanes')})")
-                        except Exception:
-                            pass
-
-                        # Detect "stuck" cases: sustained pushing into a blocked lane.
-                        stuck_flag = False
-                        now_ts = time.time()
-                        if str(risk).lower() == 'stop' and pressing_dir != 'idle':
-                            # Initialize or continue the stuck timer when user keeps pushing
-                            if stuck_start_ts is None:
-                                stuck_start_ts = now_ts
-                            # Check direction-specific blockage
-                            pushing_forward_blocked = (
-                                pressing_dir == 'forward' and st_C == 'blocked')
-                            pushing_left_blocked = (
-                                pressing_dir == 'left' and st_L == 'blocked' and st_C != 'clear' and st_R != 'clear')
-                            pushing_right_blocked = (
-                                pressing_dir == 'right' and st_R == 'blocked' and st_C != 'clear' and st_L != 'clear')
-                            if pushing_forward_blocked or pushing_left_blocked or pushing_right_blocked:
-                                # Require sustained pushing for at least 1.5s to call it "stuck"
-                                if (now_ts - stuck_start_ts) >= 1.5:
-                                    stuck_flag = True
-                            else:
-                                # Direction no longer matches a blocked lane; reset timer
-                                stuck_start_ts = None
-                        else:
-                            # Not in STOP risk or not pushing; reset timer
-                            stuck_start_ts = None
-                        if stuck_flag:
-                            lines.append("stuck: true")
-
-                        lines.append(f"auto_suggest: {auto_suggest}")
-                        if current_ticket is not None:
-                            current_ticket['last_auto_suggest'] = auto_suggest
-                        if scene_snippet is None:
-                            try:
-                                if all(isinstance(v, (int, float)) and np.isfinite(v)
-                                       for v in (d_L, d_C, d_R)):
-                                    scene_snippet = f"lanes3 {d_L:.1f}/{d_C:.1f}/{d_R:.1f}m"
-                            except Exception:
-                                pass
-                    # Append compact per-ticket memory summary to help VLM stay consistent within a ticket
-                    try:
-                        mem_counts = ((current_ticket or {}).get(
-                            'mem') or {}).get('counts', {})
-                        if mem_counts:
-                            now_ts = time.time()
-                            cand = []
-                            for (name, side), v in mem_counts.items():
-                                if (now_ts - float(v.get('last_seen', 0.0))) <= 10.0:
-                                    md = v.get('min_dist')
-                                    cnt = int(v.get('count', 0))
-                                    cand.append((cnt, md if isinstance(
-                                        md, (int, float)) else 999.0, f"{name}:{(md if isinstance(md, (int, float)) else 0.0):.2f}m {side}"))
-                            if cand:
-                                cand.sort(key=lambda x: (-x[0], x[1]))
-                                mem_top = ", ".join([c[2] for c in cand[:3]])
-                                if mem_top:
-                                    lines.append(f"memory_list: {mem_top}")
-                    except Exception:
-                        pass
-                    # If no other snippet, fall back to nearest distance
-                    if scene_snippet is None and nearest_txt != "?":
-                        scene_snippet = f"nearest {nearest_txt}"
-                    # Stash snippet for VLM fallback augmentation
-                    try:
-                        if current_ticket is not None:
-                            current_ticket['last_scene_snippet'] = scene_snippet
-                    except Exception:
-                        pass
-                    if dialog.get("pending") and dialog.get("proposed_dir"):
-                        lines.append(f"ask: take {dialog['proposed_dir']}?")
-                    if dialog.get("last_reply"):
-                        lines.append(f"user_reply: {dialog['last_reply']}")
-
-                    # Stuck handling based on repeated STOP captions:
-                    # - We count how many consecutive STOP decisions we've had
-                    #   while the user keeps pressing a direction.
-                    # - When the threshold is reached, we ask the user
-                    #   (via Y/N) if they feel stuck.
-                    # - Only after they confirm (Y) do we tell the VLM that the
-                    #   user is stuck and explicitly request an "unstuck" plan.
-                    pushing = (pressing_dir != 'idle')
-                    is_stop = str(risk).lower() == 'stop'
-                    if is_stop and pushing:
-                        consecutive_stop_count += 1
+                        stable_statuses = None
+                        stable_depths = None
+                        stable_count = 0
+                    if stable_count < max(1, args.post_reorientation_stable_observations):
+                        latest_authority = dict(latest_authority)
+                        latest_authority.update({
+                            "motion_decision": "STOP",
+                            "selected_sector": "NONE",
+                            "interaction_state": "POST_REORIENTATION_STABILISING",
+                            "selection_status": "UNAVAILABLE",
+                            "selection_options": [],
+                        })
                     else:
-                        consecutive_stop_count = 0
-                        waiting_stuck_confirm = False
+                        stabilising = False
+                        reorientation_required = False
+                        active_intent = "FORWARD"
+                        latest_authority = hdsg.determine_authority(
+                            active_intent,
+                            str(object_result["risk"]).upper(),
+                            latest_sector_facts,
+                            objects=latest_objects,
+                            previous_selected_sector=None,
+                            sector_choice_tolerance_m=args.sector_choice_tolerance_m,
+                        )
 
-                    # Trigger stuck confirmation dialog once, when threshold reached.
-                    if (consecutive_stop_count >= STUCK_STOP_THRESHOLD
-                            and not waiting_stuck_confirm
-                            and not dialog.get('pending')):
-                        waiting_stuck_confirm = True
-                        # Reuse the existing yes/no keys: show a note in
-                        # the context so VLM can also be aware.
-                        lines.append(
-                            "stuck_check: user has received repeated STOP advice; asking if they feel stuck (Y/N).")
+                measurement_state = "VALID" if all(item["valid"] for item in latest_sector_facts.values()) else "PARTIAL"
+                signature_authority = dict(latest_authority)
+                signature_authority["moving_object_fact_ids"] = [
+                    item["fact_id"] for item in latest_objects
+                    if item.get("motion_state") == "MOVING"
+                ]
+                signature_authority["_measurement_state"] = measurement_state
+                material_signature = hdsg.guidance_signature(
+                    signature_authority, measurement_state, latest_objects
+                )
 
-                    if waiting_stuck_confirm:
-                        # Surface the check in the context; the actual
-                        # Y/N input is already captured by KeyListener
-                        # (s.yes_edge / s.no_edge) and stored in dialog.
-                        lines.append("stuck_status: awaiting_user_confirmation")
-                        if dialog.get('last_reply') == 'yes':
-                            # User confirmed they are stuck.
-                            lines.append("stuck: true")
-                            lines.append(
-                                "help_request: user feels stuck; propose how to get unstuck using safe small moves (back/side) or camera adjustments to reassess unseen areas.")
-                            # Reset after acknowledging.
-                            waiting_stuck_confirm = False
-                            consecutive_stop_count = 0
-                        elif dialog.get('last_reply') == 'no':
-                            # User says they are not stuck; back off.
-                            lines.append("stuck: false")
-                            waiting_stuck_confirm = False
-                            consecutive_stop_count = 0
+                handled_reassessment = False
+                if pending_reassessment:
+                    packet = create_fact_packet(
+                        "REASSESSMENT", "REASSESS", "USER_REQUESTED", observation_id,
+                        inference.ts_ms, latest_objects, latest_sector_facts, latest_authority,
+                        input_method=pending_reassessment_input_method, control_id="REASSESS",
+                    )
+                    enqueue_request(packet, inference.color.copy())
+                    pending_reassessment = False
+                    handled_reassessment = True
 
-                    user_txt = "\n".join(lines)
-                    try:
-                        can_enqueue = (not vlm_inflight) and vlm_q.empty()
-                        if can_enqueue:
-                            vlm_q.put_nowait(
-                                (send_np, user_txt, active_ticket_id))
-                    except Exception as e:
-                        print(
-                            "[vlm_on_change_qwen] Failed to enqueue VLM request:", e)
+                if active_intent != "NONE":
+                    now = time.monotonic()
+                    if last_scheduled_signature is None:
+                        ready = True
+                    else:
+                        if material_signature != pending_signature:
+                            pending_signature = material_signature
+                            pending_since = now
+                        previous_rank = {"PROCEED": 0, "SLOW": 1, "REDIRECT": 2, "STOP": 3}.get(
+                            (last_scheduled_authority or {}).get("motion_decision"), 0
+                        )
+                        current_rank = {"PROCEED": 0, "SLOW": 1, "REDIRECT": 2, "STOP": 3}.get(
+                            latest_authority["motion_decision"], 3
+                        )
+                        persistence = 0.15 if current_rank > previous_rank else 0.50
+                        ready = material_signature != last_scheduled_signature and now - pending_since >= persistence
+                    if (ready and not pending_reassessment and not handled_reassessment
+                            and not reassessment_inflight):
+                        event_trigger = trigger_type(last_scheduled_authority, signature_authority)
+                        packet = create_fact_packet(
+                            "AUTOMATIC", "AUTO_GUIDANCE", event_trigger, observation_id,
+                            inference.ts_ms, latest_objects, latest_sector_facts, latest_authority,
+                        )
+                        enqueue_request(packet, inference.color.copy())
+                        last_scheduled_signature = packet["interaction"]["current_guidance_signature"]
+                        last_scheduled_authority = json.loads(json.dumps(signature_authority))
+                        pending_signature = material_signature
+                        pending_since = now
 
-                prev_risk = risk
-                prev_dir = effective_dir
+            if args.show and display_color is not None:
+                vis = display_color.copy()
+                if latest_sector_facts is not None and args.debug_lanes:
+                    height, width = vis.shape[:2]
+                    y1, y2 = int(0.55 * height), int(0.95 * height)
+                    colours = {"CLEAR": (0, 180, 0), "CONSTRAINED": (0, 190, 255), "BLOCKED": (0, 0, 200), "UNKNOWN": (120, 120, 120)}
+                    for index, name in enumerate(("left", "centre", "right")):
+                        x1, x2 = int(index * width / 3), int((index + 1) * width / 3)
+                        sector = latest_sector_facts[name]
+                        colour = colours[sector["status"]]
+                        overlay = vis.copy()
+                        cv2.rectangle(overlay, (x1, y1), (x2, y2), colour, -1)
+                        cv2.addWeighted(overlay, 0.15, vis, 0.85, 0, vis)
+                        value = sector["clearance_m"]
+                        value_text = "?" if value is None else f"{value:.2f}m"
+                        cv2.putText(vis, f"{name.upper()} {value_text} {sector['status']}", (x1 + 4, y1 - 6),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 2, cv2.LINE_AA)
 
-            if args.show and latest_color is not None:
-                vis = latest_color.copy()
-                # Lane overlay. Renders the state the deterministic layer actually
-                # decided on rather than recomputing it here. Three colours
-                # because the logic has three states; collapsing 'constrained'
-                # into 'blocked' hid the distinction the advisory turns on, so a
-                # 1.5 m gap the user could pass looked identical to a wall.
-                if getattr(args, 'debug_lanes', False) and last_lane_state is not None:
-                    try:
-                        y1, y2 = last_lane_state['rows']
-                        (xL1, xL2), (xC1, xC2), (xR1,
-                                                 xR2) = last_lane_state['cols']
-                        d_L, d_C, d_R = last_lane_state['depths']
-                        st_L, st_C, st_R = last_lane_state['status']
-                        CLEAR_T = last_lane_state['clear_threshold_m']
-                        NEAR_T = last_lane_state['near_threshold_m']
-                        STATUS_COL = {
-                            'clear': (0, 200, 0),          # green: traversable
-                            'constrained': (0, 190, 255),  # amber: tight, slow down
-                            'blocked': (0, 0, 200),        # red: do not enter
-                            'unknown': (120, 120, 120),    # grey: no reading
-                        }
+                for item in latest_objects:
+                    if not (args.debug_objects or item.get("display_bounding_box")):
+                        continue
+                    x1, y1, x2, y2 = map(int, item["bbox_xyxy"])
+                    moving = item.get("motion_state") == "MOVING"
+                    colour = (0, 0, 255) if moving else (255, 255, 0)
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), colour, 2)
+                    label = item.get("canonical_label") or item.get("raw_label") or "object"
+                    distance = item.get("distance_m")
+                    distance_text = "?" if distance is None else f"{distance:.2f}m"
+                    suffix = " MOVING" if moving else f" {item.get('motion_state', 'UNCONFIRMED')}"
+                    cv2.putText(vis, f"{label} {distance_text}{suffix}", (x1, max(20, y1 - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2, cv2.LINE_AA)
 
-                        def draw_band(x1, y1b, x2, y2b, d, status, label):
-                            col = STATUS_COL.get(status, STATUS_COL['unknown'])
-                            overlay = vis.copy()
-                            cv2.rectangle(overlay, (x1, y1b),
-                                          (x2, y2b), col, -1)
-                            cv2.addWeighted(overlay, 0.15, vis, 0.85, 0, vis)
-                            txt = '?' if not isinstance(
-                                d, (int, float)) or not np.isfinite(d) else f"{d:.2f}m"
-                            cv2.putText(vis, f"{label}:{txt} {status}", (x1+4, y1b-6),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 2, cv2.LINE_AA)
-                        draw_band(xL1, y1, xL2, y2, d_L, st_L, 'L')
-                        draw_band(xC1, y1, xC2, y2, d_C, st_C, 'C')
-                        draw_band(xR1, y1, xR2, y2, d_R, st_R, 'R')
-                        cv2.putText(vis, f"blocked<{NEAR_T:.1f}m  constrained<{CLEAR_T:.1f}m  clear>={CLEAR_T:.1f}m",
-                                    (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 215, 255), 1, cv2.LINE_AA)
-                    except Exception:
-                        pass
-                if last_objects:
-                    for o in last_objects:
-                        try:
-                            x1, y1, x2, y2 = map(
-                                int, o.get("bbox_xyxy", [0, 0, 0, 0]))
-                            is_hazard = (o.get("id") in last_hazards) or (
-                                o.get("ontology_class") == "hazard")
-                            color = (0, 0, 255) if is_hazard else (255, 255, 0)
-                            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-                            base = o.get("canonical_class") or o.get(
-                                "display_label") or o.get("raw_label") or "obj"
-                            dist = o.get("distance_m")
-                            dtxt = "?" if dist is None else f"{float(dist):.2f}m"
-                            label = f"{base} {dtxt}"
-                            cv2.putText(vis, label, (x1, max(
-                                20, y1-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
-                        except Exception:
-                            continue
-                if 'vlm_inflight' in locals() and vlm_inflight:
-                    h, w = vis.shape[:2]
+                with state_lock:
+                    release = latest_release
+                    display_generation_inflight = generation_inflight
+                    display_generation_request_id = generation_request_id
+                    display_queued_request_id = queued_request_id
+                caption = release["content"]["caption_text"] if release else None
+                if caption:
+                    lines = _wrap_text(caption, width=74)
+                    height, width = vis.shape[:2]
+                    line_height = 20
+                    block_height = 16 + line_height * len(lines)
                     overlay = vis.copy()
-                    bar_w = max(60, int(w * 0.25))
-                    phase = (time.time() * 1.5) % 1.0
-                    start = int(phase * (w + bar_w)) - bar_w
-                    x1 = max(0, start)
-                    x2 = min(w, start + bar_w)
-                    y1 = h - 6 - 18
-                    y2 = h - 6
-                    cv2.rectangle(overlay, (x1, y1),
-                                  (x2, y2), (0, 215, 255), -1)
-                    cv2.addWeighted(overlay, 0.7, vis, 0.3, 0, vis)
-                    intent_txt = (current_ticket or {}).get(
-                        'intent_dir') if current_ticket else effective_dir
-                    txt = f"VLM is assessing the environment for going {intent_txt}..."
-                    cv2.putText(vis, txt, (10, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX,
-                                0.5, (0, 215, 255), 1, cv2.LINE_AA)
-                if last_caption:
-                    overlay = vis.copy()
-                    # Show caption with human-readable lane naming aligned to the badge
-                    cap_show = _caption_with_human_lane(last_caption)
-                    lines = _wrap_text(cap_show, width=70)
-                    pad, lh = 8, 20
-                    block_h = pad*2 + lh*len(lines)
-                    h, w = vis.shape[:2]
-                    cv2.rectangle(overlay, (0, h - block_h),
-                                  (w, h), (0, 0, 0), -1)
-                    cv2.addWeighted(overlay, 0.6, vis, 0.4, 0, vis)
-                    intent_show = pressing_dir if pressing_dir != 'idle' else effective_dir
-                    nearest_txt = f"{last_nearest_m:.2f}m" if isinstance(
-                        last_nearest_m, (int, float)) else "?"
-                    ticket_txt = f" ticket:{active_ticket_id}" if active_ticket_id else ""
-                    info_txt = f"intent:{intent_show}  going:{effective_dir}  nearest:{nearest_txt}  risk:{prev_risk or '?'}  decision:{last_decision}{ticket_txt}"
-                    cv2.putText(vis, info_txt, (10, h - block_h - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-                    y = h - block_h + pad + 14
-                    for ln in lines:
-                        cv2.putText(vis, ln, (10, y), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                        y += lh
+                    cv2.rectangle(overlay, (0, height - block_height), (width, height), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.65, vis, 0.35, 0, vis)
+                    y = height - block_height + 18
+                    for line in lines:
+                        cv2.putText(vis, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                    (255, 255, 255), 1, cv2.LINE_AA)
+                        y += line_height
+
+                height, width = vis.shape[:2]
+                cv2.rectangle(vis, (0, 0), (width, 28), (30, 30, 30), -1)
+                if reassessment_inflight:
+                    worker_state = "REASSESSING"
+                elif display_queued_request_id == "MORE_DETAIL":
+                    worker_state = "MORE DETAIL QUEUED"
+                elif display_generation_inflight:
+                    worker_state = {
+                        "MORE_DETAIL": "GENERATING MORE DETAIL",
+                        "REASSESS": "REASSESSING",
+                        "AUTO_GUIDANCE": "GENERATING GUIDANCE",
+                    }.get(display_generation_request_id, "GENERATING")
                 else:
-                    h, w = vis.shape[:2]
-                    overlay = vis.copy()
-                    cv2.rectangle(overlay, (0, h - 26), (w, h), (0, 0, 0), -1)
-                    cv2.addWeighted(overlay, 0.45, vis, 0.55, 0, vis)
-                    intent_show = pressing_dir if pressing_dir != 'idle' else effective_dir
-                    nearest_txt = f"{last_nearest_m:.2f}m" if isinstance(
-                        last_nearest_m, (int, float)) else "?"
-                    ticket_txt = f" ticket:{active_ticket_id}" if active_ticket_id else ""
-                    info_txt = f"intent:{intent_show}  going:{effective_dir}  nearest:{nearest_txt}  risk:{prev_risk or '?'}  decision:{last_decision}{ticket_txt}"
-                    cv2.putText(vis, info_txt, (10, h - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                                0.5, (230, 230, 230), 1, cv2.LINE_AA)
-                htop, wtop = vis.shape[:2]
-                header = vis.copy()
-                cv2.rectangle(header, (0, 0), (wtop, 24), (30, 30, 30), -1)
-                intent_txt = (current_ticket or {}).get(
-                    'intent_dir') if current_ticket else '?'
-                status_txt = (current_ticket or {}).get(
-                    'status') if current_ticket else 'idle'
-                last_llm_ts_val = float(
-                    (current_ticket or {}).get('last_llm_ts') or 0.0)
-                if vlm_inflight:
-                    next_txt = f"assessing for {intent_txt}..."
-                elif not vlm_q.empty():
-                    next_txt = 'queued...'
-                elif last_llm_ts_val > 0.0:
-                    rem = max(0, int(10 - (time.time() - last_llm_ts_val)))
-                    next_txt = f"VLM updating in {rem}s"
-                else:
-                    next_txt = 'next:—'
-                head_txt = f"Ticket #{active_ticket_id} | intent:{intent_txt} | status:{status_txt} | {next_txt}"
-                cv2.putText(header, head_txt, (10, 16), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5, (240, 240, 240), 1, cv2.LINE_AA)
-                # Indicate mirrored view unless user suppresses the tag
-                if getattr(args, 'mirror_view', False) and not getattr(args, 'no_mirror_tag', False):
-                    tag = "MIRROR VIEW: left/right swapped"
-                    cv2.putText(header, tag, (wtop - 10 - 250, 16), cv2.FONT_HERSHEY_SIMPLEX,
-                                0.5, (0, 215, 255), 1, cv2.LINE_AA)
-                cv2.addWeighted(header, 0.8, vis, 0.2, 0, vis)
-                # Top-right safe path badge showing chosen 3-band (or combo) suggestion token (compute every frame)
-                try:
-                    frame_safe_token = None
-                    # Depth-based advisory level derived from lane medians
-                    frame_advisory = None  # 'SAFE' | 'CAUTION' | 'STOP'
-                    if last_lane_state is not None:
-                        frame_advisory = last_lane_state['advisory']
-                        frame_safe_token = last_lane_state['auto_suggest']
-                        # If all three bands are blocked, force immediate VLM reassessment
-                        # and hint that all lanes are blocked around the nearest distance.
-                        try:
-                            vals = last_lane_state['finite_depths_m']
-                            if vals and last_lane_state['clear_count'] == 0:
-                                last_vlm_ts = 0.0
-                                if current_ticket is not None:
-                                    mn = min(vals)
-                                    lr = " ".join(
-                                        f"{v:.2f}m" for v in vals)
-                                    current_ticket['last_scene_snippet'] = (
-                                        f"lanes3 STOP; all lanes blocked at ~{mn:.2f}m (L/C/R {lr})")
-                        except Exception:
-                            pass
+                    worker_state = "MONITORING"
+                cv2.putText(vis, f"HDSG | intent:{active_intent} | {worker_state} | M: more detail | R: reassess",
+                            (10, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (240, 240, 240), 1, cv2.LINE_AA)
+                if latest_authority is not None:
+                    clear_text = " + ".join(latest_authority["clear_sectors"]) or "NONE"
+                    badge = f"CLEAR SECTORS: {clear_text}"
+                    colour = (0, 170, 0) if clear_text != "NONE" else (0, 0, 220)
+                    (text_width, text_height), _ = cv2.getTextSize(badge, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                    x1, y1 = width - text_width - 24, 36
+                    cv2.rectangle(vis, (x1, y1), (width - 8, y1 + text_height + 14), colour, -1)
+                    cv2.putText(vis, badge, (x1 + 8, y1 + text_height + 4), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.55, (255, 255, 255), 2, cv2.LINE_AA)
+                if ui_notice and time.monotonic() < ui_notice_until:
+                    cv2.putText(vis, ui_notice, (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                                (0, 215, 255), 2, cv2.LINE_AA)
+                if args.mirror_view and not args.no_mirror_tag:
+                    cv2.putText(vis, "MIRROR VIEW", (10, 74), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                (0, 215, 255), 1, cv2.LINE_AA)
+                next_regions: dict[str, tuple[int, int, int, int]] = {}
 
-                    # Prefer per-frame token; fall back to stored or caption-based if unavailable
-                    safe_token = frame_safe_token
-                    if safe_token is None and current_ticket and 'last_auto_suggest' in current_ticket:
-                        safe_token = current_ticket.get('last_auto_suggest')
-                    if safe_token is None and last_caption:
-                        m = re.search(
-                            r"Suggest:\s*([a-z\-]+)", last_caption, flags=re.IGNORECASE)
-                        if m:
-                            safe_token = m.group(1).lower()
-                    # If we did not get a fresh depth-based advisory this frame,
-                    # try to reuse the last VLM advice so colours stay consistent.
-                    if frame_advisory is None and last_caption:
-                        adv_tmp, _sug_tmp = _parse_advice(last_caption)
-                        if adv_tmp in ('SAFE', 'CAUTION', 'STOP'):
-                            frame_advisory = adv_tmp
+                def draw_control(control_id: str, label: str, bounds: tuple[int, int, int, int], enabled: bool = True):
+                    x1, y1, x2, y2 = bounds
+                    colour = (55, 105, 55) if enabled else (75, 75, 75)
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), colour, -1)
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), (220, 220, 220), 1)
+                    cv2.putText(vis, label, (x1 + 8, y1 + 19), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.46, (255, 255, 255), 1, cv2.LINE_AA)
+                    if enabled:
+                        next_regions[control_id] = bounds
 
-                    if safe_token:
-                        mapping = {
-                            'continue': 'MID',
-                            'left': 'LEFT',
-                            'right': 'RIGHT',
-                            'stay-left': 'LEFT',
-                            'stay-right': 'RIGHT',
-                            'mid-left': 'MID-LEFT',
-                            'mid-right': 'MID-RIGHT',
-                            'left-right': 'LEFT-RIGHT',
-                            'back': 'NONE'
-                        }
-                        band_name = mapping.get(safe_token, safe_token.upper())
-                        txt = f"SAFE PATH: {band_name}"
-                        (tw, th), _ = cv2.getTextSize(
-                            txt, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-                        pad = 6
-                        bw, bh = tw + pad*2, th + pad*2
-                        x2, y1 = wtop - 10, 6
-                        x1, y2 = x2 - bw, y1 + bh
-
-                        # Colour scheme tied to depth/VLM advisory:
-                        #   - Any clear band (not NONE):
-                        #       SAFE/unknown -> green, CAUTION -> yellow
-                        #   - No clear band (NONE):
-                        #       SAFE/CAUTION -> yellow, STOP -> red
-                        bn_none = 'none' in band_name.lower()
-                        adv = (frame_advisory or '').upper()
-                        if not adv:
-                            # Default to CAUTION when we only know there is no clear band
-                            adv = 'CAUTION' if bn_none else 'SAFE'
-                        if not bn_none:
-                            if adv == 'CAUTION':
-                                col = (0, 215, 255)  # yellow
-                            elif adv == 'STOP':
-                                # red (very rare: STOP but a band flagged clear)
-                                col = (0, 0, 255)
-                            else:
-                                col = (0, 180, 0)   # green
-                        else:
-                            if adv == 'STOP':
-                                col = (0, 0, 255)    # red
-                            else:
-                                col = (0, 215, 255)  # yellow
-                        overlay2 = vis.copy()
-                        cv2.rectangle(overlay2, (x1, y1), (x2, y2), col, -1)
-                        cv2.addWeighted(overlay2, 0.85, vis, 0.15, 0, vis)
-                        cv2.putText(vis, txt, (x1 + pad, y2 - pad - 2),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-                except Exception:
-                    pass
-                cv2.imshow('VLM on change (Qwen3-VL)', vis)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                controls_enabled = not reassessment_inflight and not pending_reassessment
+                draw_control("MORE_DETAIL", "More detail (M)", (10, 34, 132, 60), controls_enabled)
+                draw_control("REASSESS", "Reassess (R)", (142, 34, 250, 60), controls_enabled)
+                if (latest_authority is not None
+                        and latest_authority.get("interaction_state") == "AWAITING_SECTOR_CHOICE"):
+                    options = set(latest_authority.get("selection_options", []))
+                    choice_y1, choice_y2 = 68, 98
+                    draw_control("LEFT", "Select left", (10, choice_y1, 122, choice_y2), "LEFT" in options)
+                    draw_control("RIGHT", "Select right", (132, choice_y1, 254, choice_y2), "RIGHT" in options)
+                with mouse_lock:
+                    control_regions.clear()
+                    control_regions.update(next_regions)
+                cv2.imshow("HDSG smart walker", vis)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
-
+    except KeyboardInterrupt:
+        pass
     finally:
-        try:
-            kbd.stop()
-        except Exception:
-            pass
-        try:
-            pipe.stop()
-        except Exception:
-            pass
-        try:
-            cv2.destroyAllWindows()
-        except Exception:
-            pass
+        stop_evt.set()
+        keyboard.stop()
+        pipe.stop()
+        cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':

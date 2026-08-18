@@ -59,7 +59,7 @@ def load_yaml(p: Path) -> Dict[str, Any]:
 user32 = ctypes.windll.user32 if os.name == "nt" else None
 VK = {'W': 0x57, 'A': 0x41, 'S': 0x53, 'D': 0x44,
       'SPACE': 0x20, 'Q': 0x51, 'P': 0x50,
-      'Y': 0x59, 'N': 0x4E}
+      'Y': 0x59, 'N': 0x4E, 'M': 0x4D, 'R': 0x52}
 
 
 def key_down(vk: int) -> bool:
@@ -77,6 +77,8 @@ class IntentState:
     quit_requested: bool = False
     yes_edge: bool = False
     no_edge: bool = False
+    more_detail_edge: bool = False
+    reassess_edge: bool = False
 
 
 class KeyListener:
@@ -106,9 +108,6 @@ class KeyListener:
     def _loop(self):
         while not self.stop_evt.is_set():
             now_ms = int(time.time() * 1000)
-            # reset one-shot yes/no edges
-            self.state.yes_edge = False
-            self.state.no_edge = False
 
             # Edge (tap)
             if self._edge(VK['W'], 'W'):
@@ -127,6 +126,12 @@ class KeyListener:
             elif self._edge(VK['N'], 'N'):
                 with self.lock:
                     self.state.no_edge = True
+            elif self._edge(VK['M'], 'M'):
+                with self.lock:
+                    self.state.more_detail_edge = True
+            elif self._edge(VK['R'], 'R'):
+                with self.lock:
+                    self.state.reassess_edge = True
 
             # Level (held)
             lvl = "idle"
@@ -154,7 +159,12 @@ class KeyListener:
 
     def snapshot(self) -> IntentState:
         with self.lock:
-            return IntentState(**self.state.__dict__)
+            snapshot = IntentState(**self.state.__dict__)
+            self.state.yes_edge = False
+            self.state.no_edge = False
+            self.state.more_detail_edge = False
+            self.state.reassess_edge = False
+            return snapshot
 
 # --------------------------- Ontology Mapper ----------------------------
 
@@ -445,6 +455,7 @@ class FramePacket:
 class InferPacket:
     ts_ms: int
     color: np.ndarray
+    depth_m: np.ndarray
     objects: List[Dict[str, Any]]
     hazards: List[int]
 
@@ -809,6 +820,10 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                     d_gen = median_depth_in_box(
                         depth_m, x1, y1, x2, y2, shrink_ratio=0.06)
                     d_m = d_lb if d_lb is not None else d_gen
+                    distance_method = (
+                        "D455F_LOWER_BBOX_MEDIAN" if d_lb is not None
+                        else ("D455F_BBOX_MEDIAN" if d_gen is not None else None)
+                    )
                     d_bin = distance_bin_from_m(
                         d_m, cfg["depth"]["metric_bins_m"])
                     base = f"{raw_label} #{tid}" if tid is not None and raw_label != "person" else \
@@ -822,6 +837,7 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                         "conf": round(float(score), 3),
                         "bbox_xyxy": [x1, y1, x2, y2],
                         "distance_m": None if d_m is None else round(d_m, 2),
+                        "distance_method": distance_method,
                         "distance_bin": d_bin,
                         "bearing": bearing
                     }
@@ -829,7 +845,7 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                     if mapped.ontology_class == "hazard":
                         hazards.append(obj["id"])
 
-            out = InferPacket(ts_ms=ts, color=color_np,
+            out = InferPacket(ts_ms=ts, color=color_np, depth_m=depth_m,
                               objects=objs, hazards=hazards)
 
             while not out_q.empty():
