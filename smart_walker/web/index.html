@@ -427,6 +427,9 @@ document.addEventListener('keydown', event => {
   const key = event.key.toLowerCase();
   if (intents[key] !== undefined) { send({type: 'intent', direction: intents[key]}); event.preventDefault(); }
   else if (controls[key]) { send({type: 'control', control_id: controls[key]}); }
+  // q ends the run, matching the OpenCV sink. The walker no longer watches the keyboard itself
+  // when this page is the interface, so the shortcut has to travel as an explicit event.
+  else if (key === 'q') { send({type: 'quit'}); }
 });
 
 connect();

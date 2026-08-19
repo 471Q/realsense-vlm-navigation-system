@@ -86,6 +86,24 @@ def build_mm_chat_payload(model: str, system: str, text: str, b64_data: str, mim
     }
 
 
+class _NullKeyListener:
+    """A key listener that reports nothing, used when the browser owns the keyboard.
+
+    The main loop reads a snapshot every pass and does not care where the keys came from, so
+    substituting this leaves the loop unchanged while the browser supplies the same shortcuts as
+    explicit events.
+    """
+
+    def snapshot(self):
+        # last_press_ms matches the main loop's initial baseline of -1, so the key-edge branch
+        # never fires and the browser's intent events are never swallowed by it. A default of 0
+        # would differ from -1 on the first pass and register one spurious idle press.
+        return sw.IntentState(last_press_ms=-1)
+
+    def stop(self) -> None:
+        return None
+
+
 def build_text_chat_payload(model: str, system: str, text: str, grammar: str,
                             temperature: float, top_p: float, max_tokens: int) -> dict:
     """Builds a text-only grammar-constrained request.
@@ -700,7 +718,17 @@ def main():
               half_flag, None, True, "botsort.yaml"),
         daemon=True,
     ).start()
-    keyboard = sw.KeyListener(poll_hz=120).start()
+    # sw.KeyListener polls GetAsyncKeyState, which reports whether a key is physically down
+    # regardless of which window has focus. That is correct for the OpenCV sink, which has no
+    # text entry, and wrong for the web sink: typing "what is on my left" into the question box
+    # would fire forward, left and backward from its w, a and s, "my" would fire More detail, and
+    # the q in "question" would set quit_requested and end the run. The browser implements the
+    # same shortcuts itself and guards them on the question box having focus, so with the web
+    # sink the operating-system hook is both redundant and harmful.
+    keyboard = (
+        _NullKeyListener() if (args.show and args.ui == "web")
+        else sw.KeyListener(poll_hz=120).start()
+    )
 
     motion_tracker = hdsg.MotionTracker(
         movement_threshold_m=args.movement_threshold_m,
@@ -1253,10 +1281,13 @@ def main():
             # an explicit direction rather than as a key edge, so it is applied here directly.
             browser_intent: Optional[str] = None
             browser_questions: list[str] = []
+            browser_quit = False
             if web_ui is not None:
                 for event in web_ui.poll_events():
                     kind = event.get("type")
-                    if kind == "control":
+                    if kind == "quit":
+                        browser_quit = True
+                    elif kind == "control":
                         control_id = event.get("control_id")
                         if control_id == "MORE_DETAIL":
                             mouse_more_detail = True
@@ -1273,7 +1304,7 @@ def main():
                         if text:
                             browser_questions.append(text[:200])
 
-            if keys.quit_requested:
+            if keys.quit_requested or browser_quit:
                 break
             if (mouse_choice in {"LEFT", "RIGHT"} and latest_authority is not None
                     and latest_authority.get("interaction_state") == "AWAITING_SECTOR_CHOICE"

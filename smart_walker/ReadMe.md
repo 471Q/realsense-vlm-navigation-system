@@ -178,6 +178,13 @@ state as JSON on another, and draws the overlays itself. No overlay is composite
 into the video, and the only release field the page ever receives is
 `caption_text`, so the sole-release-path property is unchanged.
 
+The same `w`/`a`/`s`/`d`/space, `m`, `r` and `q` shortcuts work in the browser. With
+`--ui web` the walker no longer watches the keyboard itself: the page sends each
+shortcut as an explicit event and suppresses them while the question box has focus.
+The operating-system key hook the OpenCV sink uses reports whether a key is
+physically down regardless of which window has focus, so leaving it running would
+mean typing a question also steered the walker.
+
 ### Asking questions
 
 The panel on the right accepts typed questions, following
