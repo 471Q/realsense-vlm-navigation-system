@@ -91,11 +91,44 @@ class Tier0KeywordTests(unittest.TestCase):
         # a question about the decision.
         self.assertEqual(questions.classify_keywords("why is the left blocked"), "EXPLAIN_DECISION")
 
-    def test_hazard_keywords_beat_bearings(self):
-        self.assertEqual(questions.classify_keywords("is it safe on the left"), "HAZARDS")
+    def test_a_named_side_beats_a_hazard_word(self):
+        # The bearing route carries the sector state and every object bearing it, hazards among
+        # them. HAZARDS scopes to hazard objects anywhere, so answering this from it could
+        # describe a spill on the right.
+        self.assertEqual(questions.classify_keywords("is it safe on the left"), "LEFT")
+        self.assertEqual(questions.classify_keywords("any danger on the right"), "RIGHT")
+
+    def test_hazard_words_route_to_hazards_when_no_side_is_named(self):
+        self.assertEqual(questions.classify_keywords("is it safe"), "HAZARDS")
+        self.assertEqual(questions.classify_keywords("anything in my way"), "HAZARDS")
+
+    def test_more_detail_phrasings_reach_the_scene_overview(self):
+        for phrase in ("tell me more about the scene", "tell me more", "more detail",
+                       "give me more information", "what's going on", "describe the scene"):
+            self.assertEqual(questions.classify_keywords(phrase), "SCENE_OVERVIEW", phrase)
+
+    def test_a_named_side_beats_a_more_detail_phrasing(self):
+        self.assertEqual(questions.classify_keywords("tell me more about the left"), "LEFT")
+
+    def test_plural_keywords_match(self):
+        self.assertEqual(questions.classify_keywords("any obstacles"), "HAZARDS")
+        self.assertEqual(questions.classify_keywords("any hazards"), "HAZARDS")
 
     def test_unmatched_question_falls_through(self):
         self.assertIsNone(questions.classify_keywords("how tall is the building"))
+
+    def test_off_topic_questions_are_never_guessed_at(self):
+        # Bare "what" is excluded from SCENE_OVERVIEW for these. Answering them with a description
+        # of the room would be worse than sending them to the classifier to be declined.
+        for phrase in ("what time is it", "what is your name", "tell me a joke",
+                       "who won the football", "what's the weather"):
+            self.assertIsNone(questions.classify_keywords(phrase), phrase)
+
+    def test_object_questions_without_a_side_reach_the_classifier(self):
+        # Section 4 folds object questions into the bearing routes, and resolving which bearing an
+        # object is on is inference the keyword filter cannot perform.
+        for phrase in ("how far is the chair", "what is that", "is there a door"):
+            self.assertIsNone(questions.classify_keywords(phrase), phrase)
 
     def test_substring_does_not_match_a_whole_word_keyword(self):
         # "leftover" contains "left". Matching it as the LEFT bucket would misroute the question.
@@ -103,6 +136,11 @@ class Tier0KeywordTests(unittest.TestCase):
 
     def test_multi_word_keyword_matches(self):
         self.assertEqual(questions.classify_keywords("please look again"), "REASSESS")
+
+    def test_every_bucket_names_a_real_route(self):
+        for route, keywords in questions.TIER0_KEYWORDS:
+            self.assertIn(route, questions.ROUTES)
+            self.assertTrue(keywords)
 
 
 class RouteParsingTests(unittest.TestCase):

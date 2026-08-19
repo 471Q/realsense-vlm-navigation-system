@@ -64,19 +64,54 @@ NO_MEASUREMENT_TEXT = (
     "I do not have a reliable measurement of the area right now. Select Reassess for a fresh look."
 )
 
-# Section 3's buckets, in match order. Order matters where keywords overlap: a why-question about a
-# sector is still a question about the decision, so EXPLAIN_DECISION is tried before the bearings.
-# These lists are illustrative rather than final, per section 13 item 2, and are safe to tune
+# Section 3's buckets, in match order. Order matters where keywords overlap, and three decisions
+# are load-bearing:
+#
+# EXPLAIN_DECISION is tried first, because a why-question about a sector is still a question about
+# the decision. "Why is the left blocked" asks what the walker is doing, not what the left sector
+# measures.
+#
+# The bearings are tried before HAZARDS, which reverses the illustrative order in section 3. When a
+# question names a side, that side's route is the better scope: it carries the sector state and
+# every object bearing that sector, hazards among them. HAZARDS scopes to hazard objects anywhere,
+# so answering "is it safe on the left" from it could describe a spill on the right. HAZARDS keeps
+# the questions that name no side.
+#
+# Bare "what" is deliberately excluded from SCENE_OVERVIEW, though section 3 lists it. It matches
+# "what time is it" and "what is your name", which must reach the classifier and be declined rather
+# than be answered with a description of the room.
+#
+# These lists remain illustrative rather than final, per section 13 item 2, and are safe to tune
 # because section 3 establishes the tier is advisory. The resolved_by field in the telemetry record
 # is what tells whether a given list is pulling its weight.
 TIER0_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("EXPLAIN_DECISION", ("why", "reason", "how come", "what for")),
-    ("REASSESS", ("reassess", "look again", "check again", "fresh look", "re-check", "recheck")),
-    ("HAZARDS", ("hazard", "danger", "dangerous", "unsafe", "safe", "risk")),
+    ("EXPLAIN_DECISION", (
+        "why", "how come", "what for", "the reason",
+        "what's wrong", "whats wrong", "what is wrong",
+        "what's the problem", "whats the problem", "what is the problem",
+        "why not", "explain the decision",
+    )),
+    ("REASSESS", (
+        "reassess", "look again", "check again", "another look", "fresh look",
+        "re-check", "recheck", "scan again", "refresh", "update the view",
+    )),
     ("LEFT", ("left",)),
     ("RIGHT", ("right",)),
-    ("CENTRE", ("ahead", "in front", "front", "forward", "centre", "center", "straight")),
-    ("SCENE_OVERVIEW", ("describe", "what do you see", "around me", "surroundings", "everything")),
+    ("CENTRE", (
+        "ahead", "in front", "front", "forward", "centre", "center", "straight",
+        "the path", "my path", "the way", "coming up",
+    )),
+    ("HAZARDS", (
+        "hazard", "danger", "dangerous", "unsafe", "safe", "risk",
+        "obstacle", "obstruction", "in my way", "blocking", "watch out",
+        "be careful", "anything i should",
+    )),
+    ("SCENE_OVERVIEW", (
+        "describe", "what do you see", "what can you see", "what's there", "whats there",
+        "around me", "surroundings", "everything", "overview",
+        "tell me more", "more detail", "more info", "more information", "more about",
+        "the scene", "look like", "going on",
+    )),
 )
 
 CLASSIFIER_SYSTEM_PROMPT = (
@@ -138,7 +173,9 @@ def classify_keywords(question: str) -> Optional[str]:
             if " " in keyword:
                 if keyword in lowered:
                     return route
-            elif re.search(rf"\b{re.escape(keyword)}\b", lowered):
+            # A single keyword matches its plural too, so "any obstacles" reaches the same bucket
+            # as "any obstacle" without every list carrying both forms.
+            elif re.search(rf"\b{re.escape(keyword)}s?\b", lowered):
                 return route
     return None
 
