@@ -33,11 +33,13 @@ SEVERITY = {"SAFE": 0, "CAUTION": 1, "STOP": 2}
 SECTORS = ("LEFT", "CENTRE", "RIGHT")
 PROFILE_LIMITS = {
     "AUTOMATIC": (3, 0, False),
-    "MORE_DETAIL": (4, 1, True),
+    "MORE_DETAIL": (4, 2, True),
     "REASSESSMENT": (3, 2, True),
 }
 
 REASON_CODE_ORDER = (
+    "RG_NO_INTENT_EXPRESSED",
+    "RG_GENERATION_PENDING",
     "RG_MODEL_UNAVAILABLE",
     "RG_GENERATION_TIMEOUT",
     "RG_CONSTRAINT_FAILURE",
@@ -76,6 +78,17 @@ ACTION_TEMPLATES = {
     ("REDIRECT", "RIGHT"): ("redirect_right.v1", "Change direction and continue towards the right."),
     ("STOP", "NONE"): ("stop.v1", "Stop."),
 }
+
+# The restriction order from HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md section 6. A
+# move to a higher rank is an escalation and triggers generation; a move to a lower or
+# equal rank does not. The single source of truth replaces two inline copies that
+# previously existed in the entry script.
+RESTRICTION_ORDER = {"PROCEED": 0, "SLOW": 1, "REDIRECT": 2, "STOP": 3}
+
+# The reason-line placeholder shown while a generation request is in flight and the
+# deterministic interaction state is GUIDANCE_ACTIVE. HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md
+# section 3.
+PENDING_PLACEHOLDER_TEXT = "Assessing the environment."
 
 STATE_PREDICATES = {
     "CLEAR": ("is clear", "remains clear"),
@@ -488,20 +501,29 @@ def determine_authority(
     if intended_status == "CLEAR":
         decision, selected = "PROCEED", intended
         action_ids = [intended_binding_fact]
-    elif intended_status == "CONSTRAINED":
-        decision, selected = "SLOW", intended
-        action_ids = [intended_binding_fact]
     else:
+        # HDSG_DETERMINISTIC_ACTION_POLICY.md section 3, revised: a constrained intended sector
+        # is still passable, so it no longer settles for SLOW without first checking whether a
+        # fully clear alternative exists. It reaches the same candidate-selection logic as a
+        # blocked or unknown intended sector; the two differ only in their fallback when that
+        # selection cannot produce a redirect, since a constrained sector always has a safe
+        # default (continue cautiously on it) that a blocked one does not.
         candidates = [candidate for candidate in clear if candidate != intended]
+        resolved_as_slow = False
         if not candidates:
-            decision, selected = "STOP", "NONE"
-            selection_status = "UNAVAILABLE"
-            action_ids = ["condition:no_clear_sector"]
-            rules.append({
-                "fact_id": "condition:no_clear_sector",
-                "rule_id": "sector.no_clear_alternative",
-                "supporting_fact_ids": [f"sector:{name.lower()}" for name in SECTORS],
-            })
+            if intended_status == "CONSTRAINED":
+                decision, selected = "SLOW", intended
+                action_ids = [intended_binding_fact]
+                resolved_as_slow = True
+            else:
+                decision, selected = "STOP", "NONE"
+                selection_status = "UNAVAILABLE"
+                action_ids = ["condition:no_clear_sector"]
+                rules.append({
+                    "fact_id": "condition:no_clear_sector",
+                    "rule_id": "sector.no_clear_alternative",
+                    "supporting_fact_ids": [f"sector:{name.lower()}" for name in SECTORS],
+                })
         else:
             order = {
                 "LEFT": {"CENTRE": 1, "RIGHT": 2},
@@ -517,6 +539,13 @@ def determine_authority(
                     selected = max(best, key=lambda candidate: float(values[candidate]))
                 elif previous_selected_sector in best:
                     selected = str(previous_selected_sector)
+                elif intended_status == "CONSTRAINED":
+                    # The intended sector remains passable, so an unresolved tie between two
+                    # equally clear alternatives is not worth forcing a closed-ended choice on
+                    # the user; continue cautiously on the intended sector instead.
+                    decision, selected = "SLOW", intended
+                    action_ids = [intended_binding_fact]
+                    resolved_as_slow = True
                 else:
                     selected = "NONE"
                     decision = "STOP"
@@ -526,7 +555,7 @@ def determine_authority(
                     action_ids = [intended_binding_fact] + [f"sector:{candidate.lower()}" for candidate in best]
             else:
                 selected = best[0]
-            if selected != "NONE":
+            if not resolved_as_slow and selected != "NONE":
                 decision = "REDIRECT"
                 action_ids = [intended_binding_fact, f"sector:{selected.lower()}"]
 
@@ -894,18 +923,35 @@ def build_prompt_packet(
         minimum_required_clauses += 1
 
     if response_mode == "MORE_DETAIL":
-        detail_ids: list[str] = []
-        for sector in ("sector:left", "sector:centre", "sector:right"):
-            if sector not in fact_ids and minimum_required_clauses + len(detail_ids) < max_reasons:
-                fact_ids.append(sector)
-                detail_ids.append(sector)
-        if detail_ids:
+        # Every sector and every currently detected object earns its own clause, up to the
+        # profile's remaining capacity, so More detail names the whole scene rather than adding
+        # one fact picked from a list. Each gets its own single-fact requirement: a requirement
+        # spanning several facts under ANY_OF is satisfied by naming only one of them, which is
+        # exactly the terseness this mode exists to avoid.
+        detail_count = 0
+        for index, sector in enumerate(("sector:left", "sector:centre", "sector:right")):
+            if sector in fact_ids or minimum_required_clauses + detail_count >= max_reasons:
+                continue
+            fact_ids.append(sector)
             requirements.append({
-                "requirement_id": "detail_reason",
+                "requirement_id": f"detail_sector_{index}",
                 "role": "SCENE_BINDING",
                 "match": "ANY_OF",
-                "fact_ids": detail_ids,
+                "fact_ids": [sector],
             })
+            detail_count += 1
+        for item in fact_packet.get("objects", []):
+            object_fact_id = item["fact_id"]
+            if object_fact_id in fact_ids or minimum_required_clauses + detail_count >= max_reasons:
+                continue
+            fact_ids.append(object_fact_id)
+            requirements.append({
+                "requirement_id": f"detail_object_{object_fact_id.split(':', 1)[1]}",
+                "role": "SCENE_BINDING",
+                "match": "ANY_OF",
+                "fact_ids": [object_fact_id],
+            })
+            detail_count += 1
 
     permitted = [item for item in (_permitted_fact(fact_packet, fact_id) for fact_id in dict.fromkeys(fact_ids)) if item is not None]
     for item in permitted:
@@ -1270,18 +1316,82 @@ def build_release(
     release_id: str,
     candidate: Optional[Mapping[str, Any]],
     failure_codes: Iterable[str] = (),
+    no_intent: bool = False,
+    pending: bool = False,
 ) -> dict:
-    """Creates the sole user-visible release object from an accepted candidate or fallback."""
+    """Creates the sole user-visible release object from an accepted candidate or fallback.
+
+    `no_intent` renders the IDLE_NO_INTENT state from `HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md`:
+    an empty caption while the sector display continues to update on its own, unrelated channel.
+
+    `pending` renders that policy's GENERATION_PENDING state: the deterministic action line is
+    available at once and the reason line carries a placeholder while a generation request is in
+    flight. It has an effect only when the deterministic interaction state is `GUIDANCE_ACTIVE`.
+    The three other temporary interaction states (`AWAITING_SECTOR_CHOICE`,
+    `REORIENTATION_REQUIRED`, `POST_REORIENTATION_STABILISING`) already carry a complete
+    deterministic account and are left unchanged by a pending generation, per that policy's
+    interaction-state table.
+    """
     deterministic = fact_packet["deterministic"]
-    errors = _reason_sort(failure_codes)
+    identity = fact_packet["identity"]
+    action_template_id, action_text = ACTION_TEMPLATES[(deterministic["motion_decision"], deterministic["selected_sector"])]
+
+    if no_intent:
+        return {
+            "schema_version": RELEASE_SCHEMA,
+            "identity": {
+                "release_id": release_id,
+                "event_id": identity["event_id"],
+                "observation_id": identity["observation_id"],
+                "ticket_id": identity["ticket_id"],
+                "request_id": fact_packet["interaction"]["request_id"],
+                "released_at_utc": utc_now(),
+            },
+            "authority": {
+                "scene_advisory": deterministic["scene_advisory"],
+                "motion_decision": deterministic["motion_decision"],
+                "selected_sector": deterministic["selected_sector"],
+                "interaction_state": "IDLE_NO_INTENT",
+                "selection_options": deterministic["selection_options"],
+                "action_template_id": action_template_id,
+            },
+            "content": {
+                "action_text": "",
+                "reason_text": "",
+                "interaction_text": None,
+                "additional_detail_texts": [],
+                "caption_text": "",
+            },
+            "evidence": {
+                "action_binding_fact_ids": [],
+                "scene_binding_fact_ids": [],
+                "measurement_substitutions": [],
+                "released_visual_observation_ids": [],
+            },
+            "verification": {
+                "release_mode": "DETERMINISTIC_FALLBACK",
+                "candidate_status": "UNAVAILABLE",
+                "gate_outcome": "REJECTED_FALLBACK",
+                "primary_reason_code": "RG_NO_INTENT_EXPRESSED",
+                "reason_codes": ["RG_NO_INTENT_EXPRESSED"],
+                "guidance_signature": fact_packet["interaction"]["current_guidance_signature"],
+                "fact_packet_schema": FACT_PACKET_SCHEMA,
+                "prompt_packet_schema": PROMPT_PACKET_SCHEMA,
+                "candidate_schema": CANDIDATE_SCHEMA,
+                "configuration_id": CONFIGURATION_ID,
+                "software_version": SOFTWARE_VERSION,
+            },
+        }
+
+    pending_active = pending and deterministic["interaction_state"] == "GUIDANCE_ACTIVE"
+    errors = _reason_sort(list(failure_codes) + (["RG_GENERATION_PENDING"] if pending else []))
     if candidate is not None and not errors:
         try:
             errors = validate_candidate(candidate, prompt_packet)
         except Exception:
             errors = ["RG_INTERNAL_GATE_ERROR"]
     accepted = candidate is not None and not errors
-    action_template_id, action_text = ACTION_TEMPLATES[(deterministic["motion_decision"], deterministic["selected_sector"])]
-    interaction_text = _interaction_text(deterministic["interaction_state"])
+    interaction_text = PENDING_PLACEHOLDER_TEXT if pending_active else _interaction_text(deterministic["interaction_state"])
     action_ids = list(deterministic["action_binding"]["accepted_fact_ids"])
     scene_ids = list(deterministic["scene_binding"]["accepted_fact_ids"])
     substitutions: list[dict] = []
@@ -1314,11 +1424,18 @@ def build_release(
         candidate_status = "ACCEPTED"
         gate_outcome = "ACCEPTED"
         reason_codes = ["RG_ACCEPTED"]
+    elif pending_active:
+        reason_text = ""
+        additional = []
+        mode = "DETERMINISTIC_FALLBACK"
+        candidate_status = "UNAVAILABLE"
+        gate_outcome = "REJECTED_FALLBACK"
+        reason_codes = ["RG_GENERATION_PENDING"]
     else:
         reason_text, action_ids, scene_ids, substitutions = _fallback_reason(fact_packet)
         additional = []
         mode = "DETERMINISTIC_FALLBACK"
-        candidate_status = "UNAVAILABLE" if candidate is None and any(code in {"RG_MODEL_UNAVAILABLE", "RG_GENERATION_TIMEOUT", "RG_CONSTRAINT_FAILURE"} for code in errors) else "REJECTED"
+        candidate_status = "UNAVAILABLE" if candidate is None and any(code in {"RG_MODEL_UNAVAILABLE", "RG_GENERATION_TIMEOUT", "RG_CONSTRAINT_FAILURE", "RG_GENERATION_PENDING"} for code in errors) else "REJECTED"
         gate_outcome = "REJECTED_FALLBACK"
         reason_codes = errors or ["RG_INTERNAL_GATE_ERROR"]
 
@@ -1327,7 +1444,6 @@ def build_release(
         caption_parts.append(interaction_text)
     caption_parts.extend(additional)
     caption_text = " ".join(part.strip() for part in caption_parts if part and part.strip())
-    identity = fact_packet["identity"]
     return {
         "schema_version": RELEASE_SCHEMA,
         "identity": {
@@ -1342,7 +1458,7 @@ def build_release(
             "scene_advisory": deterministic["scene_advisory"],
             "motion_decision": deterministic["motion_decision"],
             "selected_sector": deterministic["selected_sector"],
-            "interaction_state": deterministic["interaction_state"],
+            "interaction_state": "GENERATION_PENDING" if pending_active else deterministic["interaction_state"],
             "selection_options": deterministic["selection_options"],
             "action_template_id": action_template_id,
         },

@@ -1,6 +1,6 @@
 import argparse
 import base64
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import time
 import re
@@ -669,8 +669,6 @@ def main():
                 stream.write(json.dumps(envelope, separators=(",", ":"), ensure_ascii=True) + "\n")
 
     latest_release: Optional[dict] = None
-    latest_fact_packet: Optional[dict] = None
-    latest_prompt_packet: Optional[dict] = None
     active_request_key: Optional[tuple[str, str, str]] = None
     generation_inflight = False
     generation_request_id: Optional[str] = None
@@ -720,8 +718,17 @@ def main():
                 if hasattr(args, "_user_txt_for_payload"):
                     delattr(args, "_user_txt_for_payload")
 
+            # HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md section 7. An AUTO_GUIDANCE candidate
+            # is stale only when the guidance signature confirmed at response time differs from
+            # the one the request was made against, not merely because a newer event has since
+            # been allocated. MORE_DETAIL and REASSESS keep the previous event-identity check,
+            # since a closed request's response is tied to the specific request that produced it
+            # rather than to a held explanation.
             with state_lock:
-                still_active = active_request_key == request_key
+                if fact_packet["interaction"]["request_id"] == "AUTO_GUIDANCE":
+                    still_active = fact_packet["interaction"]["current_guidance_signature"] == confirmed_signature
+                else:
+                    still_active = active_request_key == request_key
             if not still_active:
                 failure_codes = ["RG_STALE_CANDIDATE"]
                 candidate = None
@@ -758,7 +765,7 @@ def main():
         return hdsg.next_identifier(prefix, sequence[name])
 
     def enqueue_request(fact_packet: dict, image: np.ndarray):
-        nonlocal latest_fact_packet, latest_prompt_packet, active_request_key, queued_request_id
+        nonlocal active_request_key, queued_request_id
         prompt_id = allocate("prompt", "prompt")
         request_id = fact_packet["interaction"]["request_id"]
         catalogue_entry = request_catalogue["requests"].get(request_id)
@@ -793,8 +800,6 @@ def main():
             fact_packet["interaction"]["request_id"],
         )
         with state_lock:
-            latest_fact_packet = fact_packet
-            latest_prompt_packet = prompt_packet
             active_request_key = request_key
         record("full_fact_packet", fact_packet)
         record("restricted_prompt_packet", prompt_packet)
@@ -804,7 +809,7 @@ def main():
             prompt_packet,
             release_id=immediate_release_id,
             candidate=None,
-            failure_codes=["RG_MODEL_UNAVAILABLE"],
+            pending=True,
         )
         publish_release(immediate, "authoritative_interim_release")
         item = {
@@ -835,10 +840,24 @@ def main():
     latest_observation_id: Optional[str] = None
     observation_images: dict[str, np.ndarray] = {}
     previous_selected_sector: Optional[str] = None
-    last_scheduled_signature: Optional[str] = None
-    last_scheduled_authority: Optional[dict] = None
+    # The most recently confirmed guidance signature and authority under the intent-triggered
+    # explanation policy (HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md section 6). "Confirmed"
+    # means the persistence period for the current rank transition has elapsed; it is not the
+    # same thing as the latest raw per-frame authority, which updates every frame regardless.
+    confirmed_signature: Optional[str] = None
+    confirmed_authority: Optional[dict] = None
     pending_signature: Optional[str] = None
     pending_since = 0.0
+    # The guidance signature of the live scene as of the most recent inference tick, and the
+    # monotonic time that tick was captured. Updated every inference frame regardless of whether
+    # it triggers generation, so a More detail request always sees the true current scene rather
+    # than the signature of whichever event last called the model.
+    latest_material_signature: Optional[str] = None
+    latest_observation_captured_monotonic = 0.0
+    # The signature for which a More detail request has already been issued. While the scene
+    # remains at this signature, pressing More detail again does not call the model a second
+    # time; it reports that the detailed description already covers the current scene.
+    more_detail_signature: Optional[str] = None
     ui_notice: Optional[str] = None
     ui_notice_until = 0.0
     pending_reassessment = False
@@ -911,7 +930,7 @@ def main():
             trigger_type=event_trigger,
             request_id=request_id,
             response_mode=response_mode,
-            previous_signature=last_scheduled_signature,
+            previous_signature=confirmed_signature,
             objects=objects,
             sectors=sectors,
             authority=authority,
@@ -933,6 +952,26 @@ def main():
             input_method=input_method,
             control_id=control_id,
         )
+
+    def publish_idle_release():
+        """Publishes the IDLE_NO_INTENT release when no movement intent is expressed.
+
+        HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md section 4: the caption is empty while the
+        sector display continues on its own, unrelated channel. Before the first inference frame
+        has arrived there is no sector or authority state to build a Fact Packet from; latest_release
+        is still at its initial None in that case, so there is nothing to clear.
+        """
+        if latest_authority is None or latest_sector_facts is None or latest_observation_id is None:
+            return
+        packet = create_fact_packet(
+            "AUTOMATIC", "AUTO_GUIDANCE", "MOTION_INTENT_STARTED", latest_observation_id,
+            time.monotonic() * 1000.0, latest_objects, latest_sector_facts, latest_authority,
+        )
+        record("full_fact_packet", packet)
+        release = hdsg.build_release(
+            packet, {}, release_id=allocate("release", "release"), candidate=None, no_intent=True,
+        )
+        publish_release(release)
 
     print("[hdsg] running. W/A/S/D set intent, Space clears intent, M requests more detail, R reassesses, Q quits.")
     if telemetry_path is None:
@@ -987,11 +1026,16 @@ def main():
                 if mapped == "NONE":
                     active_intent = "NONE"
                     current_ticket_id = None
-                    last_scheduled_signature = None
+                    confirmed_signature = None
+                    confirmed_authority = None
+                    more_detail_signature = None
+                    publish_idle_release()
                 else:
                     active_intent = mapped
                     current_ticket_id = allocate("ticket", "ticket")
-                    last_scheduled_signature = None
+                    confirmed_signature = None
+                    confirmed_authority = None
+                    more_detail_signature = None
 
             more_detail_requested = bool(keys.more_detail_edge or mouse_more_detail)
             if more_detail_requested:
@@ -999,36 +1043,40 @@ def main():
                     ui_notice = "More detail is unavailable while reassessment is active."
                     ui_notice_until = time.monotonic() + 2.0
                     continue
-                with state_lock:
-                    source_release = latest_release
-                    source_fact = latest_fact_packet
-                age_s = float("inf")
-                if source_fact is not None:
-                    captured = source_fact["observation"]["captured_at_utc"]
-                    try:
-                        captured_dt = datetime.fromisoformat(captured.replace("Z", "+00:00"))
-                        age_s = (datetime.now(timezone.utc) - captured_dt).total_seconds()
-                    except Exception:
-                        age_s = float("inf")
-                if (source_release is None or source_fact is None
-                        or source_fact["identity"]["observation_id"] not in observation_images
-                        or age_s > args.more_detail_freshness_s):
+                # Built from the live pipeline state (latest_authority, latest_sector_facts,
+                # latest_observation_id), which updates on every inference tick regardless of
+                # whether that tick triggered generation, rather than from latest_fact_packet,
+                # which under the intent-triggered policy is only touched by an actual VLM
+                # request and can be several scene changes behind the frame currently on screen.
+                pipeline_stale = (
+                    latest_observation_id is None or latest_authority is None
+                    or latest_sector_facts is None
+                    or latest_observation_id not in observation_images
+                    or time.monotonic() - latest_observation_captured_monotonic > args.more_detail_freshness_s
+                )
+                if pipeline_stale:
                     ui_notice = "Current information is too old. Select Reassess."
                     ui_notice_until = time.monotonic() + 3.0
-                elif source_fact["identity"]["observation_id"] in observation_images:
-                    copied = json.loads(json.dumps(source_fact))
-                    copied["identity"]["event_id"] = allocate("event", "evt")
-                    copied["interaction"].update({
-                        "trigger_type": "USER_REQUESTED",
-                        "request_id": "MORE_DETAIL",
-                        "input_method": "ONSCREEN_CONTROL" if mouse_more_detail else "KEYBOARD_SHORTCUT",
-                        "control_id": "MORE_DETAIL",
-                        "response_mode": "MORE_DETAIL",
-                    })
-                    enqueue_request(
-                        copied,
-                        observation_images[source_fact["identity"]["observation_id"]].copy(),
+                elif more_detail_signature is not None and more_detail_signature == latest_material_signature:
+                    # The scene has not moved enough since the last time it was elaborated:
+                    # answer from what is already on screen rather than asking the model again.
+                    with state_lock:
+                        still_pending = generation_inflight and generation_request_id == "MORE_DETAIL"
+                    ui_notice = (
+                        "More detail is already being generated for the current scene."
+                        if still_pending else
+                        "Already showing the detailed description for the current scene."
                     )
+                    ui_notice_until = time.monotonic() + 2.0
+                else:
+                    packet = create_fact_packet(
+                        "MORE_DETAIL", "MORE_DETAIL", "USER_REQUESTED", latest_observation_id,
+                        time.monotonic() * 1000.0, latest_objects, latest_sector_facts, latest_authority,
+                        input_method="ONSCREEN_CONTROL" if mouse_more_detail else "KEYBOARD_SHORTCUT",
+                        control_id="MORE_DETAIL",
+                    )
+                    enqueue_request(packet, observation_images[latest_observation_id].copy())
+                    more_detail_signature = latest_material_signature
                     ui_notice = "More detail requested."
                     ui_notice_until = time.monotonic() + 2.0
 
@@ -1060,6 +1108,7 @@ def main():
                 display_color = inference.color.copy()
                 observation_id = allocate("observation", "obs")
                 latest_observation_id = observation_id
+                latest_observation_captured_monotonic = time.monotonic()
                 observation_images[observation_id] = inference.color.copy()
                 while len(observation_images) > 20:
                     observation_images.pop(next(iter(observation_images)))
@@ -1148,6 +1197,7 @@ def main():
                 material_signature = hdsg.guidance_signature(
                     signature_authority, measurement_state, latest_objects
                 )
+                latest_material_signature = material_signature
 
                 handled_reassessment = False
                 if pending_reassessment:
@@ -1161,33 +1211,49 @@ def main():
                     handled_reassessment = True
 
                 if active_intent != "NONE":
+                    # HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md sections 5 and 6. Generation
+                    # is triggered only by intent expression (T1, confirmed_signature is None
+                    # the first time under the current intent) or by a restrictive escalation
+                    # (T2, a move to a higher rank in RESTRICTION_ORDER). A de-escalation or a
+                    # lateral change at an unchanged rank still updates the confirmed action and
+                    # reason immediately, from the deterministic templates, but does not call
+                    # the model. The persistence period selects how long a new rank must hold
+                    # before it is confirmed, asymmetric in the same way as before: short for a
+                    # move to a more restrictive rank, longer for recovery.
                     now = time.monotonic()
-                    if last_scheduled_signature is None:
+                    current_rank = hdsg.RESTRICTION_ORDER.get(latest_authority["motion_decision"], 3)
+                    if confirmed_signature is None:
                         ready = True
+                        is_escalation = True
                     else:
                         if material_signature != pending_signature:
                             pending_signature = material_signature
                             pending_since = now
-                        previous_rank = {"PROCEED": 0, "SLOW": 1, "REDIRECT": 2, "STOP": 3}.get(
-                            (last_scheduled_authority or {}).get("motion_decision"), 0
-                        )
-                        current_rank = {"PROCEED": 0, "SLOW": 1, "REDIRECT": 2, "STOP": 3}.get(
-                            latest_authority["motion_decision"], 3
+                        previous_rank = hdsg.RESTRICTION_ORDER.get(
+                            (confirmed_authority or {}).get("motion_decision"), 0
                         )
                         persistence = 0.15 if current_rank > previous_rank else 0.50
-                        ready = material_signature != last_scheduled_signature and now - pending_since >= persistence
+                        ready = material_signature != confirmed_signature and now - pending_since >= persistence
+                        is_escalation = ready and current_rank > previous_rank
                     if (ready and not pending_reassessment and not handled_reassessment
                             and not reassessment_inflight):
-                        event_trigger = trigger_type(last_scheduled_authority, signature_authority)
+                        event_trigger = trigger_type(confirmed_authority, signature_authority)
                         packet = create_fact_packet(
                             "AUTOMATIC", "AUTO_GUIDANCE", event_trigger, observation_id,
                             inference.ts_ms, latest_objects, latest_sector_facts, latest_authority,
                         )
-                        enqueue_request(packet, inference.color.copy())
-                        last_scheduled_signature = packet["interaction"]["current_guidance_signature"]
-                        last_scheduled_authority = json.loads(json.dumps(signature_authority))
+                        confirmed_signature = packet["interaction"]["current_guidance_signature"]
+                        confirmed_authority = json.loads(json.dumps(signature_authority))
                         pending_signature = material_signature
                         pending_since = now
+                        if is_escalation:
+                            enqueue_request(packet, inference.color.copy())
+                        else:
+                            record("full_fact_packet", packet)
+                            release = hdsg.build_release(
+                                packet, {}, release_id=allocate("release", "release"), candidate=None,
+                            )
+                            publish_release(release)
 
             if args.show and display_color is not None:
                 vis = display_color.copy()
@@ -1284,9 +1350,6 @@ def main():
                     if enabled:
                         next_regions[control_id] = bounds
 
-                controls_enabled = not reassessment_inflight and not pending_reassessment
-                draw_control("MORE_DETAIL", "More detail (M)", (10, 34, 132, 60), controls_enabled)
-                draw_control("REASSESS", "Reassess (R)", (142, 34, 250, 60), controls_enabled)
                 if (latest_authority is not None
                         and latest_authority.get("interaction_state") == "AWAITING_SECTOR_CHOICE"):
                     options = set(latest_authority.get("selection_options", []))

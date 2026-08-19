@@ -168,8 +168,20 @@ object is moving. Add `--debug_objects` to show every detection during calibrati
 The More detail button requests more information about the observation supporting
 the current caption. The Reassess button requests a fresh observation. The `M` and
 `R` keys provide equivalent test shortcuts. The interface accepts no free text.
-Caption generation is event driven, so time passing alone does not trigger another
-model call.
+
+Caption generation is intent driven rather than event driven, per
+`HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md` (implemented 19 August 2026). The
+model is called only when a movement intent starts or changes, when the guidance
+becomes more restrictive while an intent remains active, or on a More detail or
+Reassess request. A less restrictive change updates the action and reason lines at
+once from the deterministic templates without calling the model. No caption is
+shown while no movement intent is expressed; the sector display and CLEAR SECTORS
+badge remain live regardless. While a request is in flight the action line is
+shown immediately and the reason line reads "Assessing the environment." until the
+model responds or the request times out, except in the temporary interaction
+states (`AWAITING_SECTOR_CHOICE`, `REORIENTATION_REQUIRED`,
+`POST_REORIENTATION_STABILISING`), which already carry a complete deterministic
+account and are left unchanged by a pending request.
 
 Normal development runs use `--evaluate false` and do not write telemetry. In this
 mode, `--eval_name` has no effect if it is also present. To record a named evaluation

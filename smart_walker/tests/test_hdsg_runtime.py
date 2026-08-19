@@ -120,6 +120,71 @@ class HdsgRuntimeTests(unittest.TestCase):
         self.assertNotEqual(authority["selected_sector"], "RIGHT")
         self.assertIn("object:7", authority["action_binding"]["accepted_fact_ids"])
 
+    def test_two_blocked_sectors_redirect_to_the_remaining_clear_one(self):
+        # The mirror case of the constrained-sector redirect above: two sectors are blocked
+        # (severe, "red") and one is clear ("green"). Unlike the constrained case, this path was
+        # unchanged by that revision, since a blocked or unknown intended sector has always gone
+        # through the redirect-candidate logic. Locked in explicitly here because existing
+        # coverage of it was only indirect, through object-induced blocking.
+        sectors = json.loads(json.dumps(self.sectors))
+        sectors["left"].update(clearance_m=0.40, status="BLOCKED")
+        sectors["centre"].update(clearance_m=0.55, status="BLOCKED")
+        sectors["right"].update(clearance_m=2.30, status="CLEAR")
+        authority = hdsg.determine_authority("FORWARD", "SAFE", sectors)
+        self.assertEqual(authority["motion_decision"], "REDIRECT")
+        self.assertEqual(authority["selected_sector"], "RIGHT")
+        self.assertEqual(authority["interaction_state"], "GUIDANCE_ACTIVE")
+        self.assertEqual(
+            set(authority["action_binding"]["accepted_fact_ids"]),
+            {"sector:centre", "sector:right"},
+        )
+
+    def test_constrained_intended_sector_redirects_to_a_clear_alternative(self):
+        # HDSG_DETERMINISTIC_ACTION_POLICY.md section 3, revised: a constrained intended sector
+        # is still passable, but a fully clear alternative is preferred over continuing through
+        # it. This is the exact configuration a live run reported: forward intent, centre
+        # constrained by a nearby obstacle, right fully clear.
+        sectors = json.loads(json.dumps(self.sectors))
+        sectors["left"].update(clearance_m=1.78, status="CONSTRAINED")
+        sectors["centre"].update(clearance_m=1.52, status="CONSTRAINED")
+        sectors["right"].update(clearance_m=2.42, status="CLEAR")
+        authority = hdsg.determine_authority("FORWARD", "SAFE", sectors)
+        self.assertEqual(authority["motion_decision"], "REDIRECT")
+        self.assertEqual(authority["selected_sector"], "RIGHT")
+        self.assertEqual(authority["interaction_state"], "GUIDANCE_ACTIVE")
+        self.assertEqual(
+            set(authority["action_binding"]["accepted_fact_ids"]),
+            {"sector:centre", "sector:right"},
+        )
+
+    def test_constrained_intended_sector_slows_with_no_clear_alternative(self):
+        # Every sector is constrained or worse, so there is nothing to redirect to; the
+        # passable-but-cautious default is retained.
+        sectors = json.loads(json.dumps(self.sectors))
+        sectors["left"].update(clearance_m=1.78, status="CONSTRAINED")
+        sectors["centre"].update(clearance_m=1.52, status="CONSTRAINED")
+        sectors["right"].update(clearance_m=1.60, status="CONSTRAINED")
+        authority = hdsg.determine_authority("FORWARD", "SAFE", sectors)
+        self.assertEqual(authority["motion_decision"], "SLOW")
+        self.assertEqual(authority["selected_sector"], "CENTRE")
+        self.assertEqual(authority["action_binding"]["accepted_fact_ids"], ["sector:centre"])
+
+    def test_constrained_intended_sector_does_not_force_a_choice_on_a_tie(self):
+        # Two equally clear alternatives exist, but the intended sector remains passable, so an
+        # unresolved tie falls back to continuing cautiously rather than interrupting with
+        # AWAITING_SECTOR_CHOICE, which is reserved for when the intended sector cannot be used
+        # at all.
+        sectors = json.loads(json.dumps(self.sectors))
+        sectors["centre"].update(clearance_m=1.52, status="CONSTRAINED")
+        sectors["left"].update(clearance_m=2.10, status="CLEAR")
+        sectors["right"].update(clearance_m=2.15, status="CLEAR")
+        authority = hdsg.determine_authority(
+            "FORWARD", "SAFE", sectors, sector_choice_tolerance_m=0.10
+        )
+        self.assertEqual(authority["motion_decision"], "SLOW")
+        self.assertEqual(authority["selected_sector"], "CENTRE")
+        self.assertEqual(authority["interaction_state"], "GUIDANCE_ACTIVE")
+
     def test_moving_obstacle_closer_never_weakens_decision(self):
         rank = {"PROCEED": 0, "SLOW": 1, "REDIRECT": 2, "STOP": 3}
         decisions = []
@@ -325,6 +390,195 @@ class HdsgRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(release["verification"]["release_mode"], "DETERMINISTIC_FALLBACK")
         self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED", release["verification"]["reason_codes"])
+
+    def test_no_intent_produces_empty_caption(self):
+        fact_packet, prompt_packet = self.build_records()
+        release = hdsg.build_release(
+            fact_packet,
+            prompt_packet,
+            release_id="release_test",
+            candidate=None,
+            no_intent=True,
+        )
+        self.assertEqual(release["authority"]["interaction_state"], "IDLE_NO_INTENT")
+        self.assertEqual(release["content"]["caption_text"], "")
+        self.assertEqual(release["content"]["action_text"], "")
+        self.assertEqual(release["content"]["reason_text"], "")
+        self.assertEqual(release["verification"]["reason_codes"], ["RG_NO_INTENT_EXPRESSED"])
+
+    def test_pending_generation_shows_placeholder_reason(self):
+        fact_packet, prompt_packet = self.build_records()
+        self.assertEqual(fact_packet["deterministic"]["interaction_state"], "GUIDANCE_ACTIVE")
+        release = hdsg.build_release(
+            fact_packet,
+            prompt_packet,
+            release_id="release_test",
+            candidate=None,
+            pending=True,
+        )
+        self.assertEqual(release["authority"]["interaction_state"], "GENERATION_PENDING")
+        self.assertTrue(release["content"]["caption_text"].startswith("Continue towards the right."))
+        self.assertIn("Assessing the environment.", release["content"]["caption_text"])
+        self.assertEqual(release["verification"]["reason_codes"], ["RG_GENERATION_PENDING"])
+        # The action line is available immediately and matches the deterministic decision;
+        # a pending generation never changes it.
+        self.assertEqual(release["authority"]["motion_decision"], "PROCEED")
+        self.assertEqual(release["authority"]["selected_sector"], "RIGHT")
+
+    def test_pending_does_not_override_a_temporary_interaction_state(self):
+        authority = hdsg.determine_authority("BACKWARD", "SAFE", self.sectors)
+        fact_packet = hdsg.build_fact_packet(
+            run_id="run_test",
+            event_id="evt_test",
+            observation_id="obs_test",
+            ticket_id="ticket_test",
+            timestamp_ms=1000.0,
+            intent="BACKWARD",
+            trigger_type="MOTION_INTENT_STARTED",
+            request_id="AUTO_GUIDANCE",
+            response_mode="AUTOMATIC",
+            previous_signature=None,
+            objects=[],
+            sectors=self.sectors,
+            authority=authority,
+            mirror_view=False,
+            detector_model="yolov8n.pt",
+            detector_confidence=0.25,
+            pipeline_config_path=Path("missing-pipeline.yaml"),
+            ontology_path=Path("missing-ontology.yaml"),
+            clear_threshold_m=1.8,
+            blocked_threshold_m=0.7,
+            sector_choice_tolerance_m=0.1,
+            motion_tracker=self.tracker,
+        )
+        release = hdsg.build_release(
+            fact_packet,
+            {},
+            release_id="release_test",
+            candidate=None,
+            pending=True,
+        )
+        # REORIENTATION_REQUIRED already carries a complete deterministic account per
+        # HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md's interaction-state table, so a pending
+        # generation must not replace it with the generic placeholder.
+        self.assertEqual(release["authority"]["interaction_state"], "REORIENTATION_REQUIRED")
+        self.assertNotIn("Assessing the environment.", release["content"]["caption_text"])
+        self.assertIn("has not been observed", release["content"]["caption_text"])
+        self.assertEqual(release["verification"]["reason_codes"], ["RG_GENERATION_PENDING"])
+
+    def test_more_detail_requests_a_clause_per_scene_fact(self):
+        # A stationary object well outside the safety-relevant range (beyond the caution
+        # threshold, not a hazard) is not part of the action or scene binding, so it is a clean
+        # probe of whether More detail names facts beyond the ones the decision itself required.
+        raw_object = {
+            "id": 9,
+            "raw_label": "chair",
+            "canonical_class": "chair",
+            "ontology_class": "static_obstacle",
+            "conf": 0.9,
+            "bbox_xyxy": [1, 2, 30, 60],
+            "distance_m": 1.8,
+            "bearing": "left",
+            "motion_state": "STATIONARY",
+        }
+        objects = hdsg.normalise_objects([raw_object])
+        authority = hdsg.determine_authority("RIGHT", "CAUTION", self.sectors, objects=objects)
+        fact_packet = hdsg.build_fact_packet(
+            run_id="run_test",
+            event_id="evt_test",
+            observation_id="obs_test",
+            ticket_id="ticket_test",
+            timestamp_ms=1000.0,
+            intent="RIGHT",
+            trigger_type="USER_REQUESTED",
+            request_id="MORE_DETAIL",
+            response_mode="MORE_DETAIL",
+            previous_signature=None,
+            objects=objects,
+            sectors=self.sectors,
+            authority=authority,
+            mirror_view=False,
+            detector_model="yolov8n.pt",
+            detector_confidence=0.25,
+            pipeline_config_path=Path("missing-pipeline.yaml"),
+            ontology_path=Path("missing-ontology.yaml"),
+            clear_threshold_m=1.8,
+            blocked_threshold_m=0.7,
+            sector_choice_tolerance_m=0.1,
+            motion_tracker=self.tracker,
+        )
+        prompt_packet = hdsg.build_prompt_packet(
+            fact_packet,
+            prompt_id="prompt_test",
+            model_id="qwen3-vl-4b-instruct",
+            model_hash=hdsg.sha256_text("model"),
+            quantisation="Q4_K_M",
+            temperature=0.2,
+            top_p=0.9,
+            max_tokens=220,
+            system_prompt="fixed system prompt",
+            constraint_hash=hdsg.sha256_text("grammar"),
+        )
+        requirement_ids = {item["requirement_id"] for item in prompt_packet["requirements"]}
+        self.assertIn("action_reason", requirement_ids)
+        self.assertIn("scene_reason", requirement_ids)
+        self.assertTrue(any(r.startswith("detail_sector_") for r in requirement_ids))
+        self.assertIn("detail_object_9", requirement_ids)
+        # The grammar allows at most four reason clauses; every requirement is single-fact so
+        # each can be satisfied by exactly one clause.
+        self.assertLessEqual(len(prompt_packet["requirements"]), 4)
+        for item in prompt_packet["requirements"]:
+            self.assertEqual(len(item["fact_ids"]), 1)
+        self.assertEqual(prompt_packet["response_constraints"]["max_visual_observations"], 2)
+
+        candidate = {
+            "schema_version": hdsg.CANDIDATE_SCHEMA,
+            "reason_clauses": [
+                {
+                    "clause_id": "reason:1",
+                    "requirement_ids": ["action_reason"],
+                    "fact_ids": ["sector:right"],
+                    "measurement_ids": ["m:sector:right:clearance"],
+                    "text_template": "The right sector is clear for {{m:sector:right:clearance}}.",
+                },
+                {
+                    "clause_id": "reason:2",
+                    "requirement_ids": ["scene_reason"],
+                    "fact_ids": ["sector:left"],
+                    "measurement_ids": ["m:sector:left:clearance"],
+                    "text_template": "The left sector is blocked at {{m:sector:left:clearance}}.",
+                },
+                {
+                    "clause_id": "reason:3",
+                    "requirement_ids": [next(r for r in requirement_ids if r.startswith("detail_sector_"))],
+                    "fact_ids": ["sector:centre"],
+                    "measurement_ids": ["m:sector:centre:clearance"],
+                    "text_template": "The centre sector is clear for {{m:sector:centre:clearance}}.",
+                },
+                {
+                    "clause_id": "reason:4",
+                    "requirement_ids": ["detail_object_9"],
+                    "fact_ids": ["object:9"],
+                    "measurement_ids": ["m:object:9:distance"],
+                    "text_template": "The chair is present on the left at {{m:object:9:distance}}.",
+                },
+            ],
+            "visual_observations": [],
+        }
+        release = hdsg.build_release(
+            fact_packet, prompt_packet, release_id="release_test", candidate=candidate,
+        )
+        self.assertEqual(release["verification"]["release_mode"], "VLM_ACCEPTED")
+        # action_reason renders as reason_text; the other three clauses (scene_reason, the
+        # centre-sector detail, and the chair) all render into additional_detail_texts.
+        self.assertEqual(len(release["content"]["additional_detail_texts"]), 3)
+        self.assertIn("chair", release["content"]["caption_text"])
+
+    def test_restriction_order_ranks_stop_highest(self):
+        self.assertEqual(
+            sorted(hdsg.RESTRICTION_ORDER, key=hdsg.RESTRICTION_ORDER.get),
+            ["PROCEED", "SLOW", "REDIRECT", "STOP"],
+        )
 
     def test_records_are_json_serialisable(self):
         fact_packet, prompt_packet = self.build_records()
