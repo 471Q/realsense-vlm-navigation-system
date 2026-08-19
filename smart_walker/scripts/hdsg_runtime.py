@@ -672,14 +672,28 @@ def build_fact_packet(
     scenario_id: Optional[str] = None,
     input_method: str = "SYSTEM",
     control_id: Optional[str] = None,
+    recording_dir: Optional[str] = None,
+    source_mode: str = "LIVE",
 ) -> dict:
-    """Builds the complete pre-VLM evidence record for one event."""
+    """Builds the complete pre-VLM evidence record for one event.
+
+    `recording_dir` names the directory holding the synchronised RGB and depth files for this
+    run, relative to the telemetry log. When it is supplied the observation references point at
+    those files rather than at memory, which is what satisfies the evaluation contract's
+    requirement for an input file or recording identifier and what makes the event replayable.
+    """
     depth_valid = all(bool(sector["valid"]) for sector in sectors.values())
     measurement_state = "VALID" if depth_valid else ("PARTIAL" if any(bool(sector["valid"]) for sector in sectors.values()) else "INVALID")
     authority = dict(authority)
     moving_ids = [item["fact_id"] for item in objects if item.get("motion_state") == "MOVING"]
     authority["moving_object_fact_ids"] = moving_ids
     signature = guidance_signature(authority, measurement_state, objects)
+    if recording_dir:
+        rgb_ref = f"{recording_dir}/{observation_id}.color.png"
+        depth_ref = f"{recording_dir}/{observation_id}.depth_mm.png"
+    else:
+        rgb_ref = f"memory://{observation_id}/rgb"
+        depth_ref = f"memory://{observation_id}/depth"
     packet = {
         "schema_version": FACT_PACKET_SCHEMA,
         "identity": {
@@ -688,15 +702,15 @@ def build_fact_packet(
             "observation_id": observation_id,
             "ticket_id": ticket_id,
             "scenario_id": scenario_id,
-            "source_mode": "LIVE",
+            "source_mode": source_mode,
         },
         "observation": {
             "captured_at_utc": utc_now(),
             "sensor_timestamp_ms": float(timestamp_ms),
             "camera_model": "Intel RealSense D455f",
             "device_id": "d455f_01",
-            "rgb_ref": f"memory://{observation_id}/rgb",
-            "depth_ref": f"memory://{observation_id}/depth",
+            "rgb_ref": rgb_ref,
+            "depth_ref": depth_ref,
             "mirror_view": bool(mirror_view),
             "depth_aligned_to_rgb": True,
             "rgb_valid": True,

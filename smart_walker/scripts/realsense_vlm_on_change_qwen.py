@@ -32,11 +32,13 @@ try:
     import scripts.realsense_shared_control as sw
     import scripts.hdsg_runtime as hdsg
     from scripts.hdsg_web_ui import WebInterface
+    from scripts.hdsg_recording import ObservationRecorder
 except Exception:
     # Fallback for running directly from scripts folder
     import realsense_shared_control as sw  # type: ignore
     import hdsg_runtime as hdsg  # type: ignore
     from hdsg_web_ui import WebInterface  # type: ignore
+    from hdsg_recording import ObservationRecorder  # type: ignore
 
 
 def _encode_image(img_bgr: np.ndarray, fmt: str = "jpeg", quality: int = 75) -> Tuple[str, str]:
@@ -556,6 +558,11 @@ def main():
         "--eval_name", "--eval-name", dest="eval_name", default=None,
         help="short scenario name used to group evaluation runs",
     )
+    ap.add_argument(
+        "--record_rgbd", nargs="?", const=True, default=True, type=_parse_bool_argument,
+        help="write synchronised RGB and depth per observation during an evaluation run, "
+             "so the run can be replayed under other conditions with identical input",
+    )
     default_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_candidate.v1.gbnf"
     default_catalogue = Path(__file__).resolve().parents[1] / "config" / "hdsg_request_catalogue.v1.json"
     ap.add_argument("--grammar", type=Path, default=default_grammar)
@@ -657,10 +664,21 @@ def main():
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = f"run_{run_stamp}"
     telemetry_path: Optional[Path] = None
+    recorder: Optional[ObservationRecorder] = None
+    recording_dir_ref: Optional[str] = None
     if args.evaluate:
         evaluation_dir = args.telemetry_dir / str(args.eval_name)
         evaluation_dir.mkdir(parents=True, exist_ok=True)
         telemetry_path = evaluation_dir / f"{run_id}.jsonl"
+        if args.record_rgbd:
+            # Kept beside the telemetry file and named after the run, so a log and its frames
+            # travel together. The reference stored in each Fact Packet is relative to the
+            # telemetry file's directory, which keeps a recording portable between machines.
+            recording_dir_ref = run_id
+            recorder = ObservationRecorder(
+                evaluation_dir / run_id, depth_scale=depth_scale
+            ).start()
+            print(f"[hdsg] recording RGB-D to {(evaluation_dir / run_id)}")
     telemetry_lock = threading.Lock()
 
     def record(record_type: str, value: dict):
@@ -976,6 +994,7 @@ def main():
             scenario_id=args.eval_name if args.evaluate else None,
             input_method=input_method,
             control_id=control_id,
+            recording_dir=recording_dir_ref,
         )
 
     def publish_idle_release():
@@ -1179,6 +1198,13 @@ def main():
                 latest_observation_id = observation_id
                 latest_observation_captured_monotonic = time.monotonic()
                 observation_images[observation_id] = inference.color.copy()
+                if recorder is not None:
+                    # Queued to a writer thread, so the sensing loop never waits on disk. A frame
+                    # that could not be queued is counted, and the run reports itself incomplete
+                    # at shutdown rather than yielding a recording with silent gaps.
+                    recorder.record(
+                        observation_id, inference.color.copy(), inference.depth_m, inference.ts_ms
+                    )
                 while len(observation_images) > 20:
                     observation_images.pop(next(iter(observation_images)))
                 tracked = motion_tracker.update(inference.color, list(inference.objects), inference.ts_ms)
@@ -1501,6 +1527,16 @@ def main():
         pipe.stop()
         if web_ui is not None:
             web_ui.stop()
+        if recorder is not None:
+            stats = recorder.stop()
+            record("recording_summary", stats)
+            state = "complete" if stats["complete"] else "INCOMPLETE"
+            print(
+                f"[hdsg] RGB-D recording {state}: {stats['written']} written, "
+                f"{stats['dropped']} dropped, {stats['failed']} failed"
+            )
+            if not stats["complete"]:
+                print("[hdsg] warning: this recording has gaps and is not a faithful replay source.")
         cv2.destroyAllWindows()
 
 

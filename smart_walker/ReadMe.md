@@ -238,13 +238,37 @@ digest cannot support failure investigation, and a rejected candidate is exactly
 the case where the text is the evidence. The record is written to the log and never
 read back into the runtime, so raw model text still has no path to the display.
 
+### RGB-D recording
+
+An evaluation run also writes synchronised RGB and depth per observation to
+`logs/<eval_name>/<run_id>/`, so the run can later be replayed under other
+conditions with identical input. Disable with `--record_rgbd false`.
+
+```
+<observation_id>.color.png      8-bit BGR, lossless
+<observation_id>.depth_mm.png   16-bit single channel, millimetres
+manifest.jsonl                  one line per observation
+```
+
+Colour is PNG rather than JPEG because replay feeds the frame back through the
+detector, and JPEG artefacts would change detections. Depth is millimetres, the
+same `realsense_mm` convention the offline tools already use; the D455f reports
+integer millimetres, so the conversion is exact.
+
+Writing happens on a worker thread and never blocks the sensing loop. If a frame
+cannot be queued it is counted, and the run reports the recording **incomplete**
+at shutdown rather than leaving silent gaps in a replay source.
+
+With recording on, each Fact Packet's `rgb_ref` and `depth_ref` name the recorded
+files instead of `memory://`, which is what makes an evaluated event replayable.
+
 ### Schema conformance
 
 The frozen record contracts are in `schemas/`, recorded in
 `schema-manifest.v2.json`. Two checks, neither replacing the other:
 
 ```powershell
-python -m unittest discover -s tests -t .        # 32 tests, no dependencies
+python -m unittest discover -s tests -t .        # 47 tests, no dependencies
 & .\schemas\validate_schema_fixtures.ps1         # full JSON Schema validation, needs PowerShell 7
 ```
 
