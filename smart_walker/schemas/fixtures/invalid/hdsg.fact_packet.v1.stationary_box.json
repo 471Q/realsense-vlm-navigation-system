@@ -1,0 +1,15 @@
+{
+  "schema_version": "hdsg.fact_packet.v1",
+  "identity": {},
+  "observation": {},
+  "interaction": {},
+  "objects": [
+    {
+      "motion_state": "STATIONARY",
+      "display_bounding_box": true
+    }
+  ],
+  "sectors": {},
+  "deterministic": {},
+  "configuration": {}
+}

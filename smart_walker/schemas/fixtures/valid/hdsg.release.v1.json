@@ -1,0 +1,56 @@
+{
+  "schema_version": "hdsg.release.v1",
+  "identity": {
+    "release_id": "release_000123",
+    "event_id": "evt_000123",
+    "observation_id": "obs_000456",
+    "ticket_id": "ticket_000012",
+    "request_id": "AUTO_GUIDANCE",
+    "released_at_utc": "2026-08-18T14:30:01.000Z"
+  },
+  "authority": {
+    "scene_advisory": "CAUTION",
+    "motion_decision": "PROCEED",
+    "selected_sector": "RIGHT",
+    "interaction_state": "GUIDANCE_ACTIVE",
+    "selection_options": [],
+    "action_template_id": "proceed_right.v1"
+  },
+  "content": {
+    "action_text": "Continue towards the right.",
+    "reason_text": "The right sector is clear for 2.17 metres.",
+    "interaction_text": null,
+    "additional_detail_texts": [
+      "The left sector has limited clearance at 1.40 metres."
+    ],
+    "caption_text": "Continue towards the right. The right sector is clear for 2.17 metres. The left sector has limited clearance at 1.40 metres."
+  },
+  "evidence": {
+    "action_binding_fact_ids": ["sector:right"],
+    "scene_binding_fact_ids": ["sector:left"],
+    "measurement_substitutions": [
+      {
+        "measurement_id": "m:sector:right:clearance",
+        "formatted_value": "2.17 metres"
+      },
+      {
+        "measurement_id": "m:sector:left:clearance",
+        "formatted_value": "1.40 metres"
+      }
+    ],
+    "released_visual_observation_ids": []
+  },
+  "verification": {
+    "release_mode": "VLM_ACCEPTED",
+    "candidate_status": "ACCEPTED",
+    "gate_outcome": "ACCEPTED",
+    "primary_reason_code": "RG_ACCEPTED",
+    "reason_codes": ["RG_ACCEPTED"],
+    "guidance_signature": "CAUTION|PROCEED|RIGHT|sector:left|sector:right|VALID",
+    "fact_packet_schema": "hdsg.fact_packet.v1",
+    "prompt_packet_schema": "hdsg.prompt_packet.v1",
+    "candidate_schema": "hdsg.vlm_candidate.v1",
+    "configuration_id": "hdsg_config.v1",
+    "software_version": "hdsg-v1"
+  }
+}

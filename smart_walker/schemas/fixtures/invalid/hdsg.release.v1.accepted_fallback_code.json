@@ -1,0 +1,14 @@
+{
+  "schema_version": "hdsg.release.v1",
+  "identity": {},
+  "authority": {},
+  "content": {},
+  "evidence": {},
+  "verification": {
+    "release_mode": "VLM_ACCEPTED",
+    "candidate_status": "ACCEPTED",
+    "gate_outcome": "ACCEPTED",
+    "primary_reason_code": "RG_ACTION_LANGUAGE_DETECTED",
+    "reason_codes": ["RG_ACTION_LANGUAGE_DETECTED"]
+  }
+}

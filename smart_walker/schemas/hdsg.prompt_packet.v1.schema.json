@@ -1,0 +1,581 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:hdsg:schema:prompt-packet:v1",
+  "title": "HDSG Restricted Prompt Packet v1",
+  "description": "Restricted and traceable input supplied to the generative model.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "routing",
+    "image",
+    "requirements",
+    "permitted_facts",
+    "response_constraints",
+    "generation",
+    "expected_response_schema"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hdsg.prompt_packet.v1"
+    },
+    "routing": {
+      "$ref": "#/definitions/routing"
+    },
+    "image": {
+      "$ref": "#/definitions/image"
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/definitions/requirement"
+      }
+    },
+    "permitted_facts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/permitted_fact"
+      }
+    },
+    "response_constraints": {
+      "$ref": "#/definitions/response_constraints"
+    },
+    "generation": {
+      "$ref": "#/definitions/generation"
+    },
+    "expected_response_schema": {
+      "const": "hdsg.vlm_candidate.v1"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "routing": {
+            "properties": {
+              "response_mode": {
+                "const": "AUTOMATIC"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "response_constraints": {
+            "properties": {
+              "visual_only_observations_allowed": {
+                "const": false
+              },
+              "max_reason_clauses": {
+                "const": 3
+              },
+              "max_visual_observations": {
+                "const": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "routing": {
+            "properties": {
+              "response_mode": {
+                "const": "MORE_DETAIL"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "response_constraints": {
+            "properties": {
+              "visual_only_observations_allowed": {
+                "const": true
+              },
+              "max_reason_clauses": {
+                "const": 4
+              },
+              "max_visual_observations": {
+                "const": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "routing": {
+            "properties": {
+              "response_mode": {
+                "const": "REASSESSMENT"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "response_constraints": {
+            "properties": {
+              "visual_only_observations_allowed": {
+                "const": true
+              },
+              "max_reason_clauses": {
+                "const": 3
+              },
+              "max_visual_observations": {
+                "const": 2
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "fact_id": {
+      "type": "string",
+      "pattern": "^(sector:(left|centre|right)|object:[A-Za-z0-9._-]+|condition:[a-z][a-z0-9._-]*)$"
+    },
+    "measurement_id": {
+      "type": "string",
+      "pattern": "^m:[a-z][a-z0-9._-]*(?::[a-z0-9._-]+)+$"
+    },
+    "measurement": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["measurement_id", "unit", "source_pointer"],
+      "properties": {
+        "measurement_id": {
+          "$ref": "#/definitions/measurement_id"
+        },
+        "unit": {
+          "enum": ["metre"]
+        },
+        "source_pointer": {
+          "type": "string",
+          "pattern": "^/(objects/[0-9]+/distance_m|sectors/(left|centre|right)/clearance_m)$"
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt_id",
+        "event_id",
+        "observation_id",
+        "request_id",
+        "response_mode",
+        "prompt_profile_id"
+      ],
+      "properties": {
+        "prompt_id": {
+          "type": "string",
+          "pattern": "^prompt_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+        },
+        "event_id": {
+          "type": "string",
+          "pattern": "^evt_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+        },
+        "observation_id": {
+          "type": "string",
+          "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+        },
+        "request_id": {
+          "enum": ["AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"]
+        },
+        "response_mode": {
+          "enum": ["AUTOMATIC", "MORE_DETAIL", "REASSESSMENT"]
+        },
+        "prompt_profile_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["included", "observation_id", "rgb_ref", "transform"],
+      "properties": {
+        "included": {
+          "const": true
+        },
+        "observation_id": {
+          "type": "string",
+          "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+        },
+        "rgb_ref": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "transform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "longest_side_px",
+            "preserve_aspect_ratio",
+            "encoding",
+            "jpeg_quality"
+          ],
+          "properties": {
+            "longest_side_px": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 4096
+            },
+            "preserve_aspect_ratio": {
+              "const": true
+            },
+            "encoding": {
+              "enum": ["jpeg", "png"]
+            },
+            "jpeg_quality": {
+              "type": ["integer", "null"],
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "encoding": {
+                    "const": "jpeg"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "jpeg_quality": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "jpeg_quality": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "role", "match", "fact_ids"],
+      "properties": {
+        "requirement_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "role": {
+          "enum": [
+            "ACTION_BINDING",
+            "SCENE_BINDING",
+            "REDIRECT_INTENDED",
+            "REDIRECT_SELECTED",
+            "MOVING_OBJECT_ALERT"
+          ]
+        },
+        "match": {
+          "enum": ["ANY_OF", "ALL_OF"]
+        },
+        "fact_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/fact_id"
+          }
+        }
+      }
+    },
+    "permitted_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "fact_type",
+        "name",
+        "state",
+        "bearing",
+        "grounding",
+        "motion_state",
+        "supporting_fact_ids",
+        "measurement"
+      ],
+      "properties": {
+        "fact_id": {
+          "$ref": "#/definitions/fact_id"
+        },
+        "fact_type": {
+          "enum": ["SECTOR", "OBJECT", "CONDITION"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "state": {
+          "enum": [
+            "CLEAR",
+            "CONSTRAINED",
+            "BLOCKED",
+            "VERY_CLOSE",
+            "NEAR",
+            "MID",
+            "FAR",
+            "PRESENT",
+            "ACTIVE"
+          ]
+        },
+        "bearing": {
+          "type": ["string", "null"],
+          "enum": [null, "LEFT", "CENTRE", "RIGHT"]
+        },
+        "grounding": {
+          "type": ["string", "null"],
+          "enum": [null, "YOLO_D455F", "YOLO_ONLY", "DERIVED"]
+        },
+        "motion_state": {
+          "type": ["string", "null"],
+          "enum": [null, "UNCONFIRMED", "STATIONARY", "MOVING"]
+        },
+        "supporting_fact_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/fact_id"
+          }
+        },
+        "measurement": {
+          "$ref": "#/definitions/measurement"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "fact_type": {
+                "const": "SECTOR"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fact_id": {
+                "pattern": "^sector:(left|centre|right)$"
+              },
+              "state": {
+                "enum": ["CLEAR", "CONSTRAINED", "BLOCKED"]
+              },
+              "bearing": {
+                "type": "null"
+              },
+              "grounding": {
+                "type": "null"
+              },
+              "motion_state": {
+                "type": "null"
+              },
+              "measurement": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_type": {
+                "const": "OBJECT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fact_id": {
+                "pattern": "^object:[A-Za-z0-9._-]+$"
+              },
+              "state": {
+                "enum": ["VERY_CLOSE", "NEAR", "MID", "FAR", "PRESENT"]
+              },
+              "bearing": {
+                "enum": ["LEFT", "CENTRE", "RIGHT"]
+              },
+              "grounding": {
+                "enum": ["YOLO_D455F", "YOLO_ONLY"]
+              },
+              "motion_state": {
+                "enum": ["UNCONFIRMED", "STATIONARY", "MOVING"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fact_type": {
+                "const": "CONDITION"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fact_id": {
+                "pattern": "^condition:[a-z][a-z0-9._-]*$"
+              },
+              "state": {
+                "const": "ACTIVE"
+              },
+              "bearing": {
+                "type": "null"
+              },
+              "grounding": {
+                "const": "DERIVED"
+              },
+              "motion_state": {
+                "type": "null"
+              },
+              "measurement": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "response_constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason_only",
+        "action_instruction_allowed",
+        "authoritative_numbers_allowed",
+        "measurement_placeholders_required",
+        "unlisted_fact_mentions_allowed",
+        "visual_only_observations_allowed",
+        "max_reason_clauses",
+        "max_visual_observations",
+        "max_text_chars",
+        "language"
+      ],
+      "properties": {
+        "reason_only": {
+          "const": true
+        },
+        "action_instruction_allowed": {
+          "const": false
+        },
+        "authoritative_numbers_allowed": {
+          "const": false
+        },
+        "measurement_placeholders_required": {
+          "const": true
+        },
+        "unlisted_fact_mentions_allowed": {
+          "const": false
+        },
+        "visual_only_observations_allowed": {
+          "type": "boolean"
+        },
+        "max_reason_clauses": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "max_visual_observations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "max_text_chars": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "language": {
+          "const": "en-GB"
+        }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "model_hash",
+        "quantisation",
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "system_prompt_id",
+        "system_prompt_hash",
+        "constraint_id",
+        "constraint_hash"
+      ],
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "model_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        },
+        "quantisation": {
+          "type": ["string", "null"],
+          "maxLength": 64
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "top_p": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "system_prompt_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "system_prompt_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        },
+        "constraint_id": {
+          "const": "hdsg.vlm_candidate.v1"
+        },
+        "constraint_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

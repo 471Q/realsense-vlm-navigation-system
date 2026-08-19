@@ -1,0 +1,36 @@
+{
+  "schema_set_version": "hdsg.schemas.v2",
+  "json_schema_draft": "draft-07",
+  "supersedes": "hdsg.schemas.v1",
+  "notes": [
+    "The four record schemas are byte-identical to hdsg.schemas.v1 and retain their v1 record identifiers, because no record contract changed. The set version advances because the GBNF grammar it contains changed after the v1 freeze and the v1 manifest was never regenerated.",
+    "The grammar is referenced at the path the runtime loads it from, rather than being copied into this directory. A second copy is what allowed the v1 digest to drift from the executing file without detection."
+  ],
+  "files": [
+    {
+      "record_schema": "hdsg.fact_packet.v1",
+      "path": "hdsg.fact_packet.v1.schema.json",
+      "sha256": "32b53c86ee4f6af7efceb5b367f1b87a4d8bc1b912d25e37de3dbcc99090c18b"
+    },
+    {
+      "record_schema": "hdsg.prompt_packet.v1",
+      "path": "hdsg.prompt_packet.v1.schema.json",
+      "sha256": "5ef6f061730b7adab0a557e21cd2ea25647ba2b2061198ed472c8bba8b69f06f"
+    },
+    {
+      "record_schema": "hdsg.vlm_candidate.v1",
+      "path": "hdsg.vlm_candidate.v1.schema.json",
+      "sha256": "43475ee839e889630e076dd305e9c583478d727627ecea91530e2241390e9ebb"
+    },
+    {
+      "record_schema": "hdsg.release.v1",
+      "path": "hdsg.release.v1.schema.json",
+      "sha256": "6b1133478ffb0beeb7ad9f171226d36f0ace753c45c256cda51902cc69dcfe1e"
+    },
+    {
+      "record_schema": "hdsg.vlm_candidate.v1",
+      "path": "../config/hdsg.vlm_candidate.v1.gbnf",
+      "sha256": "d096e3787e0cb75d31651e88634157c63a562166db3c5598074195fd8d6b946b"
+    }
+  ]
+}

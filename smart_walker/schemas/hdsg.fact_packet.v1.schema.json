@@ -1,0 +1,856 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:hdsg:schema:fact-packet:v1",
+  "title": "HDSG Full Fact Packet v1",
+  "description": "Authoritative pre-VLM evidence for one HDSG event.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "observation",
+    "interaction",
+    "objects",
+    "sectors",
+    "deterministic",
+    "configuration"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hdsg.fact_packet.v1"
+    },
+    "identity": {
+      "$ref": "#/definitions/identity"
+    },
+    "observation": {
+      "$ref": "#/definitions/observation"
+    },
+    "interaction": {
+      "$ref": "#/definitions/interaction"
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/object_fact"
+      }
+    },
+    "sectors": {
+      "$ref": "#/definitions/sectors"
+    },
+    "deterministic": {
+      "$ref": "#/definitions/deterministic"
+    },
+    "configuration": {
+      "$ref": "#/definitions/configuration"
+    }
+  },
+  "definitions": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "observation_id": {
+      "type": "string",
+      "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "ticket_id": {
+      "type": ["string", "null"],
+      "pattern": "^ticket_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "scenario_id": {
+      "type": ["string", "null"],
+      "pattern": "^scenario_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "fact_id": {
+      "type": "string",
+      "pattern": "^(sector:(left|centre|right)|object:[A-Za-z0-9._-]+|condition:[a-z][a-z0-9._-]*)$"
+    },
+    "measurement_id": {
+      "type": "string",
+      "pattern": "^m:[a-z][a-z0-9._-]*(?::[a-z0-9._-]+)+$"
+    },
+    "reason_code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "event_id",
+        "observation_id",
+        "ticket_id",
+        "scenario_id",
+        "source_mode"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/definitions/run_id"
+        },
+        "event_id": {
+          "$ref": "#/definitions/event_id"
+        },
+        "observation_id": {
+          "$ref": "#/definitions/observation_id"
+        },
+        "ticket_id": {
+          "$ref": "#/definitions/ticket_id"
+        },
+        "scenario_id": {
+          "$ref": "#/definitions/scenario_id"
+        },
+        "source_mode": {
+          "enum": ["LIVE", "REPLAY"]
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "captured_at_utc",
+        "sensor_timestamp_ms",
+        "camera_model",
+        "device_id",
+        "rgb_ref",
+        "depth_ref",
+        "mirror_view",
+        "depth_aligned_to_rgb",
+        "rgb_valid",
+        "depth_valid",
+        "measurement_state",
+        "validity_reason_codes",
+        "rear_state"
+      ],
+      "properties": {
+        "captured_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sensor_timestamp_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "camera_model": {
+          "const": "Intel RealSense D455f"
+        },
+        "device_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+        },
+        "rgb_ref": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "depth_ref": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "mirror_view": {
+          "type": "boolean"
+        },
+        "depth_aligned_to_rgb": {
+          "type": "boolean"
+        },
+        "rgb_valid": {
+          "type": "boolean"
+        },
+        "depth_valid": {
+          "type": "boolean"
+        },
+        "measurement_state": {
+          "enum": ["VALID", "PARTIAL", "INVALID"]
+        },
+        "validity_reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/reason_code"
+          }
+        },
+        "rear_state": {
+          "const": "UNOBSERVED"
+        }
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent",
+        "trigger_type",
+        "request_id",
+        "input_method",
+        "control_id",
+        "response_mode",
+        "previous_guidance_signature",
+        "current_guidance_signature"
+      ],
+      "properties": {
+        "intent": {
+          "enum": ["FORWARD", "LEFT", "RIGHT", "BACKWARD", "NONE"]
+        },
+        "trigger_type": {
+          "enum": [
+            "MOTION_INTENT_STARTED",
+            "MOTION_DECISION_CHANGED",
+            "SELECTED_SECTOR_CHANGED",
+            "BINDING_FACT_CHANGED",
+            "SCENE_ADVISORY_CHANGED",
+            "MEASUREMENT_VALIDITY_CHANGED",
+            "MOVING_OBJECT_CHANGED",
+            "USER_REQUESTED"
+          ]
+        },
+        "request_id": {
+          "enum": ["AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"]
+        },
+        "input_method": {
+          "enum": ["SYSTEM", "ONSCREEN_CONTROL", "KEYBOARD_SHORTCUT"]
+        },
+        "control_id": {
+          "type": ["string", "null"],
+          "enum": [null, "MORE_DETAIL", "REASSESS"]
+        },
+        "response_mode": {
+          "enum": ["AUTOMATIC", "MORE_DETAIL", "REASSESSMENT"]
+        },
+        "previous_guidance_signature": {
+          "type": ["string", "null"],
+          "maxLength": 512
+        },
+        "current_guidance_signature": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "object_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "detection_id",
+        "track_id",
+        "raw_label",
+        "canonical_label",
+        "ontology_class",
+        "confidence",
+        "bbox_xyxy",
+        "bearing",
+        "distance_m",
+        "distance_valid",
+        "distance_method",
+        "distance_bin",
+        "grounding",
+        "is_hazard",
+        "motion_state",
+        "motion_confidence",
+        "motion_reason_codes",
+        "camera_motion_compensated",
+        "display_bounding_box"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "pattern": "^object:[A-Za-z0-9._-]+$"
+        },
+        "detection_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "track_id": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "raw_label": {
+          "$ref": "#/definitions/non_empty_string"
+        },
+        "canonical_label": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ontology_class": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "bbox_xyxy": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "bearing": {
+          "enum": ["LEFT", "CENTRE", "RIGHT"]
+        },
+        "distance_m": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0
+        },
+        "distance_valid": {
+          "type": "boolean"
+        },
+        "distance_method": {
+          "type": ["string", "null"],
+          "enum": [null, "D455F_LOWER_BBOX_MEDIAN", "D455F_BBOX_MEDIAN"]
+        },
+        "distance_bin": {
+          "enum": ["VERY_CLOSE", "NEAR", "MID", "FAR", "UNKNOWN"]
+        },
+        "grounding": {
+          "enum": ["YOLO_D455F", "YOLO_ONLY"]
+        },
+        "is_hazard": {
+          "type": "boolean"
+        },
+        "motion_state": {
+          "enum": ["UNCONFIRMED", "STATIONARY", "MOVING"]
+        },
+        "motion_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "motion_reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/reason_code"
+          }
+        },
+        "camera_motion_compensated": {
+          "type": "boolean"
+        },
+        "display_bounding_box": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "distance_valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "distance_m": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "distance_method": {
+                "enum": ["D455F_LOWER_BBOX_MEDIAN", "D455F_BBOX_MEDIAN"]
+              },
+              "grounding": {
+                "const": "YOLO_D455F"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "distance_m": {
+                "type": "null"
+              },
+              "distance_method": {
+                "type": "null"
+              },
+              "distance_bin": {
+                "const": "UNKNOWN"
+              },
+              "grounding": {
+                "const": "YOLO_ONLY"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "motion_state": {
+                "const": "MOVING"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "track_id": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "display_bounding_box": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "display_bounding_box": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "clearance_m",
+        "valid",
+        "invalid_reason_codes",
+        "status"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "pattern": "^sector:(left|centre|right)$"
+        },
+        "clearance_m": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "invalid_reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/reason_code"
+          }
+        },
+        "status": {
+          "enum": ["CLEAR", "CONSTRAINED", "BLOCKED", "UNKNOWN"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "clearance_m": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "status": {
+                "enum": ["CLEAR", "CONSTRAINED", "BLOCKED"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "clearance_m": {
+                "type": "null"
+              },
+              "status": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "centre", "right"],
+      "properties": {
+        "left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/sector"
+            },
+            {
+              "properties": {
+                "fact_id": {
+                  "const": "sector:left"
+                }
+              }
+            }
+          ]
+        },
+        "centre": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/sector"
+            },
+            {
+              "properties": {
+                "fact_id": {
+                  "const": "sector:centre"
+                }
+              }
+            }
+          ]
+        },
+        "right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/sector"
+            },
+            {
+              "properties": {
+                "fact_id": {
+                  "const": "sector:right"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "rule_fired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact_id", "rule_id", "supporting_fact_ids"],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "pattern": "^condition:[a-z][a-z0-9._-]*$"
+        },
+        "rule_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "supporting_fact_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/fact_id"
+          }
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_fact_id",
+        "accepted_fact_ids",
+        "source",
+        "scoreable",
+        "unscoreable_reason"
+      ],
+      "properties": {
+        "primary_fact_id": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/fact_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accepted_fact_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/fact_id"
+          }
+        },
+        "source": {
+          "enum": ["OBJECT", "SECTOR", "CONDITION", "BOTH", "NONE"]
+        },
+        "scoreable": {
+          "type": "boolean"
+        },
+        "unscoreable_reason": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "deterministic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_advisory",
+        "sector_advisory",
+        "composite_advisory",
+        "scene_advisory",
+        "motion_decision",
+        "selected_sector",
+        "interaction_state",
+        "clear_sectors",
+        "selection_status",
+        "selection_options",
+        "rules_fired",
+        "scene_binding",
+        "action_binding",
+        "scene_fact_required"
+      ],
+      "properties": {
+        "object_advisory": {
+          "enum": ["SAFE", "CAUTION", "STOP"]
+        },
+        "sector_advisory": {
+          "enum": ["SAFE", "CAUTION", "STOP"]
+        },
+        "composite_advisory": {
+          "enum": ["SAFE", "CAUTION", "STOP"]
+        },
+        "scene_advisory": {
+          "enum": ["SAFE", "CAUTION", "STOP"]
+        },
+        "motion_decision": {
+          "type": ["string", "null"],
+          "enum": [null, "PROCEED", "SLOW", "REDIRECT", "STOP"]
+        },
+        "selected_sector": {
+          "enum": ["LEFT", "CENTRE", "RIGHT", "NONE"]
+        },
+        "interaction_state": {
+          "enum": [
+            "GUIDANCE_ACTIVE",
+            "AWAITING_SECTOR_CHOICE",
+            "REORIENTATION_REQUIRED",
+            "POST_REORIENTATION_STABILISING"
+          ]
+        },
+        "clear_sectors": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["LEFT", "CENTRE", "RIGHT"]
+          }
+        },
+        "selection_status": {
+          "enum": ["SELECTED", "CHOICE_REQUIRED", "UNAVAILABLE"]
+        },
+        "selection_options": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["LEFT", "CENTRE", "RIGHT"]
+          }
+        },
+        "rules_fired": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/rule_fired"
+          }
+        },
+        "scene_binding": {
+          "$ref": "#/definitions/binding"
+        },
+        "action_binding": {
+          "$ref": "#/definitions/binding"
+        },
+        "scene_fact_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "nullable_non_negative_number": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "software_version",
+        "rule_set_version",
+        "configuration_hash",
+        "ontology_hash",
+        "detector_model",
+        "detector_confidence_threshold",
+        "thresholds_m",
+        "post_reorientation_stable_observations",
+        "post_reorientation_max_variation_m",
+        "sector_geometry",
+        "motion_tracking",
+        "timing_ms"
+      ],
+      "properties": {
+        "software_version": {
+          "$ref": "#/definitions/non_empty_string"
+        },
+        "rule_set_version": {
+          "$ref": "#/definitions/non_empty_string"
+        },
+        "configuration_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        },
+        "ontology_hash": {
+          "type": "string",
+          "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+        },
+        "detector_model": {
+          "$ref": "#/definitions/non_empty_string"
+        },
+        "detector_confidence_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "thresholds_m": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_stop_below",
+            "object_caution_below",
+            "hazard_stop_at_or_below",
+            "sector_blocked_below",
+            "sector_clear_at_or_above",
+            "binding_tie_margin",
+            "sector_choice_tolerance"
+          ],
+          "properties": {
+            "object_stop_below": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "object_caution_below": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "hazard_stop_at_or_below": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "sector_blocked_below": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "sector_clear_at_or_above": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "binding_tie_margin": {
+              "type": "number",
+              "minimum": 0
+            },
+            "sector_choice_tolerance": {
+              "$ref": "#/definitions/nullable_non_negative_number"
+            }
+          }
+        },
+        "post_reorientation_stable_observations": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "post_reorientation_max_variation_m": {
+          "$ref": "#/definitions/nullable_non_negative_number"
+        },
+        "sector_geometry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["top_fraction", "bottom_fraction", "horizontal_divisions"],
+          "properties": {
+            "top_fraction": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "bottom_fraction": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "horizontal_divisions": {
+              "const": 3
+            }
+          }
+        },
+        "motion_tracking": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "tracker_id",
+            "camera_motion_compensation",
+            "movement_threshold_m",
+            "confirmation_observations",
+            "lost_after_observations"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "tracker_id": {
+              "type": ["string", "null"],
+              "maxLength": 128
+            },
+            "camera_motion_compensation": {
+              "type": ["string", "null"],
+              "maxLength": 128
+            },
+            "movement_threshold_m": {
+              "$ref": "#/definitions/nullable_non_negative_number"
+            },
+            "confirmation_observations": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            },
+            "lost_after_observations": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            }
+          }
+        },
+        "timing_ms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "restrictive_transition_persistence",
+            "recovery_transition_persistence",
+            "reassessment_cooldown",
+            "more_detail_freshness"
+          ],
+          "properties": {
+            "restrictive_transition_persistence": {
+              "$ref": "#/definitions/nullable_non_negative_number"
+            },
+            "recovery_transition_persistence": {
+              "$ref": "#/definitions/nullable_non_negative_number"
+            },
+            "reassessment_cooldown": {
+              "$ref": "#/definitions/nullable_non_negative_number"
+            },
+            "more_detail_freshness": {
+              "$ref": "#/definitions/nullable_non_negative_number"
+            }
+          }
+        }
+      }
+    }
+  }
+}

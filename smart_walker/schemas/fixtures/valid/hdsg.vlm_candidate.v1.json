@@ -1,0 +1,20 @@
+{
+  "schema_version": "hdsg.vlm_candidate.v1",
+  "reason_clauses": [
+    {
+      "clause_id": "reason:1",
+      "requirement_ids": ["action_reason"],
+      "fact_ids": ["sector:right"],
+      "measurement_ids": ["m:sector:right:clearance"],
+      "text_template": "The right sector is clear for {{m:sector:right:clearance}}."
+    },
+    {
+      "clause_id": "reason:2",
+      "requirement_ids": ["scene_reason"],
+      "fact_ids": ["sector:left"],
+      "measurement_ids": ["m:sector:left:clearance"],
+      "text_template": "The left sector has limited clearance at {{m:sector:left:clearance}}."
+    }
+  ],
+  "visual_observations": []
+}
