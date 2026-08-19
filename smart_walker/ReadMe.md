@@ -161,6 +161,30 @@ Recalculate and replace it if that model file changes. A run can start without
 `--model_hash`, but its telemetry then records an unverified-model digest and is
 unsuitable for the formal model-comparison results.
 
+### The interface
+
+`--show` starts the web interface and prints its address, by default
+<http://127.0.0.1:8321/>. Open that in a browser. The camera view, sector bands,
+object boxes, caption, controls and the question panel are all there.
+
+**This changed on 19 August 2026.** `--show` previously opened an OpenCV window.
+That window is still available with `--ui opencv` and is unchanged, but the web
+interface is now the default and the one the evaluation records against. Use
+`--ui_host` and `--ui_port` to move the server; the host defaults to loopback, so
+nothing is exposed off the machine unless that is changed deliberately.
+
+The browser is sent the plain camera frame on one channel and the deterministic
+state as JSON on another, and draws the overlays itself. No overlay is composited
+into the video, and the only release field the page ever receives is
+`caption_text`, so the sole-release-path property is unchanged.
+
+The question panel on the right accepts typed questions. Question routing is
+specified in `HDSG_OPEN_QUESTION_ROUTING_POLICY.md` and is **not yet implemented**:
+until it is, a question receives a fixed reply pointing at More detail and
+Reassess, and reaches no model. The panel keeps a visible history of the session's
+questions, but no history is ever supplied to the model, which continues to answer
+each request statelessly.
+
 The script always uses persistent BoT-SORT tracking. The normal display shows a
 bounding box only after the local movement classifier confirms that a tracked
 object is moving. Add `--debug_objects` to show every detection during calibration.

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDSG smart walker</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c2027;
+    --panel-edge: #2a3038;
+    --text: #e8eaed;
+    --muted: #98a0ab;
+    --clear: #27ae60;
+    --constrained: #e0a020;
+    --blocked: #d94141;
+    --unknown: #6b7280;
+    --accent: #4a9eff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--panel-edge);
+    flex: none;
+  }
+  header .title { font-weight: 600; letter-spacing: .3px; }
+  header .field { color: var(--muted); font-size: 13px; }
+  header .field b { color: var(--text); font-weight: 600; }
+  #connection { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #connection.live { color: var(--clear); }
+  #connection.lost { color: var(--blocked); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  /* Left: camera and controls */
+  .stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 14px;
+    gap: 12px;
+  }
+  .viewport {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: #000;
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* The frame and the overlay occupy the same box so source-pixel coordinates line up. */
+  #camera, #overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  #badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .4px;
+    background: var(--clear);
+    color: #fff;
+  }
+  #badge.none { background: var(--blocked); }
+  #notice {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    padding: 5px 12px;
+    border-radius: 4px;
+    background: rgba(224,160,32,.92);
+    color: #1a1a1a;
+    font-weight: 600;
+    font-size: 13px;
+    display: none;
+  }
+
+  .caption {
+    flex: none;
+    min-height: 62px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    font-size: 15px;
+  }
+  .caption.idle { color: var(--muted); font-style: italic; }
+  .caption .mode {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .controls { flex: none; display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: #262c35;
+    border: 1px solid var(--panel-edge);
+    border-radius: 5px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #2f3742; border-color: #3d4650; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .controls .spacer { width: 12px; }
+
+  /* Right: chat */
+  .chat {
+    width: 380px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-left: 1px solid var(--panel-edge);
+  }
+  .chat h2 {
+    margin: 0;
+    padding: 12px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--panel-edge);
+  }
+  #log { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  #log .empty { color: var(--muted); font-style: italic; text-align: center; margin-top: 20px; }
+  .turn { display: flex; flex-direction: column; gap: 4px; }
+  .turn .q, .turn .a { padding: 8px 11px; border-radius: 6px; font-size: 14px; }
+  .turn .q { background: #2b3542; align-self: flex-end; max-width: 90%; }
+  .turn .a { background: #232a33; border-left: 2px solid var(--accent); }
+  .turn .meta { font-size: 11px; color: var(--muted); }
+  .composer { flex: none; display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--panel-edge); }
+  .composer input {
+    flex: 1;
+    font: inherit;
+    color: var(--text);
+    background: #262c35;
+    border: 1px solid var(--panel-edge);
+    border-radius: 5px;
+    padding: 9px 11px;
+  }
+  .composer input:focus { outline: none; border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">HDSG</span>
+  <span class="field">intent <b id="intent">NONE</b></span>
+  <span class="field">state <b id="worker">MONITORING</b></span>
+  <span id="connection">connecting</span>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="viewport">
+      <img id="camera" src="/stream.mjpg" alt="camera view">
+      <canvas id="overlay" width="640" height="480"></canvas>
+      <div id="badge">CLEAR SECTORS: &ndash;</div>
+      <div id="notice"></div>
+    </div>
+
+    <div class="caption idle" id="caption">No movement intent expressed.</div>
+
+    <div class="controls">
+      <button data-intent="LEFT">Left</button>
+      <button data-intent="FORWARD">Forward</button>
+      <button data-intent="RIGHT">Right</button>
+      <button data-intent="BACKWARD">Back</button>
+      <button data-intent="NONE">Stop intent</button>
+      <span class="spacer"></span>
+      <button data-control="MORE_DETAIL" id="btn-detail">More detail</button>
+      <button data-control="REASSESS" id="btn-reassess">Reassess</button>
+      <span class="spacer"></span>
+      <button data-control="LEFT" id="btn-choose-left" hidden>Select left</button>
+      <button data-control="RIGHT" id="btn-choose-right" hidden>Select right</button>
+    </div>
+  </section>
+
+  <aside class="chat">
+    <h2>Ask about the scene</h2>
+    <div id="log"><div class="empty">Ask what is on your left, right or ahead.</div></div>
+    <form class="composer" id="composer" autocomplete="off">
+      <input id="question" placeholder="What's on my left?" maxlength="200">
+      <button type="submit">Send</button>
+    </form>
+  </aside>
+</main>
+
+<script>
+const SECTOR_COLOURS = {
+  CLEAR:       'rgba(39,174,96,0.18)',
+  CONSTRAINED: 'rgba(224,160,32,0.18)',
+  BLOCKED:     'rgba(217,65,65,0.20)',
+  UNKNOWN:     'rgba(107,114,128,0.18)'
+};
+const SECTOR_EDGES = {
+  CLEAR: '#27ae60', CONSTRAINED: '#e0a020', BLOCKED: '#d94141', UNKNOWN: '#6b7280'
+};
+const SECTOR_ORDER = ['left', 'centre', 'right'];
+
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+let renderedTurns = 0;
+
+function send(payload) {
+  fetch('/input', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).catch(() => {});
+}
+
+// Sector bands and object boxes are drawn here, from the same structured values the telemetry
+// records. The MJPEG stream underneath carries no overlay of its own.
+function draw(state) {
+  // The canvas works in source-frame pixels so detector boxes need no transform. The server
+  // reports the frame size, so a run at a resolution other than the default stays registered.
+  if (state.frame_width && state.frame_height &&
+      (overlay.width !== state.frame_width || overlay.height !== state.frame_height)) {
+    overlay.width = state.frame_width;
+    overlay.height = state.frame_height;
+  }
+  const w = overlay.width, h = overlay.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!state.sectors) return;
+
+  const y1 = Math.round(0.55 * h), y2 = Math.round(0.95 * h);
+  SECTOR_ORDER.forEach((name, i) => {
+    const sector = state.sectors[name];
+    if (!sector) return;
+    const x1 = Math.round(i * w / 3), x2 = Math.round((i + 1) * w / 3);
+    const status = sector.status || 'UNKNOWN';
+    ctx.fillStyle = SECTOR_COLOURS[status] || SECTOR_COLOURS.UNKNOWN;
+    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.strokeStyle = SECTOR_EDGES[status] || SECTOR_EDGES.UNKNOWN;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x1 + 1, y1 + 1, x2 - x1 - 2, y2 - y1 - 2);
+
+    const value = sector.clearance_m == null ? '?' : sector.clearance_m.toFixed(2) + 'm';
+    ctx.font = '600 15px "Segoe UI", sans-serif';
+    ctx.fillStyle = SECTOR_EDGES[status] || SECTOR_EDGES.UNKNOWN;
+    ctx.fillText(`${name.toUpperCase()} ${value} ${status}`, x1 + 8, y1 - 8);
+  });
+
+  (state.objects || []).forEach(obj => {
+    const box = obj.bbox_xyxy;
+    if (!box || box.length !== 4) return;
+    const moving = obj.motion_state === 'MOVING';
+    ctx.strokeStyle = moving ? '#d94141' : '#4a9eff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
+    const distance = obj.distance_m == null ? '?' : obj.distance_m.toFixed(2) + 'm';
+    const label = `${obj.label || 'object'} ${distance}${moving ? ' MOVING' : ''}`;
+    ctx.font = '600 14px "Segoe UI", sans-serif';
+    const width = ctx.measureText(label).width;
+    const ty = Math.max(16, box[1] - 6);
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(box[0], ty - 14, width + 8, 18);
+    ctx.fillStyle = moving ? '#ff8080' : '#8ec5ff';
+    ctx.fillText(label, box[0] + 4, ty);
+  });
+}
+
+function applyState(state) {
+  document.getElementById('intent').textContent = state.intent || 'NONE';
+  document.getElementById('worker').textContent = state.worker_state || '—';
+
+  const clear = (state.clear_sectors || []);
+  const badge = document.getElementById('badge');
+  badge.textContent = 'CLEAR SECTORS: ' + (clear.length ? clear.join(' + ') : 'NONE');
+  badge.classList.toggle('none', clear.length === 0);
+
+  const caption = document.getElementById('caption');
+  if (state.caption_text) {
+    caption.classList.remove('idle');
+    const mode = state.release_mode ? `<span class="mode">${state.release_mode}</span>` : '';
+    caption.innerHTML = mode + state.caption_text.replace(/[<>&]/g, c =>
+      ({'<': '&lt;', '>': '&gt;', '&': '&amp;'})[c]);
+  } else {
+    caption.classList.add('idle');
+    caption.textContent = 'No movement intent expressed.';
+  }
+
+  const notice = document.getElementById('notice');
+  if (state.notice) { notice.textContent = state.notice; notice.style.display = 'block'; }
+  else { notice.style.display = 'none'; }
+
+  const enabled = state.controls_enabled || {};
+  document.getElementById('btn-detail').disabled = enabled.more_detail === false;
+  document.getElementById('btn-reassess').disabled = enabled.reassess === false;
+
+  const options = state.selection_options || [];
+  document.getElementById('btn-choose-left').hidden = !options.includes('LEFT');
+  document.getElementById('btn-choose-right').hidden = !options.includes('RIGHT');
+
+  document.querySelectorAll('[data-intent]').forEach(b =>
+    b.classList.toggle('active', b.dataset.intent === (state.intent || 'NONE')));
+
+  renderChat(state.chat_log || []);
+  draw(state);
+}
+
+function renderChat(turns) {
+  const log = document.getElementById('log');
+  if (turns.length < renderedTurns) { log.innerHTML = ''; renderedTurns = 0; }
+  if (turns.length === renderedTurns) return;
+  if (renderedTurns === 0) log.innerHTML = '';
+  turns.slice(renderedTurns).forEach(turn => {
+    const el = document.createElement('div');
+    el.className = 'turn';
+    const q = document.createElement('div');
+    q.className = 'q';
+    q.textContent = turn.question;
+    const a = document.createElement('div');
+    a.className = 'a';
+    a.textContent = turn.answer;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = [turn.at, turn.route].filter(Boolean).join(' · ');
+    el.append(q, a, meta);
+    log.appendChild(el);
+  });
+  renderedTurns = turns.length;
+  log.scrollTop = log.scrollHeight;
+}
+
+function connect() {
+  const source = new EventSource('/events');
+  const status = document.getElementById('connection');
+  source.onopen = () => { status.textContent = 'live'; status.className = 'live'; };
+  source.onmessage = event => {
+    try { applyState(JSON.parse(event.data)); } catch (e) {}
+  };
+  source.onerror = () => {
+    status.textContent = 'reconnecting'; status.className = 'lost';
+  };
+}
+
+document.querySelectorAll('[data-intent]').forEach(button =>
+  button.addEventListener('click', () => send({type: 'intent', direction: button.dataset.intent})));
+document.querySelectorAll('[data-control]').forEach(button =>
+  button.addEventListener('click', () => send({type: 'control', control_id: button.dataset.control})));
+
+document.getElementById('composer').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = document.getElementById('question');
+  const text = input.value.trim();
+  if (!text) return;
+  send({type: 'chat_question', text});
+  input.value = '';
+});
+
+// Keyboard shortcuts match the OpenCV sink's, except while the question box has focus.
+document.addEventListener('keydown', event => {
+  if (document.activeElement === document.getElementById('question')) return;
+  const intents = {w: 'FORWARD', a: 'LEFT', d: 'RIGHT', s: 'BACKWARD', ' ': 'NONE'};
+  const controls = {m: 'MORE_DETAIL', r: 'REASSESS'};
+  const key = event.key.toLowerCase();
+  if (intents[key] !== undefined) { send({type: 'intent', direction: intents[key]}); event.preventDefault(); }
+  else if (controls[key]) { send({type: 'control', control_id: controls[key]}); }
+});
+
+connect();
+</script>
+</body>
+</html>

@@ -31,10 +31,12 @@ try:
     # Import from the robust shared-control pipeline
     import scripts.realsense_shared_control as sw
     import scripts.hdsg_runtime as hdsg
+    from scripts.hdsg_web_ui import WebInterface
 except Exception:
     # Fallback for running directly from scripts folder
     import realsense_shared_control as sw  # type: ignore
     import hdsg_runtime as hdsg  # type: ignore
+    from hdsg_web_ui import WebInterface  # type: ignore
 
 
 def _encode_image(img_bgr: np.ndarray, fmt: str = "jpeg", quality: int = 75) -> Tuple[str, str]:
@@ -525,6 +527,12 @@ def main():
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--half", action="store_true")
     ap.add_argument("--show", action="store_true")
+    ap.add_argument(
+        "--ui", choices=["web", "opencv"], default="web",
+        help="display and input sink used when --show is set",
+    )
+    ap.add_argument("--ui_host", default="127.0.0.1")
+    ap.add_argument("--ui_port", type=int, default=8321)
     ap.add_argument("--debug_lanes", action="store_true")
     ap.add_argument("--debug_objects", action="store_true")
     ap.add_argument("--mirror_view", action="store_true")
@@ -887,7 +895,13 @@ def main():
                         mouse_events["choice"] = control_id
                     break
 
-    if args.show:
+    web_ui: Optional[WebInterface] = None
+    use_web_ui = bool(args.show and args.ui == "web")
+    use_opencv_ui = bool(args.show and args.ui == "opencv")
+    if use_web_ui:
+        web_ui = WebInterface(host=args.ui_host, port=args.ui_port).start()
+        print(f"[hdsg] interface: {web_ui.url}")
+    if use_opencv_ui:
         cv2.namedWindow("HDSG smart walker", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("HDSG smart walker", on_mouse)
 
@@ -980,10 +994,15 @@ def main():
         print(f"[hdsg] evaluation '{args.eval_name}': {telemetry_path}")
     try:
         while True:
-            if hasattr(cv2, "pollKey"):
-                cv2.pollKey()
+            if use_opencv_ui:
+                if hasattr(cv2, "pollKey"):
+                    cv2.pollKey()
+                else:
+                    cv2.waitKey(1)
             else:
-                cv2.waitKey(1)
+                # The OpenCV sink's waitKey doubles as the loop's pacing. Without a window there
+                # is nothing to pump, so yield briefly instead of spinning on the input queues.
+                time.sleep(0.005)
 
             try:
                 frame_packet = cap_q.get_nowait()
@@ -1007,35 +1026,62 @@ def main():
                 mouse_reassess = bool(mouse_events["reassess"])
                 mouse_choice = mouse_events["choice"]
                 mouse_events.update({"more_detail": False, "reassess": False, "choice": None})
+
+            # Browser input joins the same variables the OpenCV sink's mouse callback feeds, so
+            # everything downstream is unaware of which sink a press came from. Intent arrives as
+            # an explicit direction rather than as a key edge, so it is applied here directly.
+            browser_intent: Optional[str] = None
+            browser_questions: list[str] = []
+            if web_ui is not None:
+                for event in web_ui.poll_events():
+                    kind = event.get("type")
+                    if kind == "control":
+                        control_id = event.get("control_id")
+                        if control_id == "MORE_DETAIL":
+                            mouse_more_detail = True
+                        elif control_id == "REASSESS":
+                            mouse_reassess = True
+                        elif control_id in {"LEFT", "RIGHT"}:
+                            mouse_choice = control_id
+                    elif kind == "intent":
+                        direction = str(event.get("direction", "")).upper()
+                        if direction in {"FORWARD", "LEFT", "RIGHT", "BACKWARD", "NONE"}:
+                            browser_intent = direction
+                    elif kind == "chat_question":
+                        text = str(event.get("text", "")).strip()
+                        if text:
+                            browser_questions.append(text[:200])
+
             if keys.quit_requested:
                 break
             if (mouse_choice in {"LEFT", "RIGHT"} and latest_authority is not None
                     and latest_authority.get("interaction_state") == "AWAITING_SECTOR_CHOICE"
                     and mouse_choice in latest_authority.get("selection_options", [])):
                 previous_selected_sector = str(mouse_choice)
+            mapped_intent: Optional[str] = None
             if keys.last_press_ms != last_key_event_ms:
                 last_key_event_ms = keys.last_press_ms
-                direction = keys.last_edge_dir
-                mapped = {
+                mapped_intent = {
                     "forward": "FORWARD",
                     "left": "LEFT",
                     "right": "RIGHT",
                     "backward": "BACKWARD",
                     "idle": "NONE",
-                }[direction]
-                if mapped == "NONE":
-                    active_intent = "NONE"
-                    current_ticket_id = None
-                    confirmed_signature = None
-                    confirmed_authority = None
-                    more_detail_signature = None
+                }[keys.last_edge_dir]
+            elif browser_intent is not None:
+                mapped_intent = browser_intent
+
+            if mapped_intent is not None:
+                # Every intent change resets the confirmed guidance state, so the next inference
+                # tick is treated as a fresh T1 intent expression rather than compared against
+                # the signature confirmed under the previous intent.
+                active_intent = mapped_intent if mapped_intent != "NONE" else "NONE"
+                current_ticket_id = None if mapped_intent == "NONE" else allocate("ticket", "ticket")
+                confirmed_signature = None
+                confirmed_authority = None
+                more_detail_signature = None
+                if mapped_intent == "NONE":
                     publish_idle_release()
-                else:
-                    active_intent = mapped
-                    current_ticket_id = allocate("ticket", "ticket")
-                    confirmed_signature = None
-                    confirmed_authority = None
-                    more_detail_signature = None
 
             more_detail_requested = bool(keys.more_detail_edge or mouse_more_detail)
             if more_detail_requested:
@@ -1098,6 +1144,18 @@ def main():
                         stable_count = 0
                         stable_statuses = None
                         stable_depths = None
+
+            # Question routing is specified in HDSG_OPEN_QUESTION_ROUTING_POLICY.md and is not
+            # implemented: it requires hdsg.schemas.v2 for the classifier's output schema and the
+            # extended candidate grammar. Until then a question receives a deterministic reply
+            # stating so, which is the same shape the policy's Tier 2 uses and reaches no model.
+            for question in browser_questions:
+                web_ui.publish_chat_turn(
+                    question,
+                    "Question answering is not enabled in this build. Use More detail for a fuller "
+                    "description of the current scene, or Reassess for a fresh observation.",
+                    route=None,
+                )
 
             try:
                 inference = inf_out.get_nowait()
@@ -1255,7 +1313,69 @@ def main():
                             )
                             publish_release(release)
 
-            if args.show and display_color is not None:
+            if web_ui is not None and display_color is not None:
+                # The browser receives the unannotated frame on one channel and the structured
+                # state on another, and draws the overlays itself. Nothing is composited here.
+                if web_ui.should_publish_frame():
+                    encoded, buffer = cv2.imencode(
+                        ".jpg", display_color, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                    )
+                    if encoded:
+                        web_ui.publish_frame(buffer.tobytes())
+
+                with state_lock:
+                    release = latest_release
+                    display_generation_inflight = generation_inflight
+                    display_generation_request_id = generation_request_id
+                    display_queued_request_id = queued_request_id
+                if reassessment_inflight:
+                    worker_state = "REASSESSING"
+                elif display_queued_request_id == "MORE_DETAIL":
+                    worker_state = "MORE DETAIL QUEUED"
+                elif display_generation_inflight:
+                    worker_state = {
+                        "MORE_DETAIL": "GENERATING MORE DETAIL",
+                        "REASSESS": "REASSESSING",
+                        "AUTO_GUIDANCE": "GENERATING GUIDANCE",
+                    }.get(display_generation_request_id, "GENERATING")
+                else:
+                    worker_state = "MONITORING"
+                height, width = display_color.shape[:2]
+                web_ui.publish_state({
+                    "frame_width": int(width),
+                    "frame_height": int(height),
+                    "intent": active_intent,
+                    "worker_state": worker_state,
+                    "caption_text": (release or {}).get("content", {}).get("caption_text") or "",
+                    "release_mode": (release or {}).get("verification", {}).get("release_mode"),
+                    "clear_sectors": list((latest_authority or {}).get("clear_sectors", [])),
+                    "selection_options": list((latest_authority or {}).get("selection_options", [])),
+                    "sectors": {
+                        name: {
+                            "status": item["status"],
+                            "clearance_m": item["clearance_m"],
+                        }
+                        for name, item in (latest_sector_facts or {}).items()
+                    },
+                    "objects": [
+                        {
+                            "label": item.get("canonical_label") or item.get("raw_label") or "object",
+                            "distance_m": item.get("distance_m"),
+                            "bbox_xyxy": item.get("bbox_xyxy"),
+                            "bearing": item.get("bearing"),
+                            "motion_state": item.get("motion_state"),
+                        }
+                        for item in latest_objects
+                        if args.debug_objects or item.get("display_bounding_box")
+                    ],
+                    "controls_enabled": {
+                        "more_detail": not reassessment_inflight and not pending_reassessment,
+                        "reassess": not reassessment_inflight and not pending_reassessment,
+                    },
+                    "notice": ui_notice if ui_notice and time.monotonic() < ui_notice_until else None,
+                })
+
+            if use_opencv_ui and display_color is not None:
                 vis = display_color.copy()
                 if latest_sector_facts is not None and args.debug_lanes:
                     height, width = vis.shape[:2]
@@ -1368,6 +1488,8 @@ def main():
         stop_evt.set()
         keyboard.stop()
         pipe.stop()
+        if web_ui is not None:
+            web_ui.stop()
         cv2.destroyAllWindows()
 
 
