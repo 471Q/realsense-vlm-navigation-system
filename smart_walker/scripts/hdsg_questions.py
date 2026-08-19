@@ -111,8 +111,10 @@ TIER0_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # authoritative action together with the facts behind it.
     ("EXPLAIN_DECISION", (
         "which side", "which way", "which direction", "what direction",
+        "which lane", "which path", "which route", "which one",
         "where should i", "where do i", "where to go", "where can i",
         "what should i do", "what do i do", "can i go", "should i go", "can i move",
+        "should i pick", "should i take", "shall i go",
         "is it ok to go", "am i clear", "safe to go", "keep going", "carry on",
     )),
     ("HAZARDS", (
@@ -129,6 +131,13 @@ TIER0_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # names every detected object, so it answers these without an entity-resolution step.
         "anyone", "anybody", "someone", "somebody", "people", "person", "human",
         "what's here", "whats here", "in the room", "what objects", "anything here",
+        # Distance and existence questions with no side named. Section 4 sends these to the
+        # classifier to have their bearing resolved, but the deployed model answers a fair share of
+        # them OUT_OF_SCOPE, and the scene profile already names every object with its measured
+        # distance. A description of the whole scene answers "how far is the chair" truthfully,
+        # where a decline does not. A named side still wins, since the bearings match first.
+        "how far", "how close", "how much room", "how many", "distance to",
+        "is there a", "are there any", "do you see", "can you see", "any sign of",
     )),
 )
 

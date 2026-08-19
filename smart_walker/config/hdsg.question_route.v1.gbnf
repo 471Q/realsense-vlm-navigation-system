@@ -13,13 +13,9 @@ root ::= ws "{" ws schema-field "," ws route-field ws "}" ws
 schema-field ::= "\"schema_version\"" ws ":" ws "\"hdsg.question_route.v1\""
 route-field ::= "\"route\"" ws ":" ws route
 
-route ::= "\"LEFT\""
-        | "\"CENTRE\""
-        | "\"RIGHT\""
-        | "\"HAZARDS\""
-        | "\"EXPLAIN_DECISION\""
-        | "\"SCENE_OVERVIEW\""
-        | "\"REASSESS\""
-        | "\"OUT_OF_SCOPE\""
+# The alternation is kept on one line. This llama.cpp build's GBNF parser ends a rule at the
+# newline, so a continuation line beginning with "|" is read as a new rule and the whole grammar is
+# rejected with "Failed to parse grammar".
+route ::= "\"LEFT\"" | "\"CENTRE\"" | "\"RIGHT\"" | "\"HAZARDS\"" | "\"EXPLAIN_DECISION\"" | "\"SCENE_OVERVIEW\"" | "\"REASSESS\"" | "\"OUT_OF_SCOPE\""
 
 ws ::= [ \t\n\r]*

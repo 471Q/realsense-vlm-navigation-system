@@ -124,10 +124,22 @@ class Tier0KeywordTests(unittest.TestCase):
                        "who won the football", "what's the weather"):
             self.assertIsNone(questions.classify_keywords(phrase), phrase)
 
-    def test_object_questions_without_a_side_reach_the_classifier(self):
-        # Section 4 folds object questions into the bearing routes, and resolving which bearing an
-        # object is on is inference the keyword filter cannot perform.
-        for phrase in ("how far is the chair", "what is that", "is there a door"):
+    def test_distance_and_existence_questions_reach_the_scene_overview(self):
+        # Section 4 sends these to the classifier to have their bearing resolved. The deployed
+        # model answers a fair share of them OUT_OF_SCOPE, and the scene profile already names
+        # every object with its measured distance, so it answers them truthfully where a decline
+        # does not.
+        for phrase in ("how far is the chair", "is there a door", "how close is that",
+                       "can you see a table", "how much room do i have"):
+            self.assertEqual(questions.classify_keywords(phrase), "SCENE_OVERVIEW", phrase)
+
+    def test_a_named_side_beats_a_distance_question(self):
+        self.assertEqual(questions.classify_keywords("how far is the chair on my left"), "LEFT")
+
+    def test_a_bare_referent_question_still_reaches_the_classifier(self):
+        # "What is that" carries no distance, existence or bearing word to key on. Resolving the
+        # referent is inference the keyword filter cannot perform.
+        for phrase in ("what is that", "what's that thing"):
             self.assertIsNone(questions.classify_keywords(phrase), phrase)
 
     def test_substring_does_not_match_a_whole_word_keyword(self):
@@ -485,6 +497,31 @@ class TelemetryRecordTests(unittest.TestCase):
 
 
 class GrammarTests(unittest.TestCase):
+    GRAMMARS = ("hdsg.question_route.v1.gbnf", "hdsg.vlm_candidate.v1.gbnf")
+
+    def test_no_rule_continues_onto_a_following_line(self):
+        """llama.cpp's GBNF parser ends a rule at the newline.
+
+        A continuation line beginning with "|" is read as a new rule, and the server rejects the
+        whole grammar with "Failed to parse grammar". A rejected routing grammar is silent at the
+        code level: every classifier call returns 400, the question declines, and the channel looks
+        merely unhelpful rather than broken. That is what happened, so the shape is pinned here.
+        """
+        for name in self.GRAMMARS:
+            path = Path(__file__).resolve().parents[1] / "config" / name
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                self.assertFalse(line.lstrip().startswith("|"),
+                                 f"{name}:{number} continues a rule onto a new line")
+
+    def test_every_rule_line_is_a_definition_or_a_comment(self):
+        for name in self.GRAMMARS:
+            path = Path(__file__).resolve().parents[1] / "config" / name
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                self.assertIn("::=", stripped, f"{name}:{number} is neither a rule nor a comment")
+
     def test_grammar_lists_every_route_and_nothing_else(self):
         path = Path(__file__).resolve().parents[1] / "config" / "hdsg.question_route.v1.gbnf"
         text = path.read_text(encoding="utf-8")
