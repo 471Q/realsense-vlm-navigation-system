@@ -224,9 +224,32 @@ The fixed internal prompts are loaded from
 `config/hdsg_request_catalogue.v1.json`. Adding or enabling another request changes
 the evaluated interface and therefore requires its own validation before use.
 
-Every run writes Full Fact Packets, Restricted Prompt Packets, VLM candidates and
-Authoritative Release Objects to `smart_walker/logs/<run_id>.jsonl`. Only the
+An evaluation run writes Full Fact Packets, Restricted Prompt Packets, VLM
+candidates, Authoritative Release Objects and one `generation_response` record per
+generation to `smart_walker/logs/<eval_name>/<run_id>.jsonl`. Only the
 `caption_text` field of an Authoritative Release Object is displayed.
+
+`generation_response` carries the model's raw reply in full, together with its
+SHA-256, whether it parsed, the gate reason codes, and four diagnostic durations
+(`queue_wait`, `generation`, `gate_and_render`, and `pending`, the window during
+which the reason line showed a placeholder while the action line was already
+correct). `HDSG_EVALUATION_CONTRACT.md` §12 requires the raw response because a
+digest cannot support failure investigation, and a rejected candidate is exactly
+the case where the text is the evidence. The record is written to the log and never
+read back into the runtime, so raw model text still has no path to the display.
+
+### Schema conformance
+
+The frozen record contracts are in `schemas/`, recorded in
+`schema-manifest.v2.json`. Two checks, neither replacing the other:
+
+```powershell
+python -m unittest discover -s tests -t .        # 32 tests, no dependencies
+& .\schemas\validate_schema_fixtures.ps1         # full JSON Schema validation, needs PowerShell 7
+```
+
+The Python suite fails if any frozen file's digest drifts from the manifest, which
+is how the grammar previously came to differ from its recorded hash unnoticed.
 
 --------------------------
 

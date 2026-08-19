@@ -580,6 +580,75 @@ class HdsgRuntimeTests(unittest.TestCase):
             ["PROCEED", "SLOW", "REDIRECT", "STOP"],
         )
 
+    def test_generation_record_keeps_the_raw_response_of_a_rejected_candidate(self):
+        # C-4: a digest supports integrity checking but not failure investigation, and an
+        # unparseable response is exactly the case where the text is the only evidence.
+        fact_packet, prompt_packet = self.build_records()
+        raw = "I think the path looks clear, probably fine to continue."
+        release = hdsg.build_release(
+            fact_packet, prompt_packet, release_id="release_test",
+            candidate=None, failure_codes=["RG_PARSE_FAILURE"],
+        )
+        record = hdsg.build_generation_response_record(
+            fact_packet, release,
+            raw_response=raw, candidate=None, superseded=False,
+            queued_ms=1000, started_ms=1010, responded_ms=1400, released_ms=1405,
+        )
+        self.assertEqual(record["raw_response"], raw)
+        self.assertEqual(record["response_sha256"], hdsg.sha256_text(raw))
+        self.assertFalse(record["parsed"])
+        self.assertIn("RG_PARSE_FAILURE", record["reason_codes"])
+        self.assertEqual(record["release_mode"], "DETERMINISTIC_FALLBACK")
+
+    def test_generation_record_reports_the_contract_timing_fields(self):
+        # C-5: HDSG_EVALUATION_CONTRACT.md section 12 requires timing metadata for diagnosis.
+        fact_packet, prompt_packet = self.build_records()
+        release = hdsg.build_release(
+            fact_packet, prompt_packet, release_id="release_test",
+            candidate=None, failure_codes=["RG_MODEL_UNAVAILABLE"],
+        )
+        record = hdsg.build_generation_response_record(
+            fact_packet, release,
+            raw_response=None, candidate=None, superseded=False,
+            queued_ms=1000, started_ms=1010, responded_ms=1400, released_ms=1405,
+        )
+        self.assertEqual(record["timing_ms"], {
+            "queue_wait": 10,
+            "generation": 390,
+            "gate_and_render": 5,
+            "pending": 405,
+        })
+        # A response that never arrived leaves generation unmeasurable rather than zero, and the
+        # pending window is still reported, since the placeholder was shown for that whole time.
+        unanswered = hdsg.build_generation_response_record(
+            fact_packet, release,
+            raw_response=None, candidate=None, superseded=False,
+            queued_ms=1000, started_ms=1010, responded_ms=None, released_ms=21010,
+        )
+        self.assertIsNone(unanswered["timing_ms"]["generation"])
+        self.assertEqual(unanswered["timing_ms"]["pending"], 20010)
+        self.assertIsNone(unanswered["raw_response"])
+        self.assertIsNone(unanswered["response_sha256"])
+
+    def test_generation_record_is_json_serialisable_and_identifies_its_event(self):
+        fact_packet, prompt_packet = self.build_records()
+        release = hdsg.build_release(
+            fact_packet, prompt_packet, release_id="release_test", candidate=None,
+            failure_codes=["RG_STALE_CANDIDATE"],
+        )
+        record = hdsg.build_generation_response_record(
+            fact_packet, release,
+            raw_response='{"schema_version":"x"}', candidate={"schema_version": "x"},
+            superseded=True,
+            queued_ms=0, started_ms=1, responded_ms=2, released_ms=3,
+        )
+        self.assertEqual(record["event_id"], fact_packet["identity"]["event_id"])
+        self.assertEqual(record["observation_id"], fact_packet["identity"]["observation_id"])
+        self.assertEqual(record["request_id"], fact_packet["interaction"]["request_id"])
+        self.assertTrue(record["parsed"])
+        self.assertTrue(record["superseded_before_release"])
+        json.dumps(record)
+
     def test_records_are_json_serialisable(self):
         fact_packet, prompt_packet = self.build_records()
         release = hdsg.build_release(

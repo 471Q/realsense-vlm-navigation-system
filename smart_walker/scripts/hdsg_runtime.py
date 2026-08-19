@@ -1491,6 +1491,55 @@ def build_release(
     }
 
 
+def build_generation_response_record(
+    fact_packet: Mapping[str, Any],
+    release: Mapping[str, Any],
+    *,
+    raw_response: Optional[str],
+    candidate: Optional[Mapping[str, Any]],
+    superseded: bool,
+    queued_ms: int,
+    started_ms: int,
+    responded_ms: Optional[int],
+    released_ms: int,
+) -> dict:
+    """Builds the per-generation telemetry record required by the evaluation contract.
+
+    `HDSG_EVALUATION_CONTRACT.md` section 12 requires the raw model response and timing metadata
+    on every evaluated event. The response is stored in full rather than as a digest: a digest
+    supports integrity checking but not the failure investigation the contract asks for, and a
+    rejected candidate is precisely the case where the raw text is the evidence. The digest is
+    retained alongside it so integrity remains checkable.
+
+    This record is written to the telemetry stream and never read back into the runtime, so the
+    raw response still has no path to the display and the sole-release-path property is
+    unaffected.
+
+    Timing is diagnostic only; the same contract section excludes latency from the thesis
+    outcomes. `pending` is the GENERATION_PENDING window from
+    `HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md`: how long the reason line showed a placeholder
+    while the action line was already correct and displayed.
+    """
+    verification = release.get("verification", {})
+    return {
+        "event_id": fact_packet["identity"]["event_id"],
+        "observation_id": fact_packet["identity"]["observation_id"],
+        "request_id": fact_packet["interaction"]["request_id"],
+        "raw_response": raw_response,
+        "response_sha256": None if raw_response is None else sha256_text(raw_response),
+        "parsed": candidate is not None,
+        "superseded_before_release": bool(superseded),
+        "reason_codes": list(verification.get("reason_codes", [])),
+        "release_mode": verification.get("release_mode"),
+        "timing_ms": {
+            "queue_wait": started_ms - queued_ms,
+            "generation": None if responded_ms is None else responded_ms - started_ms,
+            "gate_and_render": released_ms - (responded_ms if responded_ms is not None else started_ms),
+            "pending": released_ms - queued_ms,
+        },
+    }
+
+
 def generation_failure_code(error: Exception) -> str:
     """Maps generation failures to the stable release-gate catalogue."""
     text = str(error).lower()

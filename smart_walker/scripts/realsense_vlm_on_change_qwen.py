@@ -710,12 +710,15 @@ def main():
             candidate = None
             failure_codes: list[str] = []
             raw_response: Optional[str] = None
+            started_ms = hdsg.monotonic_time_ms()
+            responded_ms: Optional[int] = None
             try:
                 catalogue_entry = request_catalogue["requests"][fact_packet["interaction"]["request_id"]]
                 args._user_txt_for_payload = hdsg.prompt_packet_text(
                     prompt_packet, str(catalogue_entry["fixed_instruction"])
                 )
                 raw_response = _call_vlm_with_fallbacks(args.endpoint, request["image"], args)
+                responded_ms = hdsg.monotonic_time_ms()
                 candidate, failure_codes = hdsg.parse_candidate(raw_response)
                 if candidate is not None:
                     record("vlm_candidate", candidate)
@@ -747,12 +750,17 @@ def main():
                 candidate=candidate,
                 failure_codes=failure_codes,
             )
-            if raw_response is not None and candidate is None:
-                record("rejected_candidate_raw", {
-                    "event_id": fact_packet["identity"]["event_id"],
-                    "response_sha256": hdsg.sha256_text(raw_response),
-                    "reason_codes": release["verification"]["reason_codes"],
-                })
+            record("generation_response", hdsg.build_generation_response_record(
+                fact_packet,
+                release,
+                raw_response=raw_response,
+                candidate=candidate,
+                superseded=not still_active,
+                queued_ms=request["queued_ms"],
+                started_ms=started_ms,
+                responded_ms=responded_ms,
+                released_ms=hdsg.monotonic_time_ms(),
+            ))
             if still_active:
                 publish_release(release)
             else:
@@ -826,6 +834,9 @@ def main():
             "image": resize_for_vlm(image, args.image_size),
             "request_key": request_key,
             "release_id": final_release_id,
+            # Marks the start of the pending window, which is when the interim release publishes
+            # the deterministic action and the reason line becomes a placeholder.
+            "queued_ms": hdsg.monotonic_time_ms(),
         }
         if generation_q.full():
             try:
