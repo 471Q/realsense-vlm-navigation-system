@@ -1,0 +1,25 @@
+# Tier 1 routing classifier constraint. HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4.
+#
+# The grammar admits exactly one of the eight approved route tokens and nothing else. This is what
+# makes the classifier safe to point at the user's raw text: the model reads free text, but the
+# decoder cannot emit anything outside the closed set, so a crafted question can at worst select
+# the wrong topic. It cannot cause the classifier to produce content.
+#
+# This artifact is not part of hdsg.schemas.v2. Section 7 of the policy records that it belongs in
+# the next schema set together with hdsg.question_route.v1 and its fixtures.
+
+root ::= ws "{" ws schema-field "," ws route-field ws "}" ws
+
+schema-field ::= "\"schema_version\"" ws ":" ws "\"hdsg.question_route.v1\""
+route-field ::= "\"route\"" ws ":" ws route
+
+route ::= "\"LEFT\""
+        | "\"CENTRE\""
+        | "\"RIGHT\""
+        | "\"HAZARDS\""
+        | "\"EXPLAIN_DECISION\""
+        | "\"SCENE_OVERVIEW\""
+        | "\"REASSESS\""
+        | "\"OUT_OF_SCOPE\""
+
+ws ::= [ \t\n\r]*

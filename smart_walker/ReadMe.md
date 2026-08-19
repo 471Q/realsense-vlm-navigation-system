@@ -178,12 +178,43 @@ state as JSON on another, and draws the overlays itself. No overlay is composite
 into the video, and the only release field the page ever receives is
 `caption_text`, so the sole-release-path property is unchanged.
 
-The question panel on the right accepts typed questions. Question routing is
-specified in `HDSG_OPEN_QUESTION_ROUTING_POLICY.md` and is **not yet implemented**:
-until it is, a question receives a fixed reply pointing at More detail and
-Reassess, and reaches no model. The panel keeps a visible history of the session's
-questions, but no history is ever supplied to the model, which continues to answer
-each request statelessly.
+### Asking questions
+
+The panel on the right accepts typed questions, following
+`HDSG_OPEN_QUESTION_ROUTING_POLICY.md`. Free text selects which measured facts may
+be described; it never becomes the answer. A question passes through four stages:
+
+1. **Measurement pre-check.** If no sector carries a valid clearance, or the most
+   recent observation is older than `--more_detail_freshness_s`, the reply is fixed
+   and no model is called.
+2. **Keyword pre-filter.** A hand-written match settles the common phrasings and
+   skips the classifier call. It is advisory: a miss falls through, and a wrong
+   match degrades to the same outcome as a wrong classification.
+3. **Routing classifier.** A text-only call constrained by
+   `config/hdsg.question_route.v1.gbnf`, which admits exactly eight route tokens.
+   No image is attached. The grammar is what bounds a crafted question: the worst
+   outcome is the wrong topic, correctly described, never ungrounded content.
+4. **Answer.** The route scopes the permitted facts, and the answer goes through
+   the unchanged entailment gate and release builder. A rejected candidate falls
+   back to a deterministic description of the facts the question was scoped to.
+
+Answers appear in the panel, not on the caption line: the caption keeps showing the
+deterministic action and its reason throughout. Questions run on their own worker,
+so asking one never delays a guidance update. The panel keeps a visible history of
+the session's questions, but no history is ever supplied to the model, which
+continues to answer each request statelessly.
+
+`--answer_questions false` disables the channel; a question then receives the
+out-of-scope reply and no model is called. `--route_grammar` moves the classifier
+constraint.
+
+**Two parts of the policy are not implemented.** Section 6's phrasing variety
+(several approved variants per fact, and deterministic joining with a connective
+set) is deferred, because its variant set is still an open decision under the
+policy's section 13 and it is the change that forces the candidate grammar to move.
+Answers are therefore terser than the policy intends. The routing grammar and the
+`question_route` telemetry record are also not in `hdsg.schemas.v2`; the policy's
+section 7 places them in the next schema set with their fixtures.
 
 The script always uses persistent BoT-SORT tracking. The normal display shows a
 bounding box only after the local movement classifier confirms that a tracked

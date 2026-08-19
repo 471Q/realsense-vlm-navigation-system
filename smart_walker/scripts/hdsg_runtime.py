@@ -892,14 +892,37 @@ def build_prompt_packet(
     constraint_hash: str,
     prompt_profile_id: Optional[str] = None,
     system_prompt_id: str = "hdsg.reason_only.v1",
+    question_requirements: Optional[list[dict]] = None,
 ) -> dict:
-    """Builds the restricted facts and response profile supplied to the VLM."""
+    """Builds the restricted facts and response profile supplied to the VLM.
+
+    `question_requirements` replaces the automatic requirement construction with a set chosen by
+    the question router, per HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4. It replaces rather
+    than extends, because an answer to a question about the left sector should describe the left
+    sector, not the fact that happens to be binding the current action. The requirements are
+    supplied by the caller rather than derived from a route here, so this module holds no knowledge
+    of the question taxonomy.
+    """
     interaction = fact_packet["interaction"]
     deterministic = fact_packet["deterministic"]
     response_mode = interaction["response_mode"]
     max_reasons, max_visuals, allow_visuals = PROFILE_LIMITS[response_mode]
     requirements: list[dict] = []
     fact_ids: list[str] = []
+
+    if question_requirements is not None:
+        requirements = [dict(item) for item in question_requirements]
+        for item in requirements:
+            fact_ids.extend(item["fact_ids"])
+        return _finish_prompt_packet(
+            fact_packet, requirements, fact_ids,
+            prompt_id=prompt_id, response_mode=response_mode,
+            prompt_profile_id=prompt_profile_id, model_id=model_id, model_hash=model_hash,
+            quantisation=quantisation, temperature=temperature, top_p=top_p,
+            max_tokens=max_tokens, system_prompt=system_prompt, constraint_hash=constraint_hash,
+            system_prompt_id=system_prompt_id, max_reasons=max_reasons,
+            max_visuals=max_visuals, allow_visuals=allow_visuals,
+        )
 
     action_ids = list(deterministic["action_binding"]["accepted_fact_ids"])
     if action_ids:
@@ -967,6 +990,44 @@ def build_prompt_packet(
             })
             detail_count += 1
 
+    return _finish_prompt_packet(
+        fact_packet, requirements, fact_ids,
+        prompt_id=prompt_id, response_mode=response_mode,
+        prompt_profile_id=prompt_profile_id, model_id=model_id, model_hash=model_hash,
+        quantisation=quantisation, temperature=temperature, top_p=top_p,
+        max_tokens=max_tokens, system_prompt=system_prompt, constraint_hash=constraint_hash,
+        system_prompt_id=system_prompt_id, max_reasons=max_reasons,
+        max_visuals=max_visuals, allow_visuals=allow_visuals,
+    )
+
+
+def _finish_prompt_packet(
+    fact_packet: Mapping[str, Any],
+    requirements: list[dict],
+    fact_ids: list[str],
+    *,
+    prompt_id: str,
+    response_mode: str,
+    prompt_profile_id: Optional[str],
+    model_id: str,
+    model_hash: str,
+    quantisation: Optional[str],
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+    system_prompt: str,
+    constraint_hash: str,
+    system_prompt_id: str,
+    max_reasons: int,
+    max_visuals: int,
+    allow_visuals: bool,
+) -> dict:
+    """Resolves the permitted facts and assembles the packet body.
+
+    Shared by the automatic and question-routed requirement constructions so both produce a packet
+    of identical shape and both pass through the same permitted-fact resolution.
+    """
+    interaction = fact_packet["interaction"]
     permitted = [item for item in (_permitted_fact(fact_packet, fact_id) for fact_id in dict.fromkeys(fact_ids)) if item is not None]
     for item in permitted:
         item["approved_text_templates"] = _approved_clause_templates(item)

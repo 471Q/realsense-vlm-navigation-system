@@ -31,12 +31,14 @@ try:
     # Import from the robust shared-control pipeline
     import scripts.realsense_shared_control as sw
     import scripts.hdsg_runtime as hdsg
+    import scripts.hdsg_questions as questions
     from scripts.hdsg_web_ui import WebInterface
     from scripts.hdsg_recording import ObservationRecorder
 except Exception:
     # Fallback for running directly from scripts folder
     import realsense_shared_control as sw  # type: ignore
     import hdsg_runtime as hdsg  # type: ignore
+    import hdsg_questions as questions  # type: ignore
     from hdsg_web_ui import WebInterface  # type: ignore
     from hdsg_recording import ObservationRecorder  # type: ignore
 
@@ -80,6 +82,28 @@ def build_mm_chat_payload(model: str, system: str, text: str, b64_data: str, mim
         "temperature": float(temperature),
         "top_p": float(top_p),
         "max_tokens": int(max_tokens),
+        "stream": False,
+    }
+
+
+def build_text_chat_payload(model: str, system: str, text: str, grammar: str,
+                            temperature: float, top_p: float, max_tokens: int) -> dict:
+    """Builds a text-only grammar-constrained request.
+
+    Used by the Tier 1 question classifier. No image is attached: routing a question to a topic
+    does not require the frame, and omitting it removes the scene as a channel into the
+    classification. HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4.
+    """
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": text},
+        ],
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "max_tokens": int(max_tokens),
+        "grammar": grammar,
         "stream": False,
     }
 
@@ -565,8 +589,15 @@ def main():
     )
     default_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_candidate.v1.gbnf"
     default_catalogue = Path(__file__).resolve().parents[1] / "config" / "hdsg_request_catalogue.v1.json"
+    default_route_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.question_route.v1.gbnf"
     ap.add_argument("--grammar", type=Path, default=default_grammar)
     ap.add_argument("--request_catalogue", type=Path, default=default_catalogue)
+    ap.add_argument("--route_grammar", type=Path, default=default_route_grammar,
+                    help="the Tier 1 question classifier constraint")
+    ap.add_argument("--answer_questions", nargs="?", const=True, default=True,
+                    type=_parse_bool_argument,
+                    help="answer typed questions from the web UI chat box; when false a question "
+                         "receives the out-of-scope reply and no model call is made")
     args = ap.parse_args()
 
     if args.evaluate:
@@ -582,6 +613,14 @@ def main():
     except OSError as error:
         raise RuntimeError(f"The approved generation constraint could not be loaded: {args.grammar}") from error
     constraint_hash = hdsg.sha256_file(args.grammar)
+    route_grammar_text: Optional[str] = None
+    if args.answer_questions:
+        try:
+            route_grammar_text = args.route_grammar.read_text(encoding="utf-8")
+        except OSError as error:
+            raise RuntimeError(
+                f"The question routing constraint could not be loaded: {args.route_grammar}"
+            ) from error
     try:
         request_catalogue = json.loads(args.request_catalogue.read_text(encoding="utf-8"))
         required_requests = {"AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"}
@@ -607,6 +646,9 @@ def main():
         "pipeline_hash": hdsg.sha256_file(sw.PIPELINE_CFG),
         "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
         "constraint_hash": constraint_hash,
+        "route_constraint_hash": (
+            hdsg.sha256_file(args.route_grammar) if args.answer_questions else None
+        ),
         "clear_threshold_m": args.clear_threshold_m,
         "sector_choice_tolerance_m": args.sector_choice_tolerance_m,
         "movement_threshold_m": args.movement_threshold_m,
@@ -618,7 +660,7 @@ def main():
         "post_reorientation_max_variation_m": args.post_reorientation_max_variation_m,
     }, sort_keys=True))
 
-    from queue import Empty, Queue
+    from queue import Empty, Full, Queue
     import threading
     from ultralytics import YOLO
 
@@ -635,6 +677,10 @@ def main():
     inf_in: "Queue[sw.FramePacket]" = Queue(maxsize=1)
     inf_out: "Queue[sw.InferPacket]" = Queue(maxsize=1)
     generation_q: "Queue[dict]" = Queue(maxsize=1)
+    # Questions queue separately from guidance so that asking one never delays a guidance update.
+    # A small backlog is allowed because a user can reasonably type a second question while the
+    # first is still being answered; beyond that the main loop declines rather than blocking.
+    question_q: "Queue[dict]" = Queue(maxsize=3)
     stop_evt = threading.Event()
     state_lock = threading.Lock()
 
@@ -792,6 +838,148 @@ def main():
 
     threading.Thread(target=generation_worker, daemon=True).start()
 
+    def answer_question(request: dict) -> tuple[str, Optional[str], str, bool]:
+        """Classifies one question and produces its answer.
+
+        Returns the answer text, the resolved route, the stage that resolved it, and whether the
+        answer reached generation. HDSG_OPEN_QUESTION_ROUTING_POLICY.md sections 2 to 6.
+        """
+        question = request["question"]
+        route = request["route"]
+        resolved_by = request["resolved_by"]
+
+        # Tier 1. Reached only when the keyword pre-filter found nothing, so the classifier call is
+        # skipped for the common phrasings. The grammar admits eight tokens and nothing else, which
+        # is what bounds the consequence of a crafted question: the worst outcome is the wrong
+        # topic, correctly and safely described.
+        if route is None:
+            payload = build_text_chat_payload(
+                model=args.model,
+                system=questions.CLASSIFIER_SYSTEM_PROMPT,
+                text=questions.build_classifier_prompt(question),
+                grammar=route_grammar_text or "",
+                temperature=0.0,
+                top_p=1.0,
+                max_tokens=48,
+            )
+            try:
+                raw_route = call_vlm(args.endpoint, payload,
+                                     timeout=float(getattr(args, "vlm_timeout_s", 20.0)))
+            except Exception as error:
+                print(f"[hdsg] question classification failed: {error}")
+                return questions.OUT_OF_SCOPE_TEXT, None, "TIER_1_CLASSIFIER", False
+            route, parse_error = questions.parse_route(raw_route)
+            resolved_by = "TIER_1_CLASSIFIER"
+            if route is None:
+                # A reply the grammar should have made impossible. Declining is the conservative
+                # outcome: no route means no permitted-fact scope, and answering without one would
+                # be the ungrounded case the whole policy exists to prevent.
+                print(f"[hdsg] question route unreadable: {parse_error}")
+                return questions.OUT_OF_SCOPE_TEXT, None, resolved_by, False
+
+        if route == "OUT_OF_SCOPE":
+            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False
+        if route == "REASSESS":
+            # Routed to the existing control rather than answered. The main loop owns the
+            # reassessment state machine, so the worker only reports the redirection.
+            return ("Select Reassess for a fresh look at the scene.", route, resolved_by, False)
+
+        fact_packet = request["fact_packet"]
+        route_entry = request_catalogue.get("question_routes", {}).get(route)
+        if not route_entry:
+            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False
+
+        requirement_set = questions.route_requirements(route, fact_packet)
+        if not requirement_set:
+            return questions.NO_MEASUREMENT_TEXT, route, resolved_by, False
+
+        prompt_id = allocate("prompt", "prompt")
+        prompt_packet = hdsg.build_prompt_packet(
+            fact_packet,
+            prompt_id=prompt_id,
+            model_id=args.model,
+            model_hash=args.model_hash,
+            quantisation=args.quantisation,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_tokens=args.max_tokens,
+            system_prompt=args.system,
+            constraint_hash=constraint_hash,
+            prompt_profile_id=str(route_entry["prompt_profile_id"]),
+            system_prompt_id=str(request_catalogue["system_prompt_id"]),
+            question_requirements=requirement_set,
+        )
+        prompt_packet["image"]["transform"].update({
+            "longest_side_px": int(args.image_size),
+            "encoding": str(args.encode),
+            "jpeg_quality": int(args.jpeg_quality),
+        })
+        record("restricted_prompt_packet", prompt_packet)
+
+        candidate = None
+        failure_codes: list[str] = []
+        raw_response: Optional[str] = None
+        try:
+            args._user_txt_for_payload = hdsg.prompt_packet_text(
+                prompt_packet, str(route_entry["fixed_instruction"])
+            )
+            raw_response = _call_vlm_with_fallbacks(args.endpoint, request["image"], args)
+            candidate, failure_codes = hdsg.parse_candidate(raw_response)
+            if candidate is not None:
+                record("vlm_candidate", candidate)
+        except Exception as error:
+            failure_codes = [hdsg.generation_failure_code(error)]
+            print(f"[hdsg] question answer generation failed: {error}")
+        finally:
+            if hasattr(args, "_user_txt_for_payload"):
+                delattr(args, "_user_txt_for_payload")
+
+        # The answer passes through the unchanged entailment gate and the unchanged release
+        # builder, so a candidate citing a fact it was not given is rejected here exactly as a
+        # guidance candidate would be, and a rejection still yields the deterministic text.
+        release = hdsg.build_release(
+            fact_packet,
+            prompt_packet,
+            release_id=allocate("release", "release"),
+            candidate=candidate,
+            failure_codes=failure_codes,
+        )
+        record("question_release", release)
+        if release["verification"]["gate_outcome"] == "ACCEPTED":
+            return questions.answer_text_from_release(release), route, resolved_by, True
+        # A rejected candidate falls back to the routed facts rather than to the release builder's
+        # own fallback, which describes the action binding and would answer a different question.
+        return (questions.deterministic_answer(route, fact_packet, requirement_set),
+                route, resolved_by, True)
+
+    def question_worker():
+        """Answers typed questions on their own thread.
+
+        Questions run on a separate queue from guidance generation so that asking one never delays
+        a guidance update and never displaces the guidance caption. The answer is delivered to the
+        chat panel; the caption line continues to show the deterministic action and its reason,
+        which is the transparency guarantee the caption exists to provide.
+        """
+        while not stop_evt.is_set():
+            try:
+                request = question_q.get(timeout=0.05)
+            except Empty:
+                continue
+            try:
+                answer, route, resolved_by, reached = answer_question(request)
+            except Exception as error:
+                print(f"[hdsg] question handling failed: {error}")
+                answer, route, resolved_by, reached = (
+                    questions.OUT_OF_SCOPE_TEXT, request["route"], request["resolved_by"], False
+                )
+            record("question_route", questions.build_route_record(
+                request["question"], route, resolved_by, reached
+            ))
+            if web_ui is not None:
+                web_ui.publish_chat_turn(request["question"], answer, route=route)
+
+    # Started further down, once web_ui and allocate exist. The worker closes over both.
+
     sequence = {"event": 0, "observation": 0, "ticket": 0, "prompt": 0, "release": 0}
 
     def allocate(name: str, prefix: str) -> str:
@@ -933,6 +1121,9 @@ def main():
     if use_opencv_ui:
         cv2.namedWindow("HDSG smart walker", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("HDSG smart walker", on_mouse)
+
+    if args.answer_questions and web_ui is not None:
+        threading.Thread(target=question_worker, daemon=True).start()
 
     def trigger_type(previous: Optional[dict], current: dict) -> str:
         if previous is None:
@@ -1175,17 +1366,66 @@ def main():
                         stable_statuses = None
                         stable_depths = None
 
-            # Question routing is specified in HDSG_OPEN_QUESTION_ROUTING_POLICY.md and is not
-            # implemented: it requires hdsg.schemas.v2 for the classifier's output schema and the
-            # extended candidate grammar. Until then a question receives a deterministic reply
-            # stating so, which is the same shape the policy's Tier 2 uses and reaches no model.
+            # Question routing, HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 2. The measurement
+            # pre-check and the Tier 0 keyword filter run here, on the main loop, because both are
+            # deterministic and both can settle a question without a model call. Only what remains
+            # is handed to the worker.
             for question in browser_questions:
-                web_ui.publish_chat_turn(
-                    question,
-                    "Question answering is not enabled in this build. Use More detail for a fuller "
-                    "description of the current scene, or Reassess for a fresh observation.",
-                    route=None,
+                question = questions.normalise_question(question)
+                if not question:
+                    continue
+                if not args.answer_questions:
+                    web_ui.publish_chat_turn(question, questions.OUT_OF_SCOPE_TEXT, route=None)
+                    continue
+
+                # Checked before the classifier, so an unmeasurable scene costs zero model calls
+                # rather than two. The condition is the one the More detail path already uses.
+                observation_age_ms = (
+                    None if latest_observation_id is None
+                    else (time.monotonic() - latest_observation_captured_monotonic) * 1000.0
                 )
+                answerable = (
+                    latest_authority is not None and latest_sector_facts is not None
+                    and latest_observation_id in observation_images
+                    and questions.measurement_is_answerable(
+                        latest_sector_facts, observation_age_ms,
+                        args.more_detail_freshness_s * 1000.0,
+                    )
+                )
+                if not answerable:
+                    web_ui.publish_chat_turn(question, questions.NO_MEASUREMENT_TEXT, route=None)
+                    record("question_route", questions.build_route_record(
+                        question, None, "MEASUREMENT_PRECHECK", False
+                    ))
+                    continue
+
+                keyword_route = questions.classify_keywords(question)
+                packet = create_fact_packet(
+                    "MORE_DETAIL", "MORE_DETAIL", "USER_REQUESTED", latest_observation_id,
+                    time.monotonic() * 1000.0, latest_objects, latest_sector_facts,
+                    latest_authority,
+                    # input_method is a frozen enumeration in hdsg.fact_packet.v1 with no member
+                    # for typed text. The chat box is an on-screen widget, so ONSCREEN_CONTROL is
+                    # the accurate member of the set that exists. A TYPED_QUESTION member belongs
+                    # in the next schema set with the rest of the question additions; until then
+                    # the question_route record is what distinguishes a question from a button.
+                    input_method="ONSCREEN_CONTROL", control_id="MORE_DETAIL",
+                )
+                record("full_fact_packet", packet)
+                try:
+                    question_q.put_nowait({
+                        "question": question,
+                        "route": keyword_route,
+                        "resolved_by": "TIER_0_KEYWORD" if keyword_route else "TIER_1_CLASSIFIER",
+                        "fact_packet": packet,
+                        "image": observation_images[latest_observation_id].copy(),
+                    })
+                except Full:
+                    web_ui.publish_chat_turn(
+                        question,
+                        "I am still working through the previous questions. Ask again in a moment.",
+                        route=None,
+                    )
 
             try:
                 inference = inf_out.get_nowait()

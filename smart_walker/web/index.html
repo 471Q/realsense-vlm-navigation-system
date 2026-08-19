@@ -162,6 +162,12 @@
   .turn .q { background: #2b3542; align-self: flex-end; max-width: 90%; }
   .turn .a { background: #232a33; border-left: 2px solid var(--accent); }
   .turn .meta { font-size: 11px; color: var(--muted); }
+  .turn.pending .a { color: var(--muted); font-style: italic; border-left-color: var(--panel-edge); }
+  .turn.pending .a::after {
+    content: '';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
   .composer { flex: none; display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--panel-edge); }
   .composer input {
     flex: 1;
@@ -235,6 +241,8 @@ const SECTOR_ORDER = ['left', 'centre', 'right'];
 const overlay = document.getElementById('overlay');
 const ctx = overlay.getContext('2d');
 let renderedTurns = 0;
+let pendingDirty = false;
+let lastChatLog = [];
 
 function send(payload) {
   fetch('/input', {
@@ -330,31 +338,55 @@ function applyState(state) {
   document.querySelectorAll('[data-intent]').forEach(b =>
     b.classList.toggle('active', b.dataset.intent === (state.intent || 'NONE')));
 
-  renderChat(state.chat_log || []);
+  lastChatLog = state.chat_log || [];
+  renderChat(lastChatLog);
   draw(state);
+}
+
+// Questions asked but not yet answered by the server. A question takes up to two model calls to
+// answer, so the asked text is shown immediately rather than disappearing until the reply lands.
+// Entries are removed in order as answered turns arrive, which is correct because the worker
+// answers them in the order they were queued.
+const pendingQuestions = [];
+
+function buildTurn(question, answer, meta, pending) {
+  const el = document.createElement('div');
+  el.className = pending ? 'turn pending' : 'turn';
+  const q = document.createElement('div');
+  q.className = 'q';
+  q.textContent = question;
+  const a = document.createElement('div');
+  a.className = 'a';
+  a.textContent = answer;
+  const m = document.createElement('div');
+  m.className = 'meta';
+  m.textContent = meta;
+  el.append(q, a, m);
+  return el;
 }
 
 function renderChat(turns) {
   const log = document.getElementById('log');
-  if (turns.length < renderedTurns) { log.innerHTML = ''; renderedTurns = 0; }
-  if (turns.length === renderedTurns) return;
-  if (renderedTurns === 0) log.innerHTML = '';
-  turns.slice(renderedTurns).forEach(turn => {
-    const el = document.createElement('div');
-    el.className = 'turn';
-    const q = document.createElement('div');
-    q.className = 'q';
-    q.textContent = turn.question;
-    const a = document.createElement('div');
-    a.className = 'a';
-    a.textContent = turn.answer;
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = [turn.at, turn.route].filter(Boolean).join(' · ');
-    el.append(q, a, meta);
-    log.appendChild(el);
-  });
-  renderedTurns = turns.length;
+  if (turns.length < renderedTurns) { renderedTurns = 0; }
+  const answered = turns.length;
+  if (answered > renderedTurns) {
+    pendingQuestions.splice(0, answered - renderedTurns);
+  } else if (answered === renderedTurns && !pendingDirty) {
+    return;
+  }
+  log.innerHTML = '';
+  if (!answered && !pendingQuestions.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'Ask what is on your left, right or ahead.';
+    log.appendChild(empty);
+  }
+  turns.forEach(turn => log.appendChild(buildTurn(
+    turn.question, turn.answer, [turn.at, turn.route].filter(Boolean).join(' · '), false
+  )));
+  pendingQuestions.forEach(text => log.appendChild(buildTurn(text, 'Checking', '', true)));
+  renderedTurns = answered;
+  pendingDirty = false;
   log.scrollTop = log.scrollHeight;
 }
 
@@ -382,6 +414,9 @@ document.getElementById('composer').addEventListener('submit', event => {
   if (!text) return;
   send({type: 'chat_question', text});
   input.value = '';
+  pendingQuestions.push(text);
+  pendingDirty = true;
+  renderChat(lastChatLog);
 });
 
 // Keyboard shortcuts match the OpenCV sink's, except while the question box has focus.
