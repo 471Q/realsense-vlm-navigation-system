@@ -83,7 +83,7 @@ class CauseScoringTests(BaselineFixtureMixin, unittest.TestCase):
     def test_naming_the_binding_sector_scores_binding(self):
         packet = self.build(intent="LEFT")
         self.assertIn("sector:left", packet["deterministic"]["action_binding"]["accepted_fact_ids"])
-        score = base.score_cause({"cause": {"kind": "SECTOR", "sector": "LEFT"}}, packet)
+        score = base.score_cause({"reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "LEFT"}]}, packet)
         self.assertEqual(score.outcome, base.CauseOutcome.BINDING)
 
     def test_a_true_but_non_causal_sector_is_not_scored_as_grounded(self):
@@ -91,14 +91,14 @@ class CauseScoringTests(BaselineFixtureMixin, unittest.TestCase):
         naive 'is it true?' scorer would pass. HDSG_EXPLANATION_BINDING_POLICY.md section 7
         requires it to be counted separately."""
         packet = self.build(intent="LEFT")
-        score = base.score_cause({"cause": {"kind": "SECTOR", "sector": "RIGHT"}}, packet)
+        score = base.score_cause({"reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "RIGHT"}]}, packet)
         self.assertEqual(score.outcome, base.CauseOutcome.UNRELATED_TRUE)
         self.assertNotEqual(score.outcome, base.CauseOutcome.BINDING)
 
     def test_an_object_absent_from_the_packet_is_unsupported(self):
         packet = self.build()
         score = base.score_cause(
-            {"cause": {"kind": "OBJECT", "object_label": "staircase", "sector": "CENTRE"}}, packet
+            {"reasons": [{"role": "ACTION", "kind": "OBJECT", "object_label": "staircase", "sector": "CENTRE"}]}, packet
         )
         self.assertEqual(score.outcome, base.CauseOutcome.UNSUPPORTED)
 
@@ -112,12 +112,12 @@ class CauseScoringTests(BaselineFixtureMixin, unittest.TestCase):
         binding = packet["deterministic"]["action_binding"]["accepted_fact_ids"]
         self.assertTrue(any(item.startswith("object:") for item in binding), binding)
         score = base.score_cause(
-            {"cause": {"kind": "OBJECT", "object_label": "chair", "sector": "CENTRE"}}, packet
+            {"reasons": [{"role": "ACTION", "kind": "OBJECT", "object_label": "chair", "sector": "CENTRE"}]}, packet
         )
         self.assertEqual(score.outcome, base.CauseOutcome.BINDING)
 
     def test_no_reason_scores_silent(self):
-        score = base.score_cause({"cause": {"kind": "NONE"}}, self.build())
+        score = base.score_cause({"reasons": []}, self.build())
         self.assertEqual(score.outcome, base.CauseOutcome.SILENT)
 
     def test_an_unresolvable_cause_is_unscoreable_not_a_failure(self):
@@ -125,16 +125,122 @@ class CauseScoringTests(BaselineFixtureMixin, unittest.TestCase):
         assigned a favourable, or an unfavourable, interpretation."""
         packet = self.build()
         self.assertEqual(
-            base.score_cause({"cause": {"kind": "VIBES"}}, packet).outcome,
+            base.score_cause({"reasons": [{"role": "ACTION", "kind": "VIBES"}]}, packet).outcome,
             base.CauseOutcome.UNSCOREABLE,
         )
         self.assertEqual(
             base.score_cause({}, packet).outcome, base.CauseOutcome.UNSCOREABLE
         )
         self.assertEqual(
-            base.score_cause({"cause": {"kind": "SECTOR", "sector": "sideways"}}, packet).outcome,
+            base.score_cause({"reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "sideways"}]}, packet).outcome,
             base.CauseOutcome.UNSCOREABLE,
         )
+
+
+class SceneAndRedirectTests(BaselineFixtureMixin, unittest.TestCase):
+    def _redirect_packet(self):
+        sectors = {
+            "left": {"fact_id": "sector:left", "clearance_m": 2.30, "valid": True,
+                     "invalid_reason_codes": [], "status": "CLEAR"},
+            "centre": {"fact_id": "sector:centre", "clearance_m": 0.55, "valid": True,
+                       "invalid_reason_codes": [], "status": "BLOCKED"},
+            "right": {"fact_id": "sector:right", "clearance_m": 0.50, "valid": True,
+                      "invalid_reason_codes": [], "status": "BLOCKED"},
+        }
+        packet = self.build(intent="FORWARD", sectors=sectors)
+        self.assertEqual(packet["deterministic"]["motion_decision"], "REDIRECT")
+        return packet
+
+    def test_a_redirect_naming_only_the_blockage_is_incomplete(self):
+        """Explaining half a redirect tells the user to change direction without saying where to."""
+        packet = self._redirect_packet()
+        response = {"reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "CENTRE"}]}
+        self.assertFalse(base.score_redirect_completeness(response, packet))
+
+    def test_a_redirect_naming_both_halves_is_complete(self):
+        packet = self._redirect_packet()
+        response = {"reasons": [
+            {"role": "ACTION", "kind": "SECTOR", "sector": "CENTRE"},
+            {"role": "ALTERNATIVE", "kind": "SECTOR", "sector": "LEFT"},
+        ]}
+        self.assertTrue(base.score_redirect_completeness(response, packet))
+
+    def test_a_non_redirect_stays_out_of_the_denominator(self):
+        self.assertIsNone(base.score_redirect_completeness({"reasons": []}, self.build()))
+
+    def test_an_event_not_requiring_a_scene_reason_stays_out_of_the_denominator(self):
+        """Events that never needed a scene reason are excluded rather than counted as passes."""
+        packet = self.build(intent="LEFT")
+        self.assertFalse(packet["deterministic"]["scene_fact_required"])
+        self.assertIsNone(base.score_scene_reason({"reasons": []}, packet))
+
+    def test_a_missing_but_required_scene_reason_is_silent(self):
+        sectors = {
+            "left": {"fact_id": "sector:left", "clearance_m": 0.49, "valid": True,
+                     "invalid_reason_codes": [], "status": "BLOCKED"},
+            "centre": {"fact_id": "sector:centre", "clearance_m": 2.42, "valid": True,
+                       "invalid_reason_codes": [], "status": "CLEAR"},
+            "right": {"fact_id": "sector:right", "clearance_m": 2.17, "valid": True,
+                      "invalid_reason_codes": [], "status": "CLEAR"},
+        }
+        packet = self.build(intent="FORWARD", sectors=sectors)
+        self.assertTrue(packet["deterministic"]["scene_fact_required"])
+        score = base.score_scene_reason(
+            {"reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "CENTRE"}]}, packet
+        )
+        self.assertEqual(score.outcome, base.CauseOutcome.SILENT)
+
+    def test_unsupported_detection_covers_every_role_not_just_the_action(self):
+        packet = self.build()
+        self.assertTrue(base.has_unsupported_reason({"reasons": [
+            {"role": "ACTION", "kind": "SECTOR", "sector": "CENTRE"},
+            {"role": "SCENE", "kind": "OBJECT", "object_label": "escalator", "sector": "LEFT"},
+        ]}, packet))
+        self.assertFalse(base.has_unsupported_reason({"reasons": [
+            {"role": "ACTION", "kind": "SECTOR", "sector": "CENTRE"},
+        ]}, packet))
+
+
+class SummaryTests(BaselineFixtureMixin, unittest.TestCase):
+    def test_denominators_differ_per_measure_and_exclude_unscoreables(self):
+        """Each row carries its own denominator: a single event count would misstate every row
+        except the first two, and an unscoreable event must leave the denominator entirely."""
+        packet = self.build(intent="LEFT")
+        good = base.score_baseline_event(base.CONDITION_C1, {
+            "sector_distance_m": {"left": 0.5, "centre": 2.4, "right": 2.2},
+            "recommended_action": packet["deterministic"]["motion_decision"],
+            "recommended_sector": packet["deterministic"]["selected_sector"],
+            "reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "LEFT"}],
+            "advisory_text": "ok",
+        }, packet)
+        unreadable = base.score_baseline_event(base.CONDITION_C1, {
+            "reasons": [{"role": "ACTION", "kind": "VIBES"}],
+        }, packet)
+        failed = base.score_baseline_event(
+            base.CONDITION_C1, None, packet, parse_failure="no JSON object found"
+        )
+
+        summary = base.summarise_condition([good, unreadable, failed])
+        self.assertEqual(summary["events"], 3)
+        self.assertEqual(summary["parse_failures"], 1)
+        # The unreadable cause leaves the binding denominator rather than counting against it.
+        self.assertEqual(summary["binding_causal_reason"]["d"], 1)
+        self.assertEqual(summary["binding_causal_reason"]["n"], 1)
+        self.assertEqual(summary["binding_causal_reason"]["unscoreable"], 1)
+        # Only the complete event stated an action the oracle vocabulary recognises.
+        self.assertEqual(summary["guidance_agreement"]["d"], 1)
+        self.assertEqual(summary["distance"]["compared"], 3)
+
+    def test_an_all_unscoreable_condition_reports_no_rate_rather_than_zero(self):
+        """A rate of zero would read as a measured failure; None reports that nothing was scored."""
+        packet = self.build()
+        failed = [base.score_baseline_event(base.CONDITION_C0, None, packet, "empty response")
+                  for _ in range(4)]
+        summary = base.summarise_condition(failed)
+        self.assertEqual(summary["parse_failures"], 4)
+        self.assertIsNone(summary["binding_causal_reason"]["rate"])
+        self.assertIsNone(summary["guidance_agreement"]["rate"])
+        self.assertIsNone(summary["distance"]["within_factor_two_rate"])
 
 
 class DistanceAndDerivedActionTests(BaselineFixtureMixin, unittest.TestCase):
@@ -184,7 +290,7 @@ class EventScoringTests(BaselineFixtureMixin, unittest.TestCase):
             "sector_distance_m": {"left": 0.5, "centre": 2.4, "right": 2.2},
             "recommended_action": packet["deterministic"]["motion_decision"],
             "recommended_sector": packet["deterministic"]["selected_sector"],
-            "cause": {"kind": "SECTOR", "sector": "LEFT", "object_label": None},
+            "reasons": [{"role": "ACTION", "kind": "SECTOR", "sector": "LEFT", "object_label": None}],
             "advisory_text": "The way to your left is blocked, so go straight on instead.",
         }
         scored = base.score_baseline_event(base.CONDITION_C1, response, packet)

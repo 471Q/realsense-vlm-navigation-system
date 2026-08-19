@@ -262,13 +262,48 @@ at shutdown rather than leaving silent gaps in a replay source.
 With recording on, each Fact Packet's `rgb_ref` and `depth_ref` name the recorded
 files instead of `memory://`, which is what makes an evaluated event replayable.
 
+### Replaying a run against the comparison conditions
+
+Once a run has been recorded, it can be replayed offline against the two
+comparison conditions Chapter 5 defines. Neither can reach the walker display.
+
+```powershell
+python scripts\hdsg_replay.py `
+  --telemetry logs\straight_path\run_20260820_101500.jsonl `
+  --recording logs\straight_path\run_20260820_101500 `
+  --out       logs\straight_path\run_20260820_101500.scored.jsonl `
+  --endpoint http://127.0.0.1:8080 --model qwen3-vl-4b-instruct
+```
+
+| Condition | Sees the image | Sees the measured facts | Output enforced |
+|---|---|---|---|
+| `C0_VLM_ONLY` | yes | no | no |
+| `C1_GROUNDED_UNGATED` | yes | yes | no |
+| `C2_FULL_HDSG` | yes | yes | yes |
+
+C0 and C1 are replayed here. C2 is not: its released output is already in the
+archive, produced by the live release path under the frozen configuration, and
+re-running it would sample a fresh candidate rather than reproduce that release.
+
+The Fact Packet each reply is scored against comes from the archive rather than
+being recomputed from the frames. The archive records what the walker actually
+measured; recomputing would introduce detector variation between the condition
+being scored and the record it is scored against.
+
+Add `--limit 5` for a smoke run. Events whose frame is missing from the recording
+are skipped and counted rather than scored against a substitute observation.
+
+The scored output populates Chapter 5's Table 5-9 and Table 5-11. A reply the
+scorer cannot resolve is recorded as **unscoreable** and leaves that measure's
+denominator, rather than counting as a pass or a failure.
+
 ### Schema conformance
 
 The frozen record contracts are in `schemas/`, recorded in
 `schema-manifest.v2.json`. Two checks, neither replacing the other:
 
 ```powershell
-python -m unittest discover -s tests -t .        # 47 tests, no dependencies
+python -m unittest discover -s tests -t .        # 81 tests, no dependencies
 & .\schemas\validate_schema_fixtures.ps1         # full JSON Schema validation, needs PowerShell 7
 ```
 
