@@ -974,11 +974,15 @@ def main():
         )
         record("question_release", release)
         if release["verification"]["gate_outcome"] == "ACCEPTED":
-            return questions.answer_text_from_release(release), route, resolved_by, True
-        # A rejected candidate falls back to the routed facts rather than to the release builder's
-        # own fallback, which describes the action binding and would answer a different question.
-        return (questions.deterministic_answer(route, fact_packet, requirement_set),
-                route, resolved_by, True)
+            answer = questions.answer_text_from_release(release)
+        else:
+            # A rejected candidate falls back to the routed facts rather than to the release
+            # builder's own fallback, which describes the action binding and would answer a
+            # different question.
+            answer = questions.deterministic_answer(route, fact_packet, requirement_set)
+        if route == "EXPLAIN_DECISION":
+            answer = questions.with_action_prefix(release, answer)
+        return answer, route, resolved_by, True
 
     def question_worker():
         """Answers typed questions on their own thread.

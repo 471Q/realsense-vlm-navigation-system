@@ -205,6 +205,13 @@ be described; it never becomes the answer. A question passes through four stages
    the unchanged entailment gate and release builder. A rejected candidate falls
    back to a deterministic description of the facts the question was scoped to.
 
+Requests for direction ("which side to go", "what should I do", "can I keep going")
+route to `EXPLAIN_DECISION`, whose answer is prefixed with the authoritative action
+sentence and carries the interaction prompt when one is set, so it reads
+*"Change direction and continue towards the right. The centre sector is blocked at
+0.60 metres."* That prefix comes from the deterministic template table by way of the
+release, not from the model.
+
 Answers appear in the panel, not on the caption line: the caption keeps showing the
 deterministic action and its reason throughout. Questions run on their own worker,
 so asking one never delays a guidance update. The panel keeps a visible history of
