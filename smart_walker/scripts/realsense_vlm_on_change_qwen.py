@@ -127,21 +127,29 @@ def build_text_chat_payload(model: str, system: str, text: str, grammar: str,
 
 
 def _build_payload_from_image_array(img_bgr: np.ndarray, fmt: str, quality: int,
-                                    args) -> tuple[dict, str]:
+                                    args, *, system: Optional[str] = None,
+                                    unconstrained: bool = False,
+                                    max_tokens: Optional[int] = None) -> tuple[dict, str]:
     """Encode image with requested format/quality and build chat payload.
     Returns (payload, desc) where desc is a short string for logging.
+
+    `unconstrained` omits the generation constraint. It exists only for the diagnostic mode the
+    --unconstrained flag selects, and every caller on the release path leaves it false, so the
+    absence of a grammar remains an error there rather than a silent downgrade.
     """
     mime, b64 = _encode_image(img_bgr, fmt=fmt, quality=int(quality))
     payload = build_mm_chat_payload(
         model=args.model,
-        system=args.system,
+        system=system or args.system,
         text=args._user_txt_for_payload,  # type: ignore[attr-defined]
         b64_data=b64,
         mime=mime,
         temperature=args.temperature,
         top_p=args.top_p,
-        max_tokens=args.max_tokens,
+        max_tokens=int(max_tokens) if max_tokens else args.max_tokens,
     )
+    if unconstrained:
+        return payload, f"{fmt}/q{quality} unconstrained"
     grammar = getattr(args, '_hdsg_grammar', None)
     if not grammar:
         raise RuntimeError("The approved HDSG generation constraint is unavailable.")
@@ -459,7 +467,9 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
         return None
 
 
-def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args) -> str:
+def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
+                             system: Optional[str] = None, unconstrained: bool = False,
+                             max_tokens: Optional[int] = None) -> str:
     """Try multiple encodings/sizes when server says 'failed to process image'."""
     attempts: list[tuple[str, int, int]] = []  # (fmt, quality, size)
     # Longest side; Qwen3-VL handles non-square input natively
@@ -480,7 +490,10 @@ def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args) -> str:
             img = resize_for_vlm(base_img, sz)
             # Stash user text for payload build without threading globals
             # We attach it temporarily to args for _build_payload_from_image_array
-            payload, desc = _build_payload_from_image_array(img, fmt, q, args)
+            payload, desc = _build_payload_from_image_array(
+                img, fmt, q, args,
+                system=system, unconstrained=unconstrained, max_tokens=max_tokens,
+            )
             content = call_vlm(
                 endpoint, payload, timeout=float(getattr(args, "vlm_timeout_s", 20.0))
             )
@@ -616,6 +629,13 @@ def main():
                     type=_parse_bool_argument,
                     help="answer typed questions from the web UI chat box; when false a question "
                          "receives the out-of-scope reply and no model call is made")
+    ap.add_argument("--unconstrained", action="store_true",
+                    help="DIAGNOSTIC. Answer typed questions by sending the frame and the text "
+                         "straight to the model with no routing, no permitted-fact packet, no "
+                         "grammar and no entailment gate. Shows what the same model says without "
+                         "the architecture. Answers are ungrounded by construction and a run "
+                         "started with this flag is not an evaluation run. The guidance caption is "
+                         "unaffected and stays deterministic.")
     args = ap.parse_args()
 
     if args.evaluate:
@@ -631,8 +651,16 @@ def main():
     except OSError as error:
         raise RuntimeError(f"The approved generation constraint could not be loaded: {args.grammar}") from error
     constraint_hash = hdsg.sha256_file(args.grammar)
+    if args.unconstrained:
+        print("[hdsg] " + "=" * 68)
+        print("[hdsg] UNCONSTRAINED DIAGNOSTIC MODE")
+        print("[hdsg] Typed questions bypass routing, the permitted-fact packet, the grammar")
+        print("[hdsg] and the entailment gate. Answers are ungrounded by construction.")
+        print("[hdsg] This run is not evaluation evidence. The caption stays deterministic.")
+        print("[hdsg] " + "=" * 68)
+
     route_grammar_text: Optional[str] = None
-    if args.answer_questions:
+    if args.answer_questions and not args.unconstrained:
         try:
             route_grammar_text = args.route_grammar.read_text(encoding="utf-8")
         except OSError as error:
@@ -764,6 +792,11 @@ def main():
             "recorded_at_utc": hdsg.utc_now(),
             "record": value,
         }
+        # Stamped only when the diagnostic mode is active, so the envelope shape of a normal run is
+        # unchanged and its absence means a gated run. A log carrying this key is not evaluation
+        # evidence: some of its answers never passed the entailment gate.
+        if args.unconstrained:
+            envelope["unconstrained_diagnostic_run"] = True
         with telemetry_lock:
             with telemetry_path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(envelope, separators=(",", ":"), ensure_ascii=True) + "\n")
@@ -875,6 +908,36 @@ def main():
         question = request["question"]
         route = request["route"]
         resolved_by = request["resolved_by"]
+
+        # Diagnostic mode. Nothing below the model call applies: no routing, no permitted facts, no
+        # grammar, no gate. The reply is shown as the model produced it, which is the point of the
+        # comparison. The caption path is untouched and still carries only released text.
+        if args.unconstrained:
+            entry = request_catalogue["unconstrained_diagnostic"]
+            try:
+                args._user_txt_for_payload = (
+                    f"{entry['fixed_instruction']}\n\nThe person asked: {question}"
+                )
+                raw = _call_vlm_with_fallbacks(
+                    args.endpoint, request["image"], args,
+                    system=str(entry["system_prompt"]),
+                    unconstrained=True,
+                    max_tokens=int(entry.get("max_tokens") or args.max_tokens),
+                )
+            except Exception as error:
+                print(f"[hdsg] unconstrained answer failed: {error}")
+                return f"The model did not answer: {error}", "UNCONSTRAINED", "UNCONSTRAINED", False
+            finally:
+                if hasattr(args, "_user_txt_for_payload"):
+                    delattr(args, "_user_txt_for_payload")
+            record("unconstrained_response", {
+                "question_text_sha256": hdsg.sha256_text(question),
+                "system_prompt_hash": hdsg.sha256_text(str(entry["system_prompt"])),
+                "observation_id": request["fact_packet"]["identity"]["observation_id"],
+                "raw_response": raw,
+                "gated": False,
+            })
+            return str(raw).strip(), "UNCONSTRAINED", "UNCONSTRAINED", True
 
         # Tier 1. Reached only when the keyword pre-filter found nothing, so the classifier call is
         # skipped for the common phrasings. The grammar admits eight tokens and nothing else, which
@@ -1419,10 +1482,15 @@ def main():
                     None if latest_observation_id is None
                     else (time.monotonic() - latest_observation_captured_monotonic) * 1000.0
                 )
-                answerable = (
+                have_frame = (
                     latest_authority is not None and latest_sector_facts is not None
                     and latest_observation_id in observation_images
-                    and questions.measurement_is_answerable(
+                )
+                # The measurement pre-check does not apply in the diagnostic mode: that path reads
+                # the frame rather than the measurements, so refusing it for want of a valid
+                # clearance would withhold the very comparison the mode exists to show.
+                answerable = have_frame and (
+                    args.unconstrained or questions.measurement_is_answerable(
                         latest_sector_facts, observation_age_ms,
                         args.more_detail_freshness_s * 1000.0,
                     )
@@ -1658,6 +1726,9 @@ def main():
                     "frame_height": int(height),
                     "intent": active_intent,
                     "worker_state": worker_state,
+                    # Drives the banner. A screenshot of the diagnostic mode has to be
+                    # distinguishable from one of the release path.
+                    "unconstrained": bool(args.unconstrained),
                     "caption_text": (release or {}).get("content", {}).get("caption_text") or "",
                     "release_mode": (release or {}).get("verification", {}).get("release_mode"),
                     "clear_sectors": list((latest_authority or {}).get("clear_sectors", [])),

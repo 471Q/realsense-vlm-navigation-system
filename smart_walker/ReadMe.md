@@ -222,6 +222,29 @@ continues to answer each request statelessly.
 out-of-scope reply and no model is called. `--route_grammar` moves the classifier
 constraint.
 
+#### `--unconstrained`, a diagnostic mode
+
+`--unconstrained` sends the frame and the typed text straight to the model with no
+routing, no permitted-fact packet, no grammar and no entailment gate. The model gets
+one instruction: describe the scene ahead for navigation, and do not say what the
+person should do. The reply appears verbatim in the chat panel.
+
+This exists to show what the same model says without the architecture, which is the
+`C0_VLM_ONLY` comparison made interactive. Its answers are ungrounded by
+construction and carry none of the guarantees the release path provides.
+
+Three things mark it, because a diagnostic answer must never be mistaken for a
+released one: the console prints a banner at startup, the page shows a red banner
+and outlines each ungated answer in red, and every telemetry envelope carries
+`unconstrained_diagnostic_run`. **A run started with this flag is not evaluation
+evidence.** The guidance caption is unaffected and stays deterministic throughout,
+so the sole-release-path property still holds for everything on the caption line.
+
+The measurement pre-check does not apply in this mode, since it reads the frame
+rather than the measurements. The prompt lives in
+`config/hdsg_request_catalogue.v1.json` under `unconstrained_diagnostic`, so it can
+be edited without touching code.
+
 **Two parts of the policy are not implemented.** Section 6's phrasing variety
 (several approved variants per fact, and deterministic joining with a connective
 set) is deferred, because its variant set is still an open decision under the

@@ -136,6 +136,21 @@
   button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .controls .spacer { width: 12px; }
 
+  /* Diagnostic mode banner. Deliberately loud: a screenshot of this mode must not be mistaken
+     for one of the release path. */
+  #diagnostic-banner {
+    flex: none;
+    background: #7a2020;
+    color: #ffe6e6;
+    border-bottom: 1px solid #a33;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .3px;
+  }
+  .turn.ungated .a { border-left-color: #d94141; }
+  .turn.ungated .meta { color: #e08a8a; }
+
   /* Right: chat */
   .chat {
     width: 380px;
@@ -189,6 +204,11 @@
   <span class="field">state <b id="worker">MONITORING</b></span>
   <span id="connection">connecting</span>
 </header>
+
+<div id="diagnostic-banner" hidden>
+  UNCONSTRAINED DIAGNOSTIC &mdash; chat answers bypass the permitted facts, the grammar and the
+  entailment gate. They are ungrounded. The caption below is unaffected.
+</div>
 
 <main>
   <section class="stage">
@@ -338,6 +358,7 @@ function applyState(state) {
   document.querySelectorAll('[data-intent]').forEach(b =>
     b.classList.toggle('active', b.dataset.intent === (state.intent || 'NONE')));
 
+  document.getElementById('diagnostic-banner').hidden = !state.unconstrained;
   lastChatLog = state.chat_log || [];
   renderChat(lastChatLog);
   draw(state);
@@ -349,9 +370,9 @@ function applyState(state) {
 // answers them in the order they were queued.
 const pendingQuestions = [];
 
-function buildTurn(question, answer, meta, pending) {
+function buildTurn(question, answer, meta, pending, ungated) {
   const el = document.createElement('div');
-  el.className = pending ? 'turn pending' : 'turn';
+  el.className = 'turn' + (pending ? ' pending' : '') + (ungated ? ' ungated' : '');
   const q = document.createElement('div');
   q.className = 'q';
   q.textContent = question;
@@ -382,9 +403,10 @@ function renderChat(turns) {
     log.appendChild(empty);
   }
   turns.forEach(turn => log.appendChild(buildTurn(
-    turn.question, turn.answer, [turn.at, turn.route].filter(Boolean).join(' · '), false
+    turn.question, turn.answer, [turn.at, turn.route].filter(Boolean).join(' · '), false,
+    turn.route === 'UNCONSTRAINED'
   )));
-  pendingQuestions.forEach(text => log.appendChild(buildTurn(text, 'Checking', '', true)));
+  pendingQuestions.forEach(text => log.appendChild(buildTurn(text, 'Checking', '', true, false)));
   renderedTurns = answered;
   pendingDirty = false;
   log.scrollTop = log.scrollHeight;
