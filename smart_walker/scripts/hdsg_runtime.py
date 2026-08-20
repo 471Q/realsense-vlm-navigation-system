@@ -57,6 +57,10 @@ REASON_CODE_ORDER = (
     "RG_MOVEMENT_FACT_REQUIRED",
     "RG_SUBJECT_MISMATCH",
     "RG_STATE_EXPRESSION_MISMATCH",
+    # A declared value disagrees with the measurement it names. The central failure mode of the
+    # composed-caption design and the one code it adds beyond the frozen v1 enumeration, which
+    # hdsg.schemas.v3 must therefore carry.
+    "RG_STATED_VALUE_MISMATCH",
     "RG_NEGATION_DETECTED",
     "RG_ACTION_LANGUAGE_DETECTED",
     "RG_DIRECT_NUMBER_DETECTED",

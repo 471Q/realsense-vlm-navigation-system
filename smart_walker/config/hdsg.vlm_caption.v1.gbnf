@@ -1,0 +1,42 @@
+# Composed caption constraint. The caption itself is free text, because the design requires the
+# model to compose language rather than select from responses written in advance. What the grammar
+# fixes is the structure around it: every numeric value the caption states must also appear as a
+# declared assertion naming the fact it describes.
+#
+# Declaration is what makes the check exact. Recovering a number from prose and inferring which of
+# three sectors it refers to is linguistic inference, and the gate does not perform inference. The
+# model states the attribution and the gate compares it against the Fact Packet.
+#
+# The grammar cannot enforce that the declarations match the prose, or that a declared value matches
+# its measurement. Both are semantic and belong to the gate. This file only guarantees that a reply
+# is parseable and carries the fields the gate needs.
+#
+# Alternations are kept on one line. This llama.cpp build's GBNF parser ends a rule at the newline,
+# so a continuation line beginning with "|" is read as a new rule and the grammar is rejected.
+
+root ::= ws "{" ws schema-field "," ws caption-field "," ws assertions-field "," ws visuals-field ws "}" ws
+
+schema-field ::= "\"schema_version\"" ws ":" ws "\"hdsg.vlm_caption.v1\""
+caption-field ::= "\"caption\"" ws ":" ws json-string
+assertions-field ::= "\"assertions\"" ws ":" ws assertion-array
+visuals-field ::= "\"visual_observations\"" ws ":" ws visual-array
+
+assertion-array ::= "[" ws "]" | "[" ws assertion (ws "," ws assertion)* ws "]"
+assertion ::= "{" ws assertion-fact-field "," ws assertion-measurement-field "," ws assertion-value-field ws "}"
+assertion-fact-field ::= "\"fact_id\"" ws ":" ws json-string
+assertion-measurement-field ::= "\"measurement_id\"" ws ":" ws json-string
+assertion-value-field ::= "\"stated_value\"" ws ":" ws number
+
+visual-array ::= "[" ws "]" | "[" ws visual-observation (ws "," ws visual-observation)* ws "]"
+visual-observation ::= "{" ws visual-id-field "," ws proposed-label-field "," ws bearing-field ws "}"
+visual-id-field ::= "\"candidate_observation_id\"" ws ":" ws "\"visual:" positive-integer "\""
+proposed-label-field ::= "\"proposed_label\"" ws ":" ws "\"" lower-word (" " lower-word)* "\""
+bearing-field ::= "\"bearing\"" ws ":" ws ("\"LEFT\"" | "\"CENTRE\"" | "\"RIGHT\"")
+
+lower-word ::= [a-z] [a-z0-9_]*
+number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)?
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+hex ::= [0-9a-fA-F]
+positive-integer ::= [1-9] [0-9]*
+ws ::= [ \t\n\r]*

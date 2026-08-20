@@ -32,6 +32,7 @@ try:
     import scripts.realsense_shared_control as sw
     import scripts.hdsg_runtime as hdsg
     import scripts.hdsg_questions as questions
+    import scripts.hdsg_composed as hdsg_composed
     from scripts.hdsg_web_ui import WebInterface
     from scripts.hdsg_recording import ObservationRecorder
 except Exception:
@@ -39,6 +40,7 @@ except Exception:
     import realsense_shared_control as sw  # type: ignore
     import hdsg_runtime as hdsg  # type: ignore
     import hdsg_questions as questions  # type: ignore
+    import hdsg_composed  # type: ignore
     from hdsg_web_ui import WebInterface  # type: ignore
     from hdsg_recording import ObservationRecorder  # type: ignore
 
@@ -129,7 +131,8 @@ def build_text_chat_payload(model: str, system: str, text: str, grammar: str,
 def _build_payload_from_image_array(img_bgr: np.ndarray, fmt: str, quality: int,
                                     args, *, system: Optional[str] = None,
                                     unconstrained: bool = False,
-                                    max_tokens: Optional[int] = None) -> tuple[dict, str]:
+                                    max_tokens: Optional[int] = None,
+                                    grammar: Optional[str] = None) -> tuple[dict, str]:
     """Encode image with requested format/quality and build chat payload.
     Returns (payload, desc) where desc is a short string for logging.
 
@@ -150,10 +153,10 @@ def _build_payload_from_image_array(img_bgr: np.ndarray, fmt: str, quality: int,
     )
     if unconstrained:
         return payload, f"{fmt}/q{quality} unconstrained"
-    grammar = getattr(args, '_hdsg_grammar', None)
-    if not grammar:
+    constraint = grammar or getattr(args, '_hdsg_grammar', None)
+    if not constraint:
         raise RuntimeError("The approved HDSG generation constraint is unavailable.")
-    payload["grammar"] = grammar
+    payload["grammar"] = constraint
     return payload, f"{fmt}/q{quality}"
 
 
@@ -469,7 +472,8 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
 
 def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
                              system: Optional[str] = None, unconstrained: bool = False,
-                             max_tokens: Optional[int] = None) -> str:
+                             max_tokens: Optional[int] = None,
+                             grammar: Optional[str] = None) -> str:
     """Try multiple encodings/sizes when server says 'failed to process image'."""
     attempts: list[tuple[str, int, int]] = []  # (fmt, quality, size)
     # Longest side; Qwen3-VL handles non-square input natively
@@ -493,6 +497,7 @@ def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
             payload, desc = _build_payload_from_image_array(
                 img, fmt, q, args,
                 system=system, unconstrained=unconstrained, max_tokens=max_tokens,
+                grammar=grammar,
             )
             content = call_vlm(
                 endpoint, payload, timeout=float(getattr(args, "vlm_timeout_s", 20.0))
@@ -625,6 +630,20 @@ def main():
     ap.add_argument("--request_catalogue", type=Path, default=default_catalogue)
     ap.add_argument("--route_grammar", type=Path, default=default_route_grammar,
                     help="the Tier 1 question classifier constraint")
+    default_caption_grammar = (
+        Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_caption.v1.gbnf"
+    )
+    ap.add_argument("--caption_grammar", type=Path, default=default_caption_grammar,
+                    help="the composed caption constraint")
+    ap.add_argument("--generation", choices=["composed", "templated"], default="composed",
+                    help="composed: the model writes the caption in its own words and declares "
+                         "every number it states, which the gate checks against the Fact Packet. "
+                         "templated: the superseded design in which the model selects among "
+                         "approved sentences, retained as a comparison arm.")
+    ap.add_argument("--value_tolerance_m", type=float,
+                    default=hdsg_composed.DEFAULT_VALUE_TOLERANCE_M,
+                    help="how far a declared value may sit from its measurement before the "
+                         "caption is rejected as a detected hallucination")
     ap.add_argument("--answer_questions", nargs="?", const=True, default=True,
                     type=_parse_bool_argument,
                     help="answer typed questions from the web UI chat box; when false a question "
@@ -658,6 +677,21 @@ def main():
         print("[hdsg] and the entailment gate. Answers are ungrounded by construction.")
         print("[hdsg] This run is not evaluation evidence. The caption stays deterministic.")
         print("[hdsg] " + "=" * 68)
+
+    # The composed design constrains the reply's structure while leaving the caption free, so its
+    # grammar replaces the candidate grammar rather than supplementing it.
+    caption_grammar_text: Optional[str] = None
+    if args.generation == "composed":
+        try:
+            caption_grammar_text = args.caption_grammar.read_text(encoding="utf-8")
+        except OSError as error:
+            raise RuntimeError(
+                f"The composed caption constraint could not be loaded: {args.caption_grammar}"
+            ) from error
+        print(f"[hdsg] generation: composed captions, declared values checked to "
+              f"{args.value_tolerance_m:.2f} m")
+    else:
+        print("[hdsg] generation: templated, the superseded comparison arm")
 
     route_grammar_text: Optional[str] = None
     if args.answer_questions and not args.unconstrained:
@@ -731,6 +765,12 @@ def main():
     state_lock = threading.Lock()
 
     model = YOLO(args.det_model)
+    # The detector's whole class vocabulary. A class it can recognise but did not report in the
+    # current observation may not be named in a caption, which is what makes object hallucination
+    # impossible rather than infrequent. A word outside this vocabulary is ordinary language and is
+    # not policed.
+    detector_classes = [str(name) for name in (getattr(model, "names", None) or {}).values()]
+    print(f"[hdsg] detector vocabulary: {len(detector_classes)} classes")
     use_cuda = bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
     if use_cuda:
         model.to("cuda")
@@ -815,6 +855,69 @@ def main():
             latest_release = release
         record(record_type, release)
 
+    def generate_candidate(fact_packet: dict, prompt_packet: dict, image,
+                           fixed_instruction: str) -> tuple[Optional[dict], list[str],
+                                                            Optional[str], list[dict]]:
+        """Runs one generation and gates it under whichever design is selected.
+
+        Returns the candidate, its reason codes, the raw reply and the scored assertions. The
+        assertions are empty under the templated design, which declares none.
+
+        Both call sites share this so the two designs differ in one place rather than two.
+        """
+        raw_response: Optional[str] = None
+        scored: list[dict] = []
+        candidate: Optional[dict] = None
+        codes: list[str] = []
+        try:
+            if args.generation == "composed":
+                args._user_txt_for_payload = hdsg_composed.build_composed_prompt(
+                    prompt_packet, fact_packet, fixed_instruction
+                )
+                raw_response = _call_vlm_with_fallbacks(
+                    args.endpoint, image, args,
+                    system=hdsg_composed.COMPOSED_SYSTEM_PROMPT,
+                    grammar=caption_grammar_text,
+                )
+                candidate, codes = hdsg_composed.parse_caption_candidate(raw_response)
+                if candidate is not None:
+                    record("vlm_candidate", candidate)
+                    gate_codes, scored = hdsg_composed.validate_caption_candidate(
+                        candidate, prompt_packet, fact_packet,
+                        detector_classes=detector_classes,
+                        value_tolerance_m=args.value_tolerance_m,
+                    )
+                    codes = list(codes) + list(gate_codes)
+            else:
+                args._user_txt_for_payload = hdsg.prompt_packet_text(
+                    prompt_packet, fixed_instruction
+                )
+                raw_response = _call_vlm_with_fallbacks(args.endpoint, image, args)
+                candidate, codes = hdsg.parse_candidate(raw_response)
+                if candidate is not None:
+                    record("vlm_candidate", candidate)
+        except Exception as error:
+            print(f"[hdsg] constrained generation failed: {error}")
+            return None, [hdsg.generation_failure_code(error)], raw_response, scored
+        finally:
+            if hasattr(args, "_user_txt_for_payload"):
+                delattr(args, "_user_txt_for_payload")
+        return candidate, codes, raw_response, scored
+
+    def make_release(fact_packet: dict, prompt_packet: dict, release_id: str,
+                     candidate: Optional[dict], failure_codes: list[str],
+                     scored: list[dict], **kwargs) -> dict:
+        """Builds the release under whichever design is selected."""
+        if args.generation == "composed":
+            return hdsg_composed.build_composed_release(
+                fact_packet, prompt_packet, release_id=release_id, candidate=candidate,
+                scored_assertions=scored, failure_codes=failure_codes, **kwargs
+            )
+        return hdsg.build_release(
+            fact_packet, prompt_packet, release_id=release_id, candidate=candidate,
+            failure_codes=failure_codes, **kwargs
+        )
+
     def generation_worker():
         nonlocal generation_inflight, generation_request_id, queued_request_id
         nonlocal reassessment_inflight, reassessment_cooldown_until
@@ -837,22 +940,18 @@ def main():
             raw_response: Optional[str] = None
             started_ms = hdsg.monotonic_time_ms()
             responded_ms: Optional[int] = None
-            try:
-                catalogue_entry = request_catalogue["requests"][fact_packet["interaction"]["request_id"]]
-                args._user_txt_for_payload = hdsg.prompt_packet_text(
-                    prompt_packet, str(catalogue_entry["fixed_instruction"])
-                )
-                raw_response = _call_vlm_with_fallbacks(args.endpoint, request["image"], args)
-                responded_ms = hdsg.monotonic_time_ms()
-                candidate, failure_codes = hdsg.parse_candidate(raw_response)
-                if candidate is not None:
-                    record("vlm_candidate", candidate)
-            except Exception as error:
-                failure_codes = [hdsg.generation_failure_code(error)]
-                print(f"[hdsg] constrained generation failed: {error}")
-            finally:
-                if hasattr(args, "_user_txt_for_payload"):
-                    delattr(args, "_user_txt_for_payload")
+            catalogue_entry = request_catalogue["requests"][fact_packet["interaction"]["request_id"]]
+            candidate, failure_codes, raw_response, scored_assertions = generate_candidate(
+                fact_packet, prompt_packet, request["image"],
+                str(catalogue_entry["fixed_instruction"]),
+            )
+            responded_ms = hdsg.monotonic_time_ms()
+            if scored_assertions:
+                record("declared_assertions", {
+                    "event_id": fact_packet["identity"]["event_id"],
+                    "assertions": scored_assertions,
+                    "summary": hdsg_composed.assertion_summary(scored_assertions),
+                })
 
             # HDSG_INTENT_TRIGGERED_EXPLANATION_POLICY.md section 7. An AUTO_GUIDANCE candidate
             # is stale only when the guidance signature confirmed at response time differs from
@@ -868,12 +967,9 @@ def main():
             if not still_active:
                 failure_codes = ["RG_STALE_CANDIDATE"]
                 candidate = None
-            release = hdsg.build_release(
-                fact_packet,
-                prompt_packet,
-                release_id=request["release_id"],
-                candidate=candidate,
-                failure_codes=failure_codes,
+            release = make_release(
+                fact_packet, prompt_packet, request["release_id"],
+                candidate, failure_codes, scored_assertions,
             )
             record("generation_response", hdsg.build_generation_response_record(
                 fact_packet,
@@ -1022,33 +1118,22 @@ def main():
         })
         record("restricted_prompt_packet", prompt_packet)
 
-        candidate = None
-        failure_codes: list[str] = []
-        raw_response: Optional[str] = None
-        try:
-            args._user_txt_for_payload = hdsg.prompt_packet_text(
-                prompt_packet, str(route_entry["fixed_instruction"])
-            )
-            raw_response = _call_vlm_with_fallbacks(args.endpoint, request["image"], args)
-            candidate, failure_codes = hdsg.parse_candidate(raw_response)
-            if candidate is not None:
-                record("vlm_candidate", candidate)
-        except Exception as error:
-            failure_codes = [hdsg.generation_failure_code(error)]
-            print(f"[hdsg] question answer generation failed: {error}")
-        finally:
-            if hasattr(args, "_user_txt_for_payload"):
-                delattr(args, "_user_txt_for_payload")
+        candidate, failure_codes, raw_response, scored_assertions = generate_candidate(
+            fact_packet, prompt_packet, request["image"], str(route_entry["fixed_instruction"])
+        )
+        if scored_assertions:
+            record("declared_assertions", {
+                "event_id": fact_packet["identity"]["event_id"],
+                "assertions": scored_assertions,
+                "summary": hdsg_composed.assertion_summary(scored_assertions),
+            })
 
         # The answer passes through the unchanged entailment gate and the unchanged release
         # builder, so a candidate citing a fact it was not given is rejected here exactly as a
         # guidance candidate would be, and a rejection still yields the deterministic text.
-        release = hdsg.build_release(
-            fact_packet,
-            prompt_packet,
-            release_id=allocate("release", "release"),
-            candidate=candidate,
-            failure_codes=failure_codes,
+        release = make_release(
+            fact_packet, prompt_packet, allocate("release", "release"),
+            candidate, failure_codes, scored_assertions,
         )
         record("question_release", release)
         if release["verification"]["gate_outcome"] == "ACCEPTED":
