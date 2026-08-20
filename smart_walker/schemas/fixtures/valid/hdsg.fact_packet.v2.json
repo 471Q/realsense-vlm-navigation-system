@@ -9,7 +9,7 @@
     "source_mode": "LIVE"
   },
   "observation": {
-    "captured_at_utc": "2026-08-20T19:20:41.567Z",
+    "captured_at_utc": "2026-08-21T00:00:00Z",
     "sensor_timestamp_ms": 1.0,
     "camera_model": "Intel RealSense D455f",
     "device_id": "d455f_01",

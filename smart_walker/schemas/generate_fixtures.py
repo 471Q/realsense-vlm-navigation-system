@@ -89,14 +89,22 @@ def build_event():
     return fact_packet, prompt_packet, candidate, release
 
 
-def freeze(record):
-    """Replaces the wall-clock fields so an unchanged runtime regenerates an unchanged file."""
-    frozen = json.loads(json.dumps(record))
-    for section, key in (("identity", "captured_at_utc"), ("identity", "released_at_utc"),
-                         ("routing", "issued_at_utc")):
-        if isinstance(frozen.get(section), dict) and key in frozen[section]:
-            frozen[section][key] = "2026-08-21T00:00:00Z"
-    return frozen
+FROZEN_TIMESTAMP = "2026-08-21T00:00:00Z"
+
+
+def freeze(value):
+    """Replaces every wall-clock field so an unchanged runtime regenerates an unchanged file.
+
+    The search is over any key ending in `_at_utc`, at any depth, rather than over a list of the
+    places timestamps are known to appear. A named list missed `observation.captured_at_utc` and the
+    fact packet fixture was consequently different on every run.
+    """
+    if isinstance(value, dict):
+        return {key: FROZEN_TIMESTAMP if key.endswith("_at_utc") else freeze(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [freeze(item) for item in value]
+    return value
 
 
 def main():
