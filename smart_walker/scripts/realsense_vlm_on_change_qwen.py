@@ -980,9 +980,17 @@ def main():
         if not route_entry:
             return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False
 
-        requirement_set = questions.route_requirements(route, fact_packet)
-        if not requirement_set:
-            return questions.NO_MEASUREMENT_TEXT, route, resolved_by, False
+        # SCENE_OVERVIEW is an alias for the existing More detail profile, unscoped, per the
+        # policy's section 4. Passing no requirement set leaves build_prompt_packet to run its own
+        # More detail construction, which already covers every sector and every detected object.
+        # The scoped routes supply their own, and an empty set from one of those means there is
+        # nothing measured to describe.
+        if questions.uses_default_profile(route):
+            requirement_set = None
+        else:
+            requirement_set = questions.route_requirements(route, fact_packet)
+            if not requirement_set:
+                return questions.NO_MEASUREMENT_TEXT, route, resolved_by, False
 
         prompt_id = allocate("prompt", "prompt")
         prompt_packet = hdsg.build_prompt_packet(
@@ -1042,7 +1050,11 @@ def main():
             # A rejected candidate falls back to the routed facts rather than to the release
             # builder's own fallback, which describes the action binding and would answer a
             # different question.
-            answer = questions.deterministic_answer(route, fact_packet, requirement_set)
+            # The packet's own requirements are used rather than the scoped set, so the fallback
+            # covers the unscoped construction too.
+            answer = questions.deterministic_answer(
+                route, fact_packet, prompt_packet["requirements"]
+            )
         if route == "EXPLAIN_DECISION":
             answer = questions.with_action_prefix(release, answer)
         return answer, route, resolved_by, True

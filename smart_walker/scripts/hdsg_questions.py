@@ -253,6 +253,17 @@ def parse_route(raw: str) -> tuple[Optional[str], Optional[str]]:
     return str(route), None
 
 
+def uses_default_profile(route: str) -> bool:
+    """Reports whether a route answers through the unscoped More detail construction.
+
+    Section 4 makes `SCENE_OVERVIEW` an alias for the existing More detail profile rather than a
+    new one: that profile already requests a clause per sector and per detected object, which is
+    what a "what do you see" question wants. It therefore supplies no scoped requirements, and the
+    caller must not read that as having nothing to describe.
+    """
+    return route == "SCENE_OVERVIEW"
+
+
 def route_requirements(route: str, fact_packet: Mapping[str, Any]) -> list[dict]:
     """Returns the permitted-fact requirements for one route.
 

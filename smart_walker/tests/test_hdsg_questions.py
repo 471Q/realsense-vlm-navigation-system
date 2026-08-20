@@ -484,6 +484,77 @@ class DeterministicAnswerTests(unittest.TestCase):
                          "Select Reassess for a fresh look.")
 
 
+class DefaultProfileRouteTests(unittest.TestCase):
+    """SCENE_OVERVIEW answers through the unscoped More detail construction, per section 4."""
+
+    def test_scene_overview_supplies_no_scoped_requirements(self):
+        self.assertTrue(questions.uses_default_profile("SCENE_OVERVIEW"))
+        self.assertEqual(questions.route_requirements("SCENE_OVERVIEW", make_packet()), [])
+
+    def test_no_other_route_uses_the_default_profile(self):
+        # An empty requirement set from a scoped route means there is nothing measured to
+        # describe, and the caller declines. Reading SCENE_OVERVIEW's empty set the same way is
+        # what made every scene question answer "I do not have a reliable measurement".
+        for route in questions.ROUTES:
+            if route != "SCENE_OVERVIEW":
+                self.assertFalse(questions.uses_default_profile(route), route)
+
+    def test_the_default_construction_covers_every_sector(self):
+        packet = make_packet(sectors=make_sectors("CLEAR", "CONSTRAINED", "BLOCKED"),
+                             action_ids=["sector:centre"])
+        built = hdsg.build_prompt_packet(
+            packet, prompt_id="prompt_1", model_id="m", model_hash=hdsg.sha256_text("m"),
+            quantisation=None, temperature=0.2, top_p=0.9, max_tokens=400,
+            system_prompt="s", constraint_hash=hdsg.sha256_text("g"),
+            prompt_profile_id=questions.question_profile_id("SCENE_OVERVIEW"),
+            question_requirements=None,
+        )
+        permitted = {item["fact_id"] for item in built["permitted_facts"]}
+        self.assertEqual(permitted, {"sector:left", "sector:centre", "sector:right"})
+
+    def test_the_fallback_reads_the_packet_requirements(self):
+        # The fallback is given the packet's own requirements rather than a scoped set, so it
+        # covers the unscoped construction too.
+        packet = make_packet(sectors=make_sectors("CLEAR", "CONSTRAINED", "BLOCKED"),
+                             action_ids=["sector:centre"])
+        built = hdsg.build_prompt_packet(
+            packet, prompt_id="prompt_1", model_id="m", model_hash=hdsg.sha256_text("m"),
+            quantisation=None, temperature=0.2, top_p=0.9, max_tokens=400,
+            system_prompt="s", constraint_hash=hdsg.sha256_text("g"),
+            question_requirements=None,
+        )
+        answer = questions.deterministic_answer(
+            "SCENE_OVERVIEW", packet, built["requirements"])
+        for name in ("left", "centre", "right"):
+            self.assertIn(f"{name} sector", answer)
+
+
+class VisualObservationPromptTests(unittest.TestCase):
+    def test_the_identifier_format_is_stated_when_visuals_are_permitted(self):
+        """The grammar admits any string for candidate_observation_id; the validator requires
+        visual:N. A model told neither emits something else and the whole response is rejected."""
+        packet = make_packet()
+        built = hdsg.build_prompt_packet(
+            packet, prompt_id="prompt_1", model_id="m", model_hash=hdsg.sha256_text("m"),
+            quantisation=None, temperature=0.2, top_p=0.9, max_tokens=400,
+            system_prompt="s", constraint_hash=hdsg.sha256_text("g"),
+        )
+        self.assertTrue(built["response_constraints"]["visual_only_observations_allowed"])
+        self.assertIn("visual:1", hdsg.prompt_packet_text(built))
+
+    def test_the_format_is_not_stated_when_visuals_are_forbidden(self):
+        packet = make_packet()
+        packet["interaction"]["response_mode"] = "AUTOMATIC"
+        built = hdsg.build_prompt_packet(
+            packet, prompt_id="prompt_1", model_id="m", model_hash=hdsg.sha256_text("m"),
+            quantisation=None, temperature=0.2, top_p=0.9, max_tokens=400,
+            system_prompt="s", constraint_hash=hdsg.sha256_text("g"),
+        )
+        text = hdsg.prompt_packet_text(built)
+        self.assertIn("must be empty", text)
+        self.assertNotIn("visual:1", text)
+
+
 class TelemetryRecordTests(unittest.TestCase):
     def test_question_text_is_hashed_not_stored(self):
         record = questions.build_route_record("what is on my left", "LEFT", "TIER_0_KEYWORD", True)
