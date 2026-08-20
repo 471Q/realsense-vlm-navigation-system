@@ -473,7 +473,8 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
 def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
                              system: Optional[str] = None, unconstrained: bool = False,
                              max_tokens: Optional[int] = None,
-                             grammar: Optional[str] = None) -> str:
+                             grammar: Optional[str] = None,
+                             timeout_s: Optional[float] = None) -> str:
     """Try multiple encodings/sizes when server says 'failed to process image'."""
     attempts: list[tuple[str, int, int]] = []  # (fmt, quality, size)
     # Longest side; Qwen3-VL handles non-square input natively
@@ -500,7 +501,9 @@ def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
                 grammar=grammar,
             )
             content = call_vlm(
-                endpoint, payload, timeout=float(getattr(args, "vlm_timeout_s", 20.0))
+                endpoint, payload,
+                timeout=float(timeout_s if timeout_s
+                              else getattr(args, "vlm_timeout_s", 20.0)),
             )
             if desc != '':
                 print(
@@ -640,11 +643,17 @@ def main():
                          "every number it states, which the gate checks against the Fact Packet. "
                          "templated: the superseded design in which the model selects among "
                          "approved sentences, retained as a comparison arm.")
-    ap.add_argument("--caption_max_tokens", type=int, default=600,
+    ap.add_argument("--caption_max_tokens", type=int, default=400,
                     help="token budget for a composed caption. It needs a larger budget than the "
                          "templated design because the reply carries prose and the declarations "
                          "for every number in it. A budget too small truncates the JSON and the "
-                         "reply is discarded as a parse failure.")
+                         "reply is discarded as a parse failure. The deployed model settles "
+                         "at around 240, so this is headroom rather than a target.")
+    ap.add_argument("--caption_timeout_s", type=float, default=45.0,
+                    help="request timeout for a composed caption. Larger than --vlm_timeout_s "
+                         "because the detector runs continuously on the same GPU and the guidance "
+                         "and question workers can be generating at once, so a call that takes "
+                         "eight seconds on an idle device takes considerably longer in a live run.")
     ap.add_argument("--value_tolerance_m", type=float,
                     default=hdsg_composed.DEFAULT_VALUE_TOLERANCE_M,
                     help="how far a declared value may sit from its measurement before the "
@@ -884,6 +893,7 @@ def main():
                     system=hdsg_composed.COMPOSED_SYSTEM_PROMPT,
                     grammar=caption_grammar_text,
                     max_tokens=args.caption_max_tokens,
+                    timeout_s=args.caption_timeout_s,
                 )
                 candidate, codes = hdsg_composed.parse_caption_candidate(raw_response)
                 if candidate is None and not str(raw_response).rstrip().endswith("}"):
