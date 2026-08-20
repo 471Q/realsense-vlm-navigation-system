@@ -2,6 +2,8 @@
   "catalogue_version": "hdsg.request_catalogue.v1",
   "system_prompt_id": "hdsg.reason_only.v1",
   "system_prompt": "The response is a constrained HDSG explanation candidate, not guidance. It must contain only JSON matching hdsg.vlm_candidate.v1. It must cite only supplied facts, use supplied measurement placeholders, and contain no action, recommendation, generated number, visible-text transcription, model commentary, or unsupported claim.",
+  "composed_system_prompt_id": "hdsg.composed_caption.v1",
+  "composed_system_prompt": "The response is a navigation caption for a person using a walking frame, composed from the measurements supplied. It must contain only JSON matching hdsg.vlm_caption.v1. It describes the space; it never tells the person what to do, and it never names an object the measurements do not list. Every number it states must come from the measurements and must be declared.",
   "requests": {
     "AUTO_GUIDANCE": {
       "enabled": true,
@@ -24,7 +26,6 @@
   },
   "question_routes": {
     "_note": "HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4. An answered question rides as request_id MORE_DETAIL, because request_id is a frozen enumeration in hdsg.prompt_packet.v1 and no open-question member exists in it. The route is recoverable from prompt_profile_id, which the same schema constrains by pattern rather than by enumeration, and from the question_route telemetry record. Routes REASSESS and OUT_OF_SCOPE never reach generation and carry no instruction here.",
-    "classifier_system_prompt_id": "hdsg.question_route.v1",
     "LEFT": {
       "prompt_profile_id": "question_left.v1",
       "fixed_instruction": "Describe the left side of the walker using only the permitted facts."

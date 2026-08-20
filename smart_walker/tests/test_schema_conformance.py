@@ -180,6 +180,42 @@ class RuntimeConformanceTests(unittest.TestCase):
                     json.loads(path.read_text(encoding="utf-8"))))
                 self.assertTrue(errors, f"{path.name} was accepted but is meant to be rejected")
 
+    def test_the_catalogue_holds_every_system_prompt_the_runtime_sends(self):
+        """A prompt held in code cannot be hashed into the packet that claims to record it.
+
+        The composed system prompt lived in hdsg_composed while the packet recorded the templated
+        prompt's digest, so every composed run named text the model never received. The same class
+        of defect as the constraint identifier, and invisible for the same reason: the field was
+        populated, just with the wrong thing.
+        """
+        from scripts import hdsg_composed as composed
+        catalogue = json.loads(
+            (CONFIG / "hdsg_request_catalogue.v1.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("composed_system_prompt", catalogue)
+        self.assertEqual(catalogue["composed_system_prompt"], composed.COMPOSED_SYSTEM_PROMPT)
+        self.assertIn("composed_system_prompt_id", catalogue)
+
+    def test_the_packet_records_the_prompt_and_grammar_that_were_used(self):
+        catalogue = json.loads(
+            (CONFIG / "hdsg_request_catalogue.v1.json").read_text(encoding="utf-8")
+        )
+        system = catalogue["composed_system_prompt"]
+        grammar = CONFIG / "hdsg.vlm_caption.v1.gbnf"
+        _, fact_packet, _ = self._event()
+        packet = hdsg.build_prompt_packet(
+            fact_packet, prompt_id="prompt_t", model_id="m", model_hash=hdsg.sha256_text("m"),
+            quantisation=None, temperature=0.2, top_p=0.9, max_tokens=400,
+            system_prompt=system, constraint_hash=hdsg.sha256_file(grammar),
+            system_prompt_id=catalogue["composed_system_prompt_id"],
+            expected_response_schema=hdsg.CAPTION_SCHEMA,
+        )
+        generation = packet["generation"]
+        self.assertEqual(generation["system_prompt_hash"], hdsg.sha256_text(system))
+        self.assertEqual(generation["constraint_hash"], hdsg.sha256_file(grammar))
+        self.assertEqual(generation["constraint_id"], hdsg.CAPTION_SCHEMA)
+        self.assertConforms(packet, "hdsg.prompt_packet.v2")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,24 +62,6 @@ def read_events(telemetry_path: Path) -> list[dict]:
     return packets
 
 
-def read_releases(telemetry_path: Path) -> dict[str, dict]:
-    """Returns the archived C2 releases, keyed by event identifier.
-
-    Interim releases are skipped: they carry the pending placeholder rather than the scored
-    output, and section 5.6.1 scores the Authoritative Release Object.
-    """
-    releases: dict[str, dict] = {}
-    for line in Path(telemetry_path).read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        envelope = json.loads(line)
-        if envelope.get("record_type") != "authoritative_release":
-            continue
-        record = envelope["record"]
-        releases[record["identity"]["event_id"]] = record
-    return releases
-
-
 def pair_with_recording(packets: list[dict], recording_dir: Path) -> Iterator[ReplayEvent]:
     """Yields archived events that have a recorded frame, in order.
 

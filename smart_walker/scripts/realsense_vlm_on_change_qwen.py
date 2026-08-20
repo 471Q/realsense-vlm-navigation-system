@@ -704,6 +704,9 @@ def main():
             ) from error
         print(f"[hdsg] generation: composed captions, declared values checked to "
               f"{args.value_tolerance_m:.2f} m")
+        # The packet must record the digest of the grammar that constrained the call, not of the
+        # templated one it would otherwise default to.
+        constraint_hash = hdsg.sha256_file(args.caption_grammar)
     else:
         print("[hdsg] generation: templated, the superseded comparison arm")
 
@@ -722,6 +725,12 @@ def main():
                 or not required_requests.issubset(request_catalogue.get("requests", {}))):
             raise ValueError("The required evaluated request profiles are absent.")
         args.system = str(request_catalogue["system_prompt"])
+        # The composed call sends a different system prompt, so the packet must record that one
+        # or its system_prompt_hash names text the model never received.
+        composed_system = str(request_catalogue.get("composed_system_prompt")
+                              or hdsg_composed.COMPOSED_SYSTEM_PROMPT)
+        composed_system_id = str(request_catalogue.get("composed_system_prompt_id")
+                                 or "hdsg.composed_caption.v1")
     except (OSError, ValueError, TypeError, json.JSONDecodeError, KeyError) as error:
         raise RuntimeError(
             f"The approved request catalogue could not be loaded: {args.request_catalogue}"
@@ -890,7 +899,7 @@ def main():
                 )
                 raw_response = _call_vlm_with_fallbacks(
                     args.endpoint, image, args,
-                    system=hdsg_composed.COMPOSED_SYSTEM_PROMPT,
+                    system=composed_system,
                     grammar=caption_grammar_text,
                     max_tokens=args.caption_max_tokens,
                     timeout_s=args.caption_timeout_s,
@@ -1133,10 +1142,11 @@ def main():
             temperature=args.temperature,
             top_p=args.top_p,
             max_tokens=args.max_tokens,
-            system_prompt=args.system,
+            system_prompt=(composed_system if args.generation == "composed" else args.system),
             constraint_hash=constraint_hash,
             prompt_profile_id=str(route_entry["prompt_profile_id"]),
-            system_prompt_id=str(request_catalogue["system_prompt_id"]),
+            system_prompt_id=(composed_system_id if args.generation == "composed"
+                              else str(request_catalogue["system_prompt_id"])),
             question_requirements=requirement_set,
             expected_response_schema=(
                 hdsg.CAPTION_SCHEMA if args.generation == "composed" else hdsg.CANDIDATE_SCHEMA
@@ -1241,10 +1251,11 @@ def main():
             temperature=args.temperature,
             top_p=args.top_p,
             max_tokens=args.max_tokens,
-            system_prompt=args.system,
+            system_prompt=(composed_system if args.generation == "composed" else args.system),
             constraint_hash=constraint_hash,
             prompt_profile_id=str(catalogue_entry["prompt_profile_id"]),
-            system_prompt_id=str(request_catalogue["system_prompt_id"]),
+            system_prompt_id=(composed_system_id if args.generation == "composed"
+                              else str(request_catalogue["system_prompt_id"])),
             expected_response_schema=(
                 hdsg.CAPTION_SCHEMA if args.generation == "composed" else hdsg.CANDIDATE_SCHEMA
             ),

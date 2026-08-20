@@ -10,7 +10,8 @@
     "All three grammars are now covered. The v2 manifest hashed one, which left the routing and caption constraints able to drift from their validators undetected.",
     "RG_NO_INTENT_EXPRESSED and RG_GENERATION_PENDING were added to the runtime by the intent-triggered explanation policy on 19 August 2026 and never reached the frozen enumeration, so every idle and every interim release since then has been non-conformant. Nothing detected it because the fixtures validate rather than the live output. The freeze tests now compare the runtime's own reason-code order against the enumeration.",
     "The valid fixtures for the fact packet, prompt packet and release are generated from the runtime rather than written by hand. A hand-written fixture agrees with the schema by construction and therefore proves nothing about the records the system emits, which is how approved_text_templates stayed absent from the prompt packet schema while every packet carried it.",
-    "The More detail profile's visual-observation maximum was raised from one to two on 20 August 2026 to make that profile describe the whole scene, and the frozen prompt packet schema still pinned it to one, so every More detail packet since then was non-conformant. The profile limits and the schema's conditionals are now bound by a test."
+    "The More detail profile's visual-observation maximum was raised from one to two on 20 August 2026 to make that profile describe the whole scene, and the frozen prompt packet schema still pinned it to one, so every More detail packet since then was non-conformant. The profile limits and the schema's conditionals are now bound by a test.",
+    "The request catalogue is hashed because it now carries every system prompt the runtime sends. A prompt held in code cannot be hashed into the packet that claims to record it, which is how a composed run came to record the templated prompt's digest."
   ],
   "files": [
     {
@@ -57,6 +58,11 @@
       "record_schema": "hdsg.question_route.v1",
       "path": "../config/hdsg.question_route.v1.gbnf",
       "sha256": "b704adc54179731f89b93da9cb50504d1ab4a771e34bb79b3c9da3f137f24396"
+    },
+    {
+      "record_schema": "hdsg.request_catalogue.v1",
+      "path": "../config/hdsg_request_catalogue.v1.json",
+      "sha256": "3b69ab98ee24ef9acc86008bb9c6fd5bb85535bbb1134a36d538752f8b0e85d3"
     }
   ]
 }
