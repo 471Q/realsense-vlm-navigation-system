@@ -888,6 +888,12 @@ def main():
                         value_tolerance_m=args.value_tolerance_m,
                     )
                     codes = list(codes) + list(gate_codes)
+                    if gate_codes:
+                        # A gate rejection is otherwise silent: the user sees the deterministic
+                        # fallback, which for several sector states is worded identically to an
+                        # accepted caption, so nothing on screen indicates a rejection occurred.
+                        print(f"[hdsg] caption rejected {gate_codes}: "
+                              f"{str(candidate.get('caption'))[:160]}")
             else:
                 args._user_txt_for_payload = hdsg.prompt_packet_text(
                     prompt_packet, fixed_instruction
@@ -1149,7 +1155,13 @@ def main():
             )
         if route == "EXPLAIN_DECISION":
             answer = questions.with_action_prefix(release, answer)
-        return answer, route, resolved_by, True, release["verification"]["release_mode"]
+        # The primary reason code accompanies the mode, because "fell back" without saying why is
+        # not enough to tell a rejected caption from an unavailable model while testing.
+        verification = release["verification"]
+        mode = verification["release_mode"]
+        if mode != "VLM_ACCEPTED":
+            mode = f"{mode} · {verification['primary_reason_code']}"
+        return answer, route, resolved_by, True, mode
 
     def question_worker():
         """Answers typed questions on their own thread.

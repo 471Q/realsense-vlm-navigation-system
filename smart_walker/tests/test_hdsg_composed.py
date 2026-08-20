@@ -282,6 +282,20 @@ class GrammarTests(unittest.TestCase):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             self.assertFalse(line.lstrip().startswith("|"), f"line {number}")
 
+    def test_the_two_identifier_fields_are_shaped_by_the_grammar(self):
+        """Their shapes are fixed rather than observation-dependent, so the decoder enforces them.
+
+        Left as free strings, the model put the measurement identifier into the fact_id field on
+        two of three trials against Qwen3-VL-4B. The values it stated were correct and the
+        candidate was discarded for a field mix-up, which is a rejection the design should not be
+        spending.
+        """
+        path = Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_caption.v1.gbnf"
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn('assertion-fact-field ::= "\\"fact_id\\"" ws ":" ws json-string', text)
+        self.assertIn('fact-id ::= "sector:" sector-name', text)
+        self.assertIn('measurement-id ::= "m:sector:" sector-name ":clearance"', text)
+
     def test_the_grammar_leaves_the_caption_free(self):
         # The design requires composition rather than selection, so the caption must not be
         # constrained to a fixed shape by the grammar.

@@ -280,7 +280,11 @@ _COMPOSED_INSTRUCTION = """Write one short caption describing the space around t
 
 Use the measurements below. Write the distances into your sentences naturally, in metres.
 
-Then declare every number you wrote. For each one give the fact_id and measurement_id it came from and the value you stated. A number in the caption that is not declared, or a declared value that does not match the measurement, causes the caption to be discarded.
+Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id looks like sector:centre, measurement_id looks like m:sector:centre:clearance. For a clearance of 1.74 metres at the centre, the declaration is:
+
+  {{"fact_id": "sector:centre", "measurement_id": "m:sector:centre:clearance", "stated_value": 1.74}}
+
+A number in the caption that is not declared, or a declared value that does not match the measurement, causes the caption to be discarded.
 
 Rules:
   Describe only. Never say what the person should do, and never name a direction to take.

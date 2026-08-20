@@ -23,9 +23,18 @@ visuals-field ::= "\"visual_observations\"" ws ":" ws visual-array
 
 assertion-array ::= "[" ws "]" | "[" ws assertion (ws "," ws assertion)* ws "]"
 assertion ::= "{" ws assertion-fact-field "," ws assertion-measurement-field "," ws assertion-value-field ws "}"
-assertion-fact-field ::= "\"fact_id\"" ws ":" ws json-string
-assertion-measurement-field ::= "\"measurement_id\"" ws ":" ws json-string
 assertion-value-field ::= "\"stated_value\"" ws ":" ws number
+
+# The two identifier fields carry different shapes, and the shapes are fixed rather than dependent
+# on the observation, so the decoder can enforce them. Without this the model puts the measurement
+# identifier into the fact_id field, which was the dominant rejection when the fields were free
+# strings: the values it stated were correct and the candidate was discarded for a field mix-up.
+assertion-fact-field ::= "\"fact_id\"" ws ":" ws "\"" fact-id "\""
+assertion-measurement-field ::= "\"measurement_id\"" ws ":" ws "\"" measurement-id "\""
+
+fact-id ::= "sector:" sector-name | "object:" positive-integer | "condition:" lower-word
+measurement-id ::= "m:sector:" sector-name ":clearance" | "m:object:" positive-integer ":distance"
+sector-name ::= "left" | "centre" | "right"
 
 visual-array ::= "[" ws "]" | "[" ws visual-observation (ws "," ws visual-observation)* ws "]"
 visual-observation ::= "{" ws visual-id-field "," ws proposed-label-field "," ws bearing-field ws "}"
