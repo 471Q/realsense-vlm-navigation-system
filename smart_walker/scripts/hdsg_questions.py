@@ -402,7 +402,7 @@ def deterministic_answer(route: str, fact_packet: Mapping[str, Any],
     fact_ids = [fact_id for item in requirements for fact_id in item["fact_ids"]]
     parts: list[str] = []
     for fact_id in dict.fromkeys(fact_ids):
-        rendered = _render_fact(fact_packet, fact_id)
+        rendered = render_fact(fact_packet, fact_id)
         if rendered:
             parts.append(rendered)
     if parts:
@@ -415,8 +415,13 @@ def deterministic_answer(route: str, fact_packet: Mapping[str, Any],
     return NO_MEASUREMENT_TEXT
 
 
-def _render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
-    """Returns one controlled sentence for a fact, or None when it cannot be described."""
+def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
+    """Returns one controlled sentence for a fact, or None when it cannot be described.
+
+    Public because the deterministic-only evaluation condition in hdsg_contribution.py renders
+    the same facts through the same wording, so that a comparison between the two reflects the
+    model's contribution rather than a difference between two renderers.
+    """
     if fact_id.startswith("sector:"):
         name = fact_id.split(":", 1)[1]
         fact = fact_packet.get("sectors", {}).get(name)
