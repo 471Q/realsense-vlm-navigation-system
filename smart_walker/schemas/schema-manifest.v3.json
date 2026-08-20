@@ -16,12 +16,12 @@
     {
       "record_schema": "hdsg.fact_packet.v2",
       "path": "hdsg.fact_packet.v2.schema.json",
-      "sha256": "9fc94d6ca1ea77a3bb5590ab5701804b40313ce50f9e5af034f732f74936f1f9"
+      "sha256": "7515b1fe03fcc0a9830942b53121d723f98a4caddd6bac176d5066ed98aacfad"
     },
     {
       "record_schema": "hdsg.prompt_packet.v2",
       "path": "hdsg.prompt_packet.v2.schema.json",
-      "sha256": "a4ccee1e9605ccd360cfafcc52fa9e46a95bd430ecb56cfa1df7d15eec1221b2"
+      "sha256": "8e56c11b01df65d4918e93a31580b216be76bc7d18cf2a7027fd10aba419df80"
     },
     {
       "record_schema": "hdsg.vlm_candidate.v1",
@@ -41,7 +41,7 @@
     {
       "record_schema": "hdsg.release.v2",
       "path": "hdsg.release.v2.schema.json",
-      "sha256": "46a3ea3e27773f4c2895b00244fe1d52c6ccae2f6afdfeea0504923cd26ffcde"
+      "sha256": "6238206b3eb96605ed3171141cdb360527fa9618639e9ad8349a696b34aa1671"
     },
     {
       "record_schema": "hdsg.vlm_candidate.v1",
