@@ -402,8 +402,12 @@ function renderChat(turns) {
     empty.textContent = 'Ask what is on your left, right or ahead.';
     log.appendChild(empty);
   }
+  // The release mode is shown because the approved templates and the deterministic fallback are
+  // word for word identical for several sector states, so the answer alone does not reveal
+  // whether the model contributed to it.
   turns.forEach(turn => log.appendChild(buildTurn(
-    turn.question, turn.answer, [turn.at, turn.route].filter(Boolean).join(' · '), false,
+    turn.question, turn.answer,
+    [turn.at, turn.route, turn.mode].filter(Boolean).join(' · '), false,
     turn.route === 'UNCONSTRAINED'
   )));
   pendingQuestions.forEach(text => log.appendChild(buildTurn(text, 'Checking', '', true, false)));

@@ -899,11 +899,16 @@ def main():
 
     threading.Thread(target=generation_worker, daemon=True).start()
 
-    def answer_question(request: dict) -> tuple[str, Optional[str], str, bool]:
+    def answer_question(request: dict) -> tuple[str, Optional[str], str, bool, str]:
         """Classifies one question and produces its answer.
 
-        Returns the answer text, the resolved route, the stage that resolved it, and whether the
-        answer reached generation. HDSG_OPEN_QUESTION_ROUTING_POLICY.md sections 2 to 6.
+        Returns the answer text, the resolved route, the stage that resolved it, whether the answer
+        reached generation, and the release mode behind it.
+        HDSG_OPEN_QUESTION_ROUTING_POLICY.md sections 2 to 6.
+
+        The release mode is reported because the approved templates and the deterministic fallback
+        are word for word identical for several sector states, so the answer alone does not reveal
+        whether the model contributed to it.
         """
         question = request["question"]
         route = request["route"]
@@ -926,7 +931,8 @@ def main():
                 )
             except Exception as error:
                 print(f"[hdsg] unconstrained answer failed: {error}")
-                return f"The model did not answer: {error}", "UNCONSTRAINED", "UNCONSTRAINED", False
+                return (f"The model did not answer: {error}", "UNCONSTRAINED", "UNCONSTRAINED", False,
+                        "UNGATED_FAILED")
             finally:
                 if hasattr(args, "_user_txt_for_payload"):
                     delattr(args, "_user_txt_for_payload")
@@ -937,7 +943,7 @@ def main():
                 "raw_response": raw,
                 "gated": False,
             })
-            return str(raw).strip(), "UNCONSTRAINED", "UNCONSTRAINED", True
+            return str(raw).strip(), "UNCONSTRAINED", "UNCONSTRAINED", True, "UNGATED"
 
         # Tier 1. Reached only when the keyword pre-filter found nothing, so the classifier call is
         # skipped for the common phrasings. The grammar admits eight tokens and nothing else, which
@@ -958,7 +964,7 @@ def main():
                                      timeout=float(getattr(args, "vlm_timeout_s", 20.0)))
             except Exception as error:
                 print(f"[hdsg] question classification failed: {error}")
-                return questions.OUT_OF_SCOPE_TEXT, None, "TIER_1_CLASSIFIER", False
+                return questions.OUT_OF_SCOPE_TEXT, None, "TIER_1_CLASSIFIER", False, "CATALOGUE_REPLY"
             route, parse_error = questions.parse_route(raw_route)
             resolved_by = "TIER_1_CLASSIFIER"
             if route is None:
@@ -966,19 +972,20 @@ def main():
                 # outcome: no route means no permitted-fact scope, and answering without one would
                 # be the ungrounded case the whole policy exists to prevent.
                 print(f"[hdsg] question route unreadable: {parse_error}")
-                return questions.OUT_OF_SCOPE_TEXT, None, resolved_by, False
+                return questions.OUT_OF_SCOPE_TEXT, None, resolved_by, False, "CATALOGUE_REPLY"
 
         if route == "OUT_OF_SCOPE":
-            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False
+            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
         if route == "REASSESS":
             # Routed to the existing control rather than answered. The main loop owns the
             # reassessment state machine, so the worker only reports the redirection.
-            return ("Select Reassess for a fresh look at the scene.", route, resolved_by, False)
+            return ("Select Reassess for a fresh look at the scene.", route, resolved_by, False,
+                    "CATALOGUE_REPLY")
 
         fact_packet = request["fact_packet"]
         route_entry = request_catalogue.get("question_routes", {}).get(route)
         if not route_entry:
-            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False
+            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
 
         # SCENE_OVERVIEW is an alias for the existing More detail profile, unscoped, per the
         # policy's section 4. Passing no requirement set leaves build_prompt_packet to run its own
@@ -990,7 +997,7 @@ def main():
         else:
             requirement_set = questions.route_requirements(route, fact_packet)
             if not requirement_set:
-                return questions.NO_MEASUREMENT_TEXT, route, resolved_by, False
+                return questions.NO_MEASUREMENT_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
 
         prompt_id = allocate("prompt", "prompt")
         prompt_packet = hdsg.build_prompt_packet(
@@ -1057,7 +1064,7 @@ def main():
             )
         if route == "EXPLAIN_DECISION":
             answer = questions.with_action_prefix(release, answer)
-        return answer, route, resolved_by, True
+        return answer, route, resolved_by, True, release["verification"]["release_mode"]
 
     def question_worker():
         """Answers typed questions on their own thread.
@@ -1073,17 +1080,18 @@ def main():
             except Empty:
                 continue
             try:
-                answer, route, resolved_by, reached = answer_question(request)
+                answer, route, resolved_by, reached, mode = answer_question(request)
             except Exception as error:
                 print(f"[hdsg] question handling failed: {error}")
-                answer, route, resolved_by, reached = (
-                    questions.OUT_OF_SCOPE_TEXT, request["route"], request["resolved_by"], False
+                answer, route, resolved_by, reached, mode = (
+                    questions.OUT_OF_SCOPE_TEXT, request["route"], request["resolved_by"],
+                    False, "DETERMINISTIC_FALLBACK",
                 )
             record("question_route", questions.build_route_record(
                 request["question"], route, resolved_by, reached
             ))
             if web_ui is not None:
-                web_ui.publish_chat_turn(request["question"], answer, route=route)
+                web_ui.publish_chat_turn(request["question"], answer, route=route, mode=mode)
 
     # Started further down, once web_ui and allocate exist. The worker closes over both.
 

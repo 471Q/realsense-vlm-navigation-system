@@ -260,11 +260,19 @@ class WebInterface:
     def publish_state(self, state: dict) -> None:
         self._shared.set_state(state)
 
-    def publish_chat_turn(self, question: str, answer: str, route: Optional[str] = None) -> None:
+    def publish_chat_turn(self, question: str, answer: str, route: Optional[str] = None,
+                          mode: Optional[str] = None) -> None:
+        """Records one answered question for the chat panel.
+
+        `mode` is the release mode behind the answer. It is shown because the approved templates
+        and the deterministic fallback are word for word identical for several sector states, so
+        an answer alone does not reveal whether the model contributed to it.
+        """
         self._shared.append_chat({
             "question": question,
             "answer": answer,
             "route": route,
+            "mode": mode,
             "at": time.strftime("%H:%M:%S"),
         })
 
