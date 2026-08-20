@@ -262,6 +262,14 @@ def validate_caption_candidate(
             errors.append("RG_UNAPPROVED_LANGUAGE_DETECTED")
         elif label.lower() in forbidden:
             errors.append("RG_OBJECT_REFERENCE_INVALID")
+        elif (hdsg.NUMBER_RE.search(label) or hdsg.ACTION_RE.search(label)
+              or hdsg.COMMENTARY_RE.search(label)
+              or hdsg.VISUAL_LABEL_PROHIBITED_RE.search(label)):
+            # The label is rendered into the release as "Possible <label> is visible in the
+            # <bearing>", so it reaches the display as prose and is screened as prose. The
+            # character-class pattern above admits spaces and therefore admits a phrase, which is
+            # why an instruction or a distance can appear in a label that is otherwise well formed.
+            errors.append("RG_UNAPPROVED_LANGUAGE_DETECTED")
         if visual.get("bearing") not in hdsg.SECTORS:
             errors.append("RG_SCHEMA_FAILURE")
 
@@ -371,7 +379,6 @@ def build_composed_release(
     base = hdsg.build_release(
         fact_packet, prompt_packet,
         release_id=release_id,
-        candidate=None,
         failure_codes=codes or ["RG_MODEL_UNAVAILABLE"],
         no_intent=no_intent,
         pending=pending,

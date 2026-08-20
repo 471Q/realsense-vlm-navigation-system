@@ -12,5 +12,5 @@
     "max_visual_observations": 2
   },
   "generation": {},
-  "expected_response_schema": "hdsg.vlm_candidate.v1"
+  "expected_response_schema": "hdsg.vlm_caption.v1"
 }

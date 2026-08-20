@@ -4,9 +4,9 @@
     "release_id": "release_fixture",
     "event_id": "evt_fixture",
     "observation_id": "obs_fixture",
-    "ticket_id": "ticket_fixture",
+    "ticket_id": null,
     "request_id": "MORE_DETAIL",
-    "released_at_utc": "2026-08-20T09:59:47.915Z"
+    "released_at_utc": "2026-08-21T00:00:00Z"
   },
   "authority": {
     "scene_advisory": "CAUTION",
@@ -18,15 +18,10 @@
   },
   "content": {
     "action_text": "Change direction and continue towards the left.",
-    "reason_text": "The centre sector has limited clearance at 1.74 metres.",
+    "reason_text": "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left.",
     "interaction_text": null,
-    "additional_detail_texts": [
-      "The left sector is clear for 3.13 metres.",
-      "The right sector is blocked at 0.55 metres.",
-      "The chair is detected on the left at 1.62 metres.",
-      "Possible doorway is visible in the left."
-    ],
-    "caption_text": "Change direction and continue towards the left. The centre sector has limited clearance at 1.74 metres. The left sector is clear for 3.13 metres. The right sector is blocked at 0.55 metres. The chair is detected on the left at 1.62 metres. Possible doorway is visible in the left."
+    "additional_detail_texts": [],
+    "caption_text": "Change direction and continue towards the left. The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left."
   },
   "evidence": {
     "action_binding_fact_ids": [
@@ -44,19 +39,9 @@
       {
         "measurement_id": "m:sector:left:clearance",
         "formatted_value": "3.13 metres"
-      },
-      {
-        "measurement_id": "m:sector:right:clearance",
-        "formatted_value": "0.55 metres"
-      },
-      {
-        "measurement_id": "m:object:3:distance",
-        "formatted_value": "1.62 metres"
       }
     ],
-    "released_visual_observation_ids": [
-      "visual:1"
-    ]
+    "released_visual_observation_ids": []
   },
   "verification": {
     "release_mode": "VLM_ACCEPTED",
@@ -69,7 +54,7 @@
     "guidance_signature": "CAUTION|REDIRECT|LEFT|sector:right|sector:centre,sector:left|VALID|",
     "fact_packet_schema": "hdsg.fact_packet.v2",
     "prompt_packet_schema": "hdsg.prompt_packet.v2",
-    "candidate_schema": "hdsg.vlm_candidate.v1",
+    "candidate_schema": "hdsg.vlm_caption.v1",
     "configuration_id": "hdsg_config.v1",
     "software_version": "hdsg-v1"
   }

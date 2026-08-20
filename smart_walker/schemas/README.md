@@ -1,71 +1,105 @@
-# Frozen schema set: `hdsg.schemas.v3`
+# Frozen schema set: `hdsg.schemas.v4`
 
-The six record contracts the architecture is enforced through, their fixtures, the three grammars
-the runtime loads, and a manifest recording the SHA-256 of every one.
+The five record contracts the architecture is enforced through, their fixtures, the two grammars
+the runtime loads, the request catalogue holding every system prompt it sends, and a manifest
+recording the SHA-256 of every one.
 
 | Record | Schema | Grammar |
 |---|---|---|
 | Full Fact Packet | `hdsg.fact_packet.v2` | — |
 | Restricted Prompt Packet | `hdsg.prompt_packet.v2` | — |
-| VLM Candidate, templated | `hdsg.vlm_candidate.v1` | `hdsg.vlm_candidate.v1.gbnf` |
-| VLM Caption, composed | `hdsg.vlm_caption.v1` | `hdsg.vlm_caption.v1.gbnf` |
+| VLM Caption | `hdsg.vlm_caption.v1` | `hdsg.vlm_caption.v1.gbnf` |
 | Question Route | `hdsg.question_route.v1` | `hdsg.question_route.v1.gbnf` |
 | Authoritative Release Object | `hdsg.release.v2` | — |
 
-## What v3 changed and why
+## What v4 changed and why
 
-Three record contracts advanced. The fact packet records a typed question as `TYPED_QUESTION`
-rather than as the on-screen control whose profile it borrows. The prompt packet records which of
-the two candidate contracts was actually constrained, since `expected_response_schema` and
-`constraint_id` were pinned to the templated contract and therefore misreported every composed run.
-The release admits a composed candidate and carries `RG_STATED_VALUE_MISMATCH`, the one reason code
-the composed design adds.
+The templated candidate contract is removed. Under it the runtime built a list of controlled
+sentences from a fixed table of predicates, one per fact and state, and the model selected among
+them. The released wording was therefore the runtime's, and the model's contribution was the choice
+between "has limited clearance" and "is constrained". A vision-language model reduced to selecting
+an index is not the thing the thesis is about, and the arm cost a schema, a grammar, a validator and
+two fixtures to keep in step with the contract that does execute.
 
-Two records are new. `hdsg.vlm_caption.v1` is the composed contract: a caption in the model's own
-words together with a declaration of every numeric value it stated and the fact each came from.
-`hdsg.question_route.v1` is the Tier 1 classifier's output, which existed as a grammar with no
-schema and was absent from the v2 manifest.
+`hdsg.vlm_candidate.v1` and its grammar are gone, along with `validate_candidate`,
+`parse_candidate`, `prompt_packet_text`, the approved-clause builder and the predicate table.
+`build_release` no longer takes a candidate: it renders the deterministic account for the idle
+state, the pending state and every rejection, and `hdsg_composed.build_composed_release` calls it
+for the authority block before substituting an accepted caption's content.
 
-`hdsg.vlm_candidate.v1` is unchanged as a record and keeps its identifier. Its grammar changed:
-`candidate_observation_id` and `proposed_label` were free strings while the validator required
-`visual:N` and a lower-case label.
+The generative layer is now the composed contract alone. The model writes the caption in its own
+words with the measured values in the prose, declares each value it stated, and the gate compares
+every declaration against the Fact Packet.
 
-## Seven conformance breaks found while issuing v3
+## What is retained although nothing emits it
 
-None was detected by the v2 freeze, and the reason is the same in every case: the fixtures were
-written by hand to match the schemas. A hand-written fixture agrees with its schema by construction
-and establishes nothing about the records the system produces.
+Records archived before 21 August 2026 carry the retired identifiers, and a frozen schema that
+cannot validate its own archive is of no use as evidence. So the set keeps, and documents:
 
-1. The prompt packet carried `approved_text_templates` while the schema forbade extra properties.
-   True of every packet since v1.
-2. `RG_NO_INTENT_EXPRESSED` and `RG_GENERATION_PENDING` were absent from the reason code
-   enumeration, so every idle and every interim release was non-conformant from 19 August 2026.
-3. `IDLE_NO_INTENT` and `GENERATION_PENDING` were absent from the interaction state enumeration,
-   for the same reason.
-4. The idle release carried empty `action_text`, `reason_text` and `caption_text` where the schema
-   required a minimum length. The state legitimately has no text to state.
-5. The idle release carried an empty `action_binding_fact_ids` where the schema required an entry.
-   The state legitimately has no binding fact.
-6. The More detail profile's visual-observation maximum was raised from one to two on 20 August
-   2026 and the schema still pinned it to one.
-7. A permitted fact could carry `state: UNKNOWN`, produced whenever a distance bin is unavailable,
-   which the state enumerations did not admit.
+- `hdsg.vlm_candidate.v1` in `expected_response_schema`, `constraint_id` and `candidate_schema`;
+- `approved_text_templates` on a permitted fact, as an optional property;
+- seven reason codes that screened a sentence the runtime had written:
+  `RG_CLAUSE_FORMAT_INVALID`, `RG_REQUIRED_FACT_MISSING`, `RG_PLACEHOLDER_INVALID`,
+  `RG_MOVEMENT_FACT_REQUIRED`, `RG_SUBJECT_MISMATCH`, `RG_STATE_EXPRESSION_MISMATCH` and
+  `RG_NEGATION_DETECTED`.
+
+`RG_REQUIRED_FACT_MISSING` has no composed equivalent by design. Establishing that free prose
+covered a required fact would need the linguistic inference the architecture excludes from the
+safety boundary, which is the same reason the model declares its values rather than the gate
+parsing them out.
+
+The freeze tests bind this in both directions: every code the runtime can emit must appear in the
+enumeration, and the retired identifier must remain in it.
+
+## Two defects found while issuing v4
+
+Both were carried over rather than introduced, and both were invisible for the same reason as the
+provenance defects v3 fixed: a field populated with the wrong value rather than left absent.
+
+1. The prompt packet recorded `max_tokens` from the templated budget while the composed call sent
+   the caption budget, so every packet recorded 220 where 400 was sent. The third defect of that
+   class, after the system prompt digest and the constraint digest.
+2. `hdsg_contribution.facts_named` prefixed `visual:` onto identifiers that already carried it,
+   yielding `visual:visual:1`. Harmless while the value served only as a set key.
+
+One check would have been lost silently. The templated validator screened a visual observation's
+label against the action, commentary and prohibited-instruction expressions and the composed
+validator did not, so the label pattern, which admits spaces and therefore admits a phrase, would
+have been the only thing standing between an instruction and the display. The screen moved into
+`hdsg_composed` with the removal.
+
+## One measure had to be rebuilt
+
+`hdsg_contribution` decided whether a released clause reached beyond its requirement set by taking
+each sentence's opening three words as its subject. That held only while both renderings came from
+the same predicate table and placed the subject first. Free prose defeats it: "The way ahead narrows
+to 1.40 metres" and "The centre sector has limited clearance at 1.40 metres" state one fact and
+share no opening, so every composed caption would have been reported as reaching beyond its profile.
+The measure now compares the release's declared identifiers against the identifiers the requirement
+construction selected, which is exact and is the fix the heuristic's own documentation called for.
 
 ## What prevents a recurrence
 
 `tests/test_schema_conformance.py` builds records through the runtime and validates those. It
-covers the typed-question fact packet, both prompt packet contracts, an accepted composed release,
-a release rejected for a wrong declared value, the idle and pending releases, and the templated
-arm. It also asserts that every reason code the runtime can emit is admissible, and that the
-profile limits agree with the schema's conditionals.
+covers the typed-question fact packet, the prompt packet, an accepted composed release, a release
+rejected for a wrong declared value, and the idle and pending releases. It also asserts that every
+reason code the runtime can emit is admissible, that the profile limits agree with the schema's
+conditionals, and that the catalogue holds every system prompt the runtime sends.
 
-The valid fixtures for the fact packet, prompt packet, candidate and release are generated from the
-runtime rather than written by hand, so they cannot drift from what the system emits. The invalid
-fixtures remain hand-written, since each exists to be rejected for one specific reason.
+The valid fixtures are generated by `generate_fixtures.py`, which builds one event through the
+runtime and writes the fact packet, prompt packet, caption and release it produces. A hand-written
+fixture agrees with its schema by construction and establishes nothing about the records the system
+produces, which is how seven conformance breaks survived the v2 freeze, and how the prompt packet
+fixture went on carrying `approved_text_templates` after the runtime stopped emitting it. The
+invalid fixtures remain hand-written, since each exists to be rejected for one specific reason,
+which is a property of the schema rather than of the runtime.
 
-`tests/test_schema_freeze.py` covers manifest drift and requires that every grammar in `config/`
-is hashed. The v2 manifest hashed one grammar while the runtime had acquired three, which left the
-routing and caption constraints free to drift from their validators undetected.
+```
+python schemas/generate_fixtures.py
+```
+
+`tests/test_schema_freeze.py` covers manifest drift, requires that every grammar in `config/` is
+hashed, and asserts that no file in the set describes a contract the runtime cannot produce.
 
 ## Running the checks
 

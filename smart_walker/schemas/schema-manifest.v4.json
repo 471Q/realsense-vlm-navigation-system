@@ -1,0 +1,56 @@
+{
+  "schema_set_version": "hdsg.schemas.v4",
+  "json_schema_draft": "draft-07",
+  "supersedes": "hdsg.schemas.v3",
+  "notes": [
+    "The templated candidate contract is removed. Under it the runtime wrote a list of controlled sentences from a fixed predicate table and the model selected among them, so the released wording was the runtime's and the model's contribution was the choice between one approved synonym and another. hdsg.vlm_candidate.v1, its grammar, its two fixtures, validate_candidate, parse_candidate, prompt_packet_text and the approved-clause builder all go with it.",
+    "The generative layer is now the composed contract alone. The model writes the caption in its own words with the measured values in the prose and declares each value it stated, and the gate compares every declaration against the Fact Packet.",
+    "Three identifiers are retained in enumerations while nothing emits them: hdsg.vlm_candidate.v1 in expected_response_schema, constraint_id and candidate_schema. Records archived before 21 August 2026 carry them, and a frozen schema that cannot validate its own archive is of no use as evidence. approved_text_templates is retained in the prompt packet for the same reason and is optional.",
+    "Seven reason codes became unreachable and are retained on the same grounds: RG_CLAUSE_FORMAT_INVALID, RG_REQUIRED_FACT_MISSING, RG_PLACEHOLDER_INVALID, RG_MOVEMENT_FACT_REQUIRED, RG_SUBJECT_MISMATCH, RG_STATE_EXPRESSION_MISMATCH and RG_NEGATION_DETECTED. Each screened a sentence the runtime had written. RG_REQUIRED_FACT_MISSING has no composed equivalent by design, because establishing that free prose covered a required fact would need the linguistic inference the architecture excludes from the safety boundary.",
+    "The visual-observation label screen moved into the composed validator. The templated validator checked labels against the action, commentary and prohibited-instruction expressions and the composed one did not, so removing the templated gate would have dropped the check. A label is rendered into the release as prose and is screened as prose.",
+    "The prompt packet recorded max_tokens from the templated budget while the composed call sent the caption budget, so the recorded value was 220 where 400 was sent. This is the third defect of that class, after the system prompt digest and the constraint digest, and all three came of a field being populated with the wrong value rather than left absent.",
+    "build_release no longer takes a candidate. It renders the deterministic account for the idle state, the pending state and every rejection, and hdsg_composed.build_composed_release calls it for the authority block before substituting an accepted caption's content."
+  ],
+  "files": [
+    {
+      "record_schema": "hdsg.fact_packet.v2",
+      "path": "hdsg.fact_packet.v2.schema.json",
+      "sha256": "7515b1fe03fcc0a9830942b53121d723f98a4caddd6bac176d5066ed98aacfad"
+    },
+    {
+      "record_schema": "hdsg.prompt_packet.v2",
+      "path": "hdsg.prompt_packet.v2.schema.json",
+      "sha256": "8a31ccfd166ea8c968b383a0b33c111cf7b7b0c5025e478a0a0bdcdcdd89e663"
+    },
+    {
+      "record_schema": "hdsg.vlm_caption.v1",
+      "path": "hdsg.vlm_caption.v1.schema.json",
+      "sha256": "1ca9ec3b7cd34993c76f57e3f6971c79e7f019317441b0b200648726f4af77e0"
+    },
+    {
+      "record_schema": "hdsg.question_route.v1",
+      "path": "hdsg.question_route.v1.schema.json",
+      "sha256": "9d5d6d6fd4fedaa1639c3f75f6148e4a6e852d3806361272cc9d83641c44c0d2"
+    },
+    {
+      "record_schema": "hdsg.release.v2",
+      "path": "hdsg.release.v2.schema.json",
+      "sha256": "a061bcd383eb424c1894f548443baeaa65a6524078ff0dfbe48ababaf798387e"
+    },
+    {
+      "record_schema": "hdsg.vlm_caption.v1",
+      "path": "../config/hdsg.vlm_caption.v1.gbnf",
+      "sha256": "7a36aba4ff5576d246d662e1690bbd854c152de52f2cb528dae871cb133e64ba"
+    },
+    {
+      "record_schema": "hdsg.question_route.v1",
+      "path": "../config/hdsg.question_route.v1.gbnf",
+      "sha256": "b704adc54179731f89b93da9cb50504d1ab4a771e34bb79b3c9da3f137f24396"
+    },
+    {
+      "record_schema": "hdsg.request_catalogue.v1",
+      "path": "../config/hdsg_request_catalogue.v1.json",
+      "sha256": "6b943ce7348ea77fd77b8d9c9913f44fe3b9c529998a9c237fe151e9f1709f85"
+    }
+  ]
+}

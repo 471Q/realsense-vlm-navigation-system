@@ -11,12 +11,11 @@ $ErrorActionPreference = 'Stop'
 $schemaRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $validRoot = Join-Path $schemaRoot 'fixtures/valid'
 $invalidRoot = Join-Path $schemaRoot 'fixtures/invalid'
-$manifestPath = Join-Path $schemaRoot 'schema-manifest.v3.json'
+$manifestPath = Join-Path $schemaRoot 'schema-manifest.v4.json'
 
 $validCases = @(
     @('hdsg.fact_packet.v2.schema.json', 'hdsg.fact_packet.v2.json'),
     @('hdsg.prompt_packet.v2.schema.json', 'hdsg.prompt_packet.v2.json'),
-    @('hdsg.vlm_candidate.v1.schema.json', 'hdsg.vlm_candidate.v1.json'),
     @('hdsg.vlm_caption.v1.schema.json', 'hdsg.vlm_caption.v1.json'),
     @('hdsg.question_route.v1.schema.json', 'hdsg.question_route.v1.json'),
     @('hdsg.release.v2.schema.json', 'hdsg.release.v2.json')
@@ -25,7 +24,6 @@ $validCases = @(
 $invalidCases = @(
     @('hdsg.fact_packet.v2.schema.json', 'hdsg.fact_packet.v2.stationary_box.json'),
     @('hdsg.prompt_packet.v2.schema.json', 'hdsg.prompt_packet.v2.automatic_visuals.json'),
-    @('hdsg.vlm_candidate.v1.schema.json', 'hdsg.vlm_candidate.v1.extra_action.json'),
     @('hdsg.vlm_caption.v1.schema.json', 'hdsg.vlm_caption.v1.extra_action.json'),
     @('hdsg.question_route.v1.schema.json', 'hdsg.question_route.v1.unknown_route.json'),
     @('hdsg.release.v2.schema.json', 'hdsg.release.v2.accepted_fallback_code.json')

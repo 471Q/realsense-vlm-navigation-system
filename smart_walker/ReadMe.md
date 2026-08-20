@@ -368,15 +368,32 @@ denominator, rather than counting as a pass or a failure.
 ### Schema conformance
 
 The frozen record contracts are in `schemas/`, recorded in
-`schema-manifest.v2.json`. Two checks, neither replacing the other:
+`schema-manifest.v4.json`. Two checks, neither replacing the other:
 
 ```powershell
-python -m unittest discover -s tests -t .        # 81 tests, no dependencies
+python -m unittest discover -s tests -t .        # 227 tests, jsonschema optional
 & .\schemas\validate_schema_fixtures.ps1         # full JSON Schema validation, needs PowerShell 7
 ```
 
 The Python suite fails if any frozen file's digest drifts from the manifest, which
-is how the grammar previously came to differ from its recorded hash unnoticed.
+is how the grammar previously came to differ from its recorded hash unnoticed. It
+also builds records through the runtime and validates those, because a fixture
+written by hand agrees with its schema by construction and establishes nothing
+about what the system emits. `schemas/README.md` records what each set changed.
+
+### The generative contract
+
+The model composes the caption in its own words, writes the measured values into
+the prose, and declares each value it stated with the fact it came from. The gate
+compares every declaration against the Fact Packet and releases the deterministic
+account instead when one disagrees. The action the user acts on is produced by the
+deterministic layer in every case and is unaffected by what the model wrote.
+
+An earlier design had the model select among controlled sentences the runtime had
+written, substituting measurements into placeholders. It was removed on 21 August
+2026: assembling the sentence from a fixed predicate table left the model choosing
+between one approved synonym and another, so the released wording was the runtime's.
+`--generation` is gone with it and there is one generation path.
 
 --------------------------
 

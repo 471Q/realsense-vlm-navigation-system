@@ -36,14 +36,6 @@
       "fact_ids": [
         "sector:right"
       ]
-    },
-    {
-      "requirement_id": "detail_object_3",
-      "role": "SCENE_BINDING",
-      "match": "ANY_OF",
-      "fact_ids": [
-        "object:3"
-      ]
     }
   ],
   "permitted_facts": [
@@ -60,11 +52,7 @@
         "measurement_id": "m:sector:centre:clearance",
         "unit": "metre",
         "source_pointer": "/sectors/centre/clearance_m"
-      },
-      "approved_text_templates": [
-        "The centre sector has limited clearance at {{m:sector:centre:clearance}}.",
-        "The centre sector is constrained at {{m:sector:centre:clearance}}."
-      ]
+      }
     },
     {
       "fact_id": "sector:left",
@@ -79,11 +67,7 @@
         "measurement_id": "m:sector:left:clearance",
         "unit": "metre",
         "source_pointer": "/sectors/left/clearance_m"
-      },
-      "approved_text_templates": [
-        "The left sector is clear for {{m:sector:left:clearance}}.",
-        "The left sector remains clear for {{m:sector:left:clearance}}."
-      ]
+      }
     },
     {
       "fact_id": "sector:right",
@@ -98,30 +82,7 @@
         "measurement_id": "m:sector:right:clearance",
         "unit": "metre",
         "source_pointer": "/sectors/right/clearance_m"
-      },
-      "approved_text_templates": [
-        "The right sector is blocked at {{m:sector:right:clearance}}.",
-        "The right sector is obstructed at {{m:sector:right:clearance}}."
-      ]
-    },
-    {
-      "fact_id": "object:3",
-      "fact_type": "OBJECT",
-      "name": "chair",
-      "state": "NEAR",
-      "bearing": "LEFT",
-      "grounding": "YOLO_D455F",
-      "motion_state": "UNCONFIRMED",
-      "supporting_fact_ids": [],
-      "measurement": {
-        "measurement_id": "m:object:3:distance",
-        "unit": "metre",
-        "source_pointer": "/objects/0/distance_m"
-      },
-      "approved_text_templates": [
-        "The chair is detected on the left at {{m:object:3:distance}}.",
-        "The chair is present on the left at {{m:object:3:distance}}."
-      ]
+      }
     }
   ],
   "response_constraints": {
@@ -143,10 +104,10 @@
     "temperature": 0.2,
     "top_p": 0.9,
     "max_tokens": 400,
-    "system_prompt_id": "hdsg.reason_only.v1",
-    "system_prompt_hash": "sha256:bbc5e661e106c6dcd8dc6dd186454c2fcba3c710fb4d8e71a60c93eaf077f073",
-    "constraint_id": "hdsg.vlm_candidate.v1",
-    "constraint_hash": "sha256:e05eb8a4a255743e051d77d5e43b75e5e38073b27539b0184fbce352405a3ee1"
+    "system_prompt_id": "hdsg.composed_caption.v1",
+    "system_prompt_hash": "sha256:a9d82e74c9914b6a6f7c015aecaa9b1938f74f85ee99395bc678cf865ae485f6",
+    "constraint_id": "hdsg.vlm_caption.v1",
+    "constraint_hash": "sha256:7a36aba4ff5576d246d662e1690bbd854c152de52f2cb528dae871cb133e64ba"
   },
-  "expected_response_schema": "hdsg.vlm_candidate.v1"
+  "expected_response_schema": "hdsg.vlm_caption.v1"
 }

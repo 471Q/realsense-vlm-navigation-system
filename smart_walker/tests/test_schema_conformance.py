@@ -94,18 +94,20 @@ class RuntimeConformanceTests(unittest.TestCase):
         self.assertEqual(fact_packet["interaction"]["input_method"], "TYPED_QUESTION")
         self.assertConforms(fact_packet, "hdsg.fact_packet.v2")
 
-    def test_a_prompt_packet_conforms_including_its_approved_templates(self):
+    def test_a_prompt_packet_no_longer_carries_approved_templates(self):
+        """The packet supplies facts, not phrasing, since the model composes its own wording."""
         _, _, prompt_packet = self._event()
-        self.assertTrue(any("approved_text_templates" in item
-                            for item in prompt_packet["permitted_facts"]))
+        for item in prompt_packet["permitted_facts"]:
+            self.assertNotIn("approved_text_templates", item)
         self.assertConforms(prompt_packet, "hdsg.prompt_packet.v2")
 
     def test_the_prompt_packet_records_the_constraint_that_was_applied(self):
         # Pinned to the templated contract, the packet misreported which grammar constrained a
-        # composed run, which is a provenance defect rather than a schema violation.
-        _, _, templated = self._event()
+        # composed run, which is a provenance defect rather than a schema violation. The default is
+        # now the caption contract, so a packet cannot name a contract the runtime cannot produce.
+        _, _, default_packet = self._event()
         _, _, composed_packet = self._event(expected_response_schema=hdsg.CAPTION_SCHEMA)
-        self.assertEqual(templated["expected_response_schema"], hdsg.CANDIDATE_SCHEMA)
+        self.assertEqual(default_packet["expected_response_schema"], hdsg.CAPTION_SCHEMA)
         self.assertEqual(composed_packet["expected_response_schema"], hdsg.CAPTION_SCHEMA)
         self.assertEqual(composed_packet["generation"]["constraint_id"], hdsg.CAPTION_SCHEMA)
         self.assertConforms(composed_packet, "hdsg.prompt_packet.v2")
@@ -149,7 +151,7 @@ class RuntimeConformanceTests(unittest.TestCase):
             with self.subTest(state=label):
                 release = hdsg.build_release(
                     fact_packet, prompt_packet, release_id="release_t",
-                    candidate=None, failure_codes=[], **kwargs,
+                    failure_codes=[], **kwargs,
                 )
                 self.assertConforms(release, "hdsg.release.v2")
 
@@ -158,7 +160,7 @@ class RuntimeConformanceTests(unittest.TestCase):
         _, fact_packet, prompt_packet = self._event()
         release = hdsg.build_release(
             fact_packet, prompt_packet, release_id="release_t",
-            candidate=None, failure_codes=["RG_MODEL_UNAVAILABLE"],
+            failure_codes=["RG_MODEL_UNAVAILABLE"],
         )
         self.assertConforms(release, "hdsg.release.v2")
 

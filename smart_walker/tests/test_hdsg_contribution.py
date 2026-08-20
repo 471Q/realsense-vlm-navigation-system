@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts import hdsg_composed as composed  # noqa: E402
 from scripts import hdsg_contribution as contribution  # noqa: E402
 from scripts import hdsg_runtime as hdsg  # noqa: E402
 
@@ -66,35 +67,49 @@ def make_event(intent="FORWARD", advisory="CAUTION", sectors=None, objects=(),
     return fact_packet, prompt_packet
 
 
-def candidate_from_packet(prompt_packet, visuals=(), template_index=0):
-    """Builds a candidate that takes an approved template for every required fact.
+# The text the deterministic layer renders for the fixture scene, on both profiles. A caption
+# reproducing it exactly is the case where the model added nothing at all.
+FALLBACK_CAPTION = ("The centre sector has limited clearance at 1.40 metres. "
+                    "The left sector is clear for 2.40 metres.")
 
-    One clause per fact rather than per requirement, because an ALL_OF requirement is satisfied
-    only when every fact it names is cited.
+# The same two facts in the model's own words. Under the retired templated design this could only
+# be a synonym drawn from the runtime's own table; the model now writes it, and the measure has to
+# report it as adding nothing either way.
+REWORDED_CAPTION = ("The way ahead narrows to 1.40 metres, and there is 2.40 metres of space "
+                    "to the left.")
+
+
+def sector_assertion(name, value):
+    return {"fact_id": f"sector:{name}",
+            "measurement_id": f"m:sector:{name}:clearance",
+            "stated_value": value}
+
+
+BOTH_SECTORS = (sector_assertion("centre", 1.40), sector_assertion("left", 2.40))
+
+
+def composed_release(fact_packet, prompt_packet, caption, assertions=BOTH_SECTORS,
+                     visuals=(), release_id="release_1"):
+    """Builds an accepted release from a composed caption, failing loudly if the gate refuses it.
+
+    A test caption that silently failed the gate would fall back to the deterministic rendering and
+    every assertion about contribution would then be made about text the model did not write.
     """
-    clauses = []
-    for requirement in prompt_packet["requirements"]:
-        wanted = (requirement["fact_ids"] if requirement["match"] == "ALL_OF"
-                  else requirement["fact_ids"][:1])
-        for fact_id in wanted:
-            fact = next(item for item in prompt_packet["permitted_facts"]
-                        if item["fact_id"] == fact_id)
-            templates = fact["approved_text_templates"]
-            if not templates:
-                continue
-            measurement = fact.get("measurement")
-            clauses.append({
-                "clause_id": f"reason:{len(clauses) + 1}",
-                "requirement_ids": [requirement["requirement_id"]],
-                "fact_ids": [fact_id],
-                "measurement_ids": [measurement["measurement_id"]] if measurement else [],
-                "text_template": templates[min(template_index, len(templates) - 1)],
-            })
-    return {
-        "schema_version": "hdsg.vlm_candidate.v1",
-        "reason_clauses": clauses,
-        "visual_observations": list(visuals),
+    candidate = {
+        "schema_version": composed.CAPTION_SCHEMA,
+        "caption": caption,
+        "assertions": [dict(item) for item in assertions],
+        "visual_observations": [dict(item) for item in visuals],
     }
+    errors, scored = composed.validate_caption_candidate(
+        candidate, prompt_packet, fact_packet, detector_classes=["chair", "person", "door"]
+    )
+    if errors:
+        raise AssertionError(f"the test caption did not pass the gate: {errors}")
+    return composed.build_composed_release(
+        fact_packet, prompt_packet, release_id=release_id, candidate=candidate,
+        scored_assertions=scored, failure_codes=[],
+    )
 
 
 class ReleaseBodyTests(unittest.TestCase):
@@ -132,20 +147,16 @@ class SplitClauseTests(unittest.TestCase):
 
 
 class ComparisonTests(unittest.TestCase):
-    def test_the_alternate_template_set_is_reworded_rather_than_informative(self):
-        """The approved templates are synonyms of the fallback wording by construction.
+    def test_a_reworded_caption_is_not_informative(self):
+        """Free prose naming the same facts adds nothing, however different it reads.
 
-        A candidate choosing the second template for every fact produces text that differs from
-        the deterministic rendering in every sentence while naming exactly the same facts. Counting
-        that as contribution would report the generative layer as productive in proportion to how
-        many synonyms the template table happens to hold, which is the measurement error this
-        distinction exists to prevent.
+        This caption shares not one sentence with the deterministic rendering and names exactly
+        the facts that rendering already named. Counting it as contribution would measure the
+        model's appetite for rephrasing rather than what the user learns, which is the
+        measurement error this distinction exists to prevent.
         """
         fact_packet, prompt_packet = make_event(response_mode="AUTOMATIC")
-        released = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate_from_packet(prompt_packet, template_index=1), failure_codes=[],
-        )
+        released = composed_release(fact_packet, prompt_packet, REWORDED_CAPTION)
         result = contribution.compare_event(fact_packet, prompt_packet, released)
         self.assertEqual(result.gate_outcome, "ACCEPTED")
         self.assertFalse(result.identical)
@@ -154,16 +165,12 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(result.reworded_only)
         self.assertEqual(result.added_facts, [])
 
-    def test_the_first_template_set_reproduces_the_deterministic_text_exactly(self):
-        # Under the automatic profile the model's only freedom is the choice of synonym, and the
-        # first template is the wording the fallback renderer also chooses. The contribution of an
-        # accepted candidate on this profile is therefore nil, which is the finding the ablation
-        # exists to report.
+    def test_a_caption_reproducing_the_deterministic_text_is_identical(self):
+        # The boundary case of the measure. A model that happens to write the sentences the
+        # fallback renderer writes contributed nothing, and the comparison must say so rather
+        # than crediting it for arriving at the same place independently.
         fact_packet, prompt_packet = make_event(response_mode="AUTOMATIC")
-        released = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate_from_packet(prompt_packet, template_index=0), failure_codes=[],
-        )
+        released = composed_release(fact_packet, prompt_packet, FALLBACK_CAPTION)
         result = contribution.compare_event(fact_packet, prompt_packet, released)
         self.assertEqual(result.gate_outcome, "ACCEPTED")
         self.assertTrue(result.identical)
@@ -171,9 +178,11 @@ class ComparisonTests(unittest.TestCase):
 
     def test_naming_a_fact_the_fallback_omitted_is_informative(self):
         fact_packet, prompt_packet = make_event()
-        released = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate_from_packet(prompt_packet), failure_codes=[],
+        released = composed_release(
+            fact_packet, prompt_packet,
+            "The way ahead narrows to 1.40 metres, with 2.40 metres of space to the left "
+            "and only 0.50 metres to the right.",
+            assertions=BOTH_SECTORS + (sector_assertion("right", 0.50),),
         )
         result = contribution.compare_event(fact_packet, prompt_packet, released)
         # The More detail profile requires a clause for the right sector, which the action-binding
@@ -191,14 +200,10 @@ class ComparisonTests(unittest.TestCase):
 
     def test_a_visual_observation_is_counted_as_a_visual_clause(self):
         fact_packet, prompt_packet = make_event()
-        candidate = candidate_from_packet(prompt_packet, visuals=[{
-            "candidate_observation_id": "visual:1",
-            "proposed_label": "doorway",
-            "bearing": "LEFT",
-        }])
-        released = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate, failure_codes=[],
+        released = composed_release(
+            fact_packet, prompt_packet, REWORDED_CAPTION,
+            visuals=[{"candidate_observation_id": "visual:1",
+                      "proposed_label": "doorway", "bearing": "LEFT"}],
         )
         result = contribution.compare_event(fact_packet, prompt_packet, released)
         self.assertEqual(result.gate_outcome, "ACCEPTED")
@@ -212,7 +217,7 @@ class ComparisonTests(unittest.TestCase):
         fact_packet, prompt_packet = make_event()
         released = hdsg.build_release(
             fact_packet, prompt_packet, release_id="release_1",
-            candidate=None, failure_codes=["RG_CONSTRAINT_FAILURE"],
+            failure_codes=["RG_CONSTRAINT_FAILURE"],
         )
         result = contribution.compare_event(fact_packet, prompt_packet, released)
         self.assertTrue(result.identical)
@@ -225,69 +230,55 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(contribution.release_body(baseline))
 
 
-class ClauseSubjectTests(unittest.TestCase):
-    def test_synonyms_of_one_fact_share_a_subject(self):
-        self.assertEqual(
-            contribution.clause_subject("The centre sector is constrained at 1.40 metres."),
-            contribution.clause_subject("The centre sector has limited clearance at 1.40 metres."),
-        )
-
-    def test_different_sectors_do_not_share_a_subject(self):
-        self.assertNotEqual(
-            contribution.clause_subject("The left sector is clear for 2.40 metres."),
-            contribution.clause_subject("The right sector is clear for 2.40 metres."),
-        )
-
-    def test_a_visual_observation_has_its_own_subject(self):
-        self.assertNotEqual(
-            contribution.clause_subject("Possible doorway is visible in the left."),
-            contribution.clause_subject("The left sector is clear for 2.40 metres."),
-        )
-
-
 class BeyondProfileTests(unittest.TestCase):
     """The stricter measure: what the model added over the same requirement set, without a model."""
 
-    def released(self, prompt_packet, fact_packet, template_index=0, visuals=()):
-        candidate = candidate_from_packet(
-            prompt_packet, visuals=visuals, template_index=template_index
-        )
-        return hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate, failure_codes=[],
-        )
+    def test_the_measure_reads_declared_identifiers_not_opening_words(self):
+        """A caption sharing no wording with the profile baseline still reaches beyond nothing.
 
-    def test_no_choice_of_template_reaches_beyond_the_requirement_set(self):
-        """The gate requires every reason clause to cite a fact the profile already selected.
-
-        The model's freedom over reason clauses is therefore the choice of synonym, and no synonym
-        names anything the requirement construction did not choose first. This is the structural
-        finding the ablation exists to demonstrate, and it holds on both profiles.
+        The measure previously keyed on a clause's first three words, which grouped the runtime's
+        own synonyms together and nothing else. Free prose defeats that: "The way ahead narrows to
+        1.40 metres" and "The centre sector has limited clearance at 1.40 metres" state one fact
+        and share no opening, so every composed caption would have been reported as reaching beyond
+        its profile. The declared identifiers give the attribution exactly.
         """
-        for mode in ("AUTOMATIC", "MORE_DETAIL"):
-            for index in (0, 1):
-                fact_packet, prompt_packet = make_event(response_mode=mode)
-                result = contribution.compare_event(
-                    fact_packet, prompt_packet,
-                    self.released(prompt_packet, fact_packet, template_index=index),
-                )
-                self.assertEqual(result.gate_outcome, "ACCEPTED", f"{mode}/{index}")
-                self.assertFalse(result.beyond_profile, f"{mode}/{index}")
-                self.assertEqual(result.beyond_profile_clauses, [], f"{mode}/{index}")
+        fact_packet, prompt_packet = make_event(response_mode="AUTOMATIC")
+        released = composed_release(fact_packet, prompt_packet, REWORDED_CAPTION)
+        result = contribution.compare_event(fact_packet, prompt_packet, released)
+        self.assertEqual(result.gate_outcome, "ACCEPTED")
+        self.assertTrue(result.reworded_only)
+        self.assertFalse(result.beyond_profile)
+        self.assertEqual(result.beyond_profile_facts, [])
+
+    def test_a_fact_the_profile_selected_is_not_beyond_it(self):
+        """Informative and beyond-profile are different questions and separate here.
+
+        The More detail profile selects the right sector, which the action-binding fallback does not
+        render. A caption naming it tells the user something the deterministic layer withheld, and
+        it still adds nothing over the requirement set, because a renderer given the same set
+        produces it with no model at all.
+        """
+        fact_packet, prompt_packet = make_event(response_mode="MORE_DETAIL")
+        released = composed_release(
+            fact_packet, prompt_packet,
+            "The way ahead narrows to 1.40 metres, with 2.40 metres of space to the left "
+            "and only 0.50 metres to the right.",
+            assertions=BOTH_SECTORS + (sector_assertion("right", 0.50),),
+        )
+        result = contribution.compare_event(fact_packet, prompt_packet, released)
+        self.assertTrue(result.informative)
+        self.assertFalse(result.beyond_profile)
 
     def test_a_visual_observation_is_the_one_thing_that_does(self):
         fact_packet, prompt_packet = make_event()
-        result = contribution.compare_event(
-            fact_packet, prompt_packet,
-            self.released(prompt_packet, fact_packet, visuals=[{
-                "candidate_observation_id": "visual:1",
-                "proposed_label": "doorway",
-                "bearing": "LEFT",
-            }]),
+        released = composed_release(
+            fact_packet, prompt_packet, REWORDED_CAPTION,
+            visuals=[{"candidate_observation_id": "visual:1",
+                      "proposed_label": "doorway", "bearing": "LEFT"}],
         )
+        result = contribution.compare_event(fact_packet, prompt_packet, released)
         self.assertTrue(result.beyond_profile)
-        self.assertEqual(len(result.beyond_profile_clauses), 1)
-        self.assertTrue(contribution.VISUAL_CLAUSE_RE.match(result.beyond_profile_clauses[0]))
+        self.assertEqual(result.beyond_profile_facts, ["visual:1"])
 
     def test_the_profile_baseline_renders_every_required_fact(self):
         fact_packet, prompt_packet = make_event(response_mode="MORE_DETAIL")
@@ -381,10 +372,7 @@ class ArchiveTests(unittest.TestCase):
 
     def test_a_run_is_compared_end_to_end(self):
         fact_packet, prompt_packet = make_event()
-        released = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate_from_packet(prompt_packet), failure_codes=[],
-        )
+        released = composed_release(fact_packet, prompt_packet, REWORDED_CAPTION)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "run.jsonl"
             self.write_archive(path, [
@@ -403,7 +391,7 @@ class ArchiveTests(unittest.TestCase):
         fact_packet, prompt_packet = make_event()
         pending = hdsg.build_release(
             fact_packet, prompt_packet, release_id="release_0",
-            candidate=None, failure_codes=[], pending=True,
+            failure_codes=[], pending=True,
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "run.jsonl"
@@ -420,7 +408,7 @@ class ArchiveTests(unittest.TestCase):
         fact_packet, prompt_packet = make_event()
         released = hdsg.build_release(
             fact_packet, prompt_packet, release_id="release_1",
-            candidate=None, failure_codes=["RG_CONSTRAINT_FAILURE"],
+            failure_codes=["RG_CONSTRAINT_FAILURE"],
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "run.jsonl"
@@ -431,10 +419,7 @@ class ArchiveTests(unittest.TestCase):
 
     def test_results_are_written_with_a_final_summary(self):
         fact_packet, prompt_packet = make_event()
-        released = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_1",
-            candidate=candidate_from_packet(prompt_packet), failure_codes=[],
-        )
+        released = composed_release(fact_packet, prompt_packet, REWORDED_CAPTION)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "run.jsonl"
             self.write_archive(path, [

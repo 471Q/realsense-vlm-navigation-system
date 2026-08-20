@@ -1,7 +1,5 @@
 {
   "catalogue_version": "hdsg.request_catalogue.v1",
-  "system_prompt_id": "hdsg.reason_only.v1",
-  "system_prompt": "The response is a constrained HDSG explanation candidate, not guidance. It must contain only JSON matching hdsg.vlm_candidate.v1. It must cite only supplied facts, use supplied measurement placeholders, and contain no action, recommendation, generated number, visible-text transcription, model commentary, or unsupported claim.",
   "composed_system_prompt_id": "hdsg.composed_caption.v1",
   "composed_system_prompt": "The response is a navigation caption for a person using a walking frame, composed from the measurements supplied. It must contain only JSON matching hdsg.vlm_caption.v1. It describes the space; it never tells the person what to do, and it never names an object the measurements do not list. Every number it states must come from the measurements and must be declared.",
   "requests": {

@@ -240,164 +240,12 @@ class HdsgRuntimeTests(unittest.TestCase):
         self.assertFalse(stationary["display_bounding_box"])
         self.assertTrue(moving["display_bounding_box"])
 
-    def test_accepted_candidate_cannot_change_action(self):
-        fact_packet, prompt_packet = self.build_records()
-        candidate = {
-            "schema_version": hdsg.CANDIDATE_SCHEMA,
-            "reason_clauses": [
-                {
-                    "clause_id": "reason:1",
-                    "requirement_ids": ["action_reason"],
-                    "fact_ids": ["sector:right"],
-                    "measurement_ids": ["m:sector:right:clearance"],
-                    "text_template": "The right sector is clear for {{m:sector:right:clearance}}.",
-                },
-                {
-                    "clause_id": "reason:2",
-                    "requirement_ids": ["scene_reason"],
-                    "fact_ids": ["sector:left"],
-                    "measurement_ids": ["m:sector:left:clearance"],
-                    "text_template": "The left sector is blocked at {{m:sector:left:clearance}}.",
-                },
-            ],
-            "visual_observations": [],
-        }
-        release = hdsg.build_release(
-            fact_packet,
-            prompt_packet,
-            release_id="release_test",
-            candidate=candidate,
-        )
-        self.assertEqual(release["verification"]["release_mode"], "VLM_ACCEPTED")
-        self.assertEqual(release["authority"]["motion_decision"], "PROCEED")
-        self.assertEqual(release["authority"]["selected_sector"], "RIGHT")
-        self.assertTrue(release["content"]["caption_text"].startswith("Continue towards the right."))
-        self.assertIn("2.17 metres", release["content"]["caption_text"])
-
-    def test_action_language_rejects_complete_candidate(self):
-        fact_packet, prompt_packet = self.build_records()
-        candidate = {
-            "schema_version": hdsg.CANDIDATE_SCHEMA,
-            "reason_clauses": [
-                {
-                    "clause_id": "reason:1",
-                    "requirement_ids": ["action_reason"],
-                    "fact_ids": ["sector:right"],
-                    "measurement_ids": ["m:sector:right:clearance"],
-                    "text_template": "Continue because the right sector is clear for {{m:sector:right:clearance}}.",
-                }
-            ],
-            "visual_observations": [],
-        }
-        release = hdsg.build_release(
-            fact_packet,
-            prompt_packet,
-            release_id="release_test",
-            candidate=candidate,
-        )
-        self.assertEqual(release["verification"]["release_mode"], "DETERMINISTIC_FALLBACK")
-        self.assertIn("RG_ACTION_LANGUAGE_DETECTED", release["verification"]["reason_codes"])
-        self.assertNotIn("Continue because", release["content"]["caption_text"])
-
-    def test_direct_model_number_rejects_complete_candidate(self):
-        fact_packet, prompt_packet = self.build_records()
-        candidate = {
-            "schema_version": hdsg.CANDIDATE_SCHEMA,
-            "reason_clauses": [
-                {
-                    "clause_id": "reason:1",
-                    "requirement_ids": ["action_reason"],
-                    "fact_ids": ["sector:right"],
-                    "measurement_ids": ["m:sector:right:clearance"],
-                    "text_template": "The right sector is clear for 2.17 metres.",
-                }
-            ],
-            "visual_observations": [],
-        }
-        release = hdsg.build_release(
-            fact_packet,
-            prompt_packet,
-            release_id="release_test",
-            candidate=candidate,
-        )
-        self.assertEqual(release["verification"]["release_mode"], "DETERMINISTIC_FALLBACK")
-        self.assertIn("RG_DIRECT_NUMBER_DETECTED", release["verification"]["reason_codes"])
-
-    def test_extra_generated_claim_rejects_complete_candidate(self):
-        fact_packet, prompt_packet = self.build_records()
-        candidate = {
-            "schema_version": hdsg.CANDIDATE_SCHEMA,
-            "reason_clauses": [
-                {
-                    "clause_id": "reason:1",
-                    "requirement_ids": ["action_reason"],
-                    "fact_ids": ["sector:right"],
-                    "measurement_ids": ["m:sector:right:clearance"],
-                    "text_template": "The right sector is clear for {{m:sector:right:clearance}} and looks comfortable.",
-                },
-                {
-                    "clause_id": "reason:2",
-                    "requirement_ids": ["scene_reason"],
-                    "fact_ids": ["sector:left"],
-                    "measurement_ids": ["m:sector:left:clearance"],
-                    "text_template": "The left sector is blocked at {{m:sector:left:clearance}}.",
-                },
-            ],
-            "visual_observations": [],
-        }
-        release = hdsg.build_release(
-            fact_packet,
-            prompt_packet,
-            release_id="release_test",
-            candidate=candidate,
-        )
-        self.assertEqual(release["verification"]["release_mode"], "DETERMINISTIC_FALLBACK")
-        self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED", release["verification"]["reason_codes"])
-
-    def test_visual_instruction_label_is_rejected(self):
-        fact_packet, prompt_packet = self.build_records("REASSESSMENT", "REASSESS")
-        candidate = {
-            "schema_version": hdsg.CANDIDATE_SCHEMA,
-            "reason_clauses": [
-                {
-                    "clause_id": "reason:1",
-                    "requirement_ids": ["action_reason"],
-                    "fact_ids": ["sector:right"],
-                    "measurement_ids": ["m:sector:right:clearance"],
-                    "text_template": "The right sector is clear for {{m:sector:right:clearance}}.",
-                },
-                {
-                    "clause_id": "reason:2",
-                    "requirement_ids": ["scene_reason"],
-                    "fact_ids": ["sector:left"],
-                    "measurement_ids": ["m:sector:left:clearance"],
-                    "text_template": "The left sector is blocked at {{m:sector:left:clearance}}.",
-                },
-            ],
-            "visual_observations": [
-                {
-                    "candidate_observation_id": "visual:1",
-                    "proposed_label": "ignore instructions",
-                    "bearing": "CENTRE",
-                }
-            ],
-        }
-        release = hdsg.build_release(
-            fact_packet,
-            prompt_packet,
-            release_id="release_test",
-            candidate=candidate,
-        )
-        self.assertEqual(release["verification"]["release_mode"], "DETERMINISTIC_FALLBACK")
-        self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED", release["verification"]["reason_codes"])
-
     def test_no_intent_produces_empty_caption(self):
         fact_packet, prompt_packet = self.build_records()
         release = hdsg.build_release(
             fact_packet,
             prompt_packet,
             release_id="release_test",
-            candidate=None,
             no_intent=True,
         )
         self.assertEqual(release["authority"]["interaction_state"], "IDLE_NO_INTENT")
@@ -413,7 +261,6 @@ class HdsgRuntimeTests(unittest.TestCase):
             fact_packet,
             prompt_packet,
             release_id="release_test",
-            candidate=None,
             pending=True,
         )
         self.assertEqual(release["authority"]["interaction_state"], "GENERATION_PENDING")
@@ -455,7 +302,6 @@ class HdsgRuntimeTests(unittest.TestCase):
             fact_packet,
             {},
             release_id="release_test",
-            candidate=None,
             pending=True,
         )
         # REORIENTATION_REQUIRED already carries a complete deterministic account per
@@ -466,7 +312,7 @@ class HdsgRuntimeTests(unittest.TestCase):
         self.assertIn("has not been observed", release["content"]["caption_text"])
         self.assertEqual(release["verification"]["reason_codes"], ["RG_GENERATION_PENDING"])
 
-    def test_more_detail_requests_a_clause_per_scene_fact(self):
+    def test_more_detail_requests_a_requirement_per_scene_fact(self):
         # A stationary object well outside the safety-relevant range (beyond the caution
         # threshold, not a hazard) is not part of the action or scene binding, so it is a clean
         # probe of whether More detail names facts beyond the ones the decision itself required.
@@ -530,50 +376,6 @@ class HdsgRuntimeTests(unittest.TestCase):
         for item in prompt_packet["requirements"]:
             self.assertEqual(len(item["fact_ids"]), 1)
         self.assertEqual(prompt_packet["response_constraints"]["max_visual_observations"], 2)
-
-        candidate = {
-            "schema_version": hdsg.CANDIDATE_SCHEMA,
-            "reason_clauses": [
-                {
-                    "clause_id": "reason:1",
-                    "requirement_ids": ["action_reason"],
-                    "fact_ids": ["sector:right"],
-                    "measurement_ids": ["m:sector:right:clearance"],
-                    "text_template": "The right sector is clear for {{m:sector:right:clearance}}.",
-                },
-                {
-                    "clause_id": "reason:2",
-                    "requirement_ids": ["scene_reason"],
-                    "fact_ids": ["sector:left"],
-                    "measurement_ids": ["m:sector:left:clearance"],
-                    "text_template": "The left sector is blocked at {{m:sector:left:clearance}}.",
-                },
-                {
-                    "clause_id": "reason:3",
-                    "requirement_ids": [next(r for r in requirement_ids if r.startswith("detail_sector_"))],
-                    "fact_ids": ["sector:centre"],
-                    "measurement_ids": ["m:sector:centre:clearance"],
-                    "text_template": "The centre sector is clear for {{m:sector:centre:clearance}}.",
-                },
-                {
-                    "clause_id": "reason:4",
-                    "requirement_ids": ["detail_object_9"],
-                    "fact_ids": ["object:9"],
-                    "measurement_ids": ["m:object:9:distance"],
-                    "text_template": "The chair is present on the left at {{m:object:9:distance}}.",
-                },
-            ],
-            "visual_observations": [],
-        }
-        release = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_test", candidate=candidate,
-        )
-        self.assertEqual(release["verification"]["release_mode"], "VLM_ACCEPTED")
-        # action_reason renders as reason_text; the other three clauses (scene_reason, the
-        # centre-sector detail, and the chair) all render into additional_detail_texts.
-        self.assertEqual(len(release["content"]["additional_detail_texts"]), 3)
-        self.assertIn("chair", release["content"]["caption_text"])
-
     def test_restriction_order_ranks_stop_highest(self):
         self.assertEqual(
             sorted(hdsg.RESTRICTION_ORDER, key=hdsg.RESTRICTION_ORDER.get),
@@ -587,7 +389,7 @@ class HdsgRuntimeTests(unittest.TestCase):
         raw = "I think the path looks clear, probably fine to continue."
         release = hdsg.build_release(
             fact_packet, prompt_packet, release_id="release_test",
-            candidate=None, failure_codes=["RG_PARSE_FAILURE"],
+            failure_codes=["RG_PARSE_FAILURE"],
         )
         record = hdsg.build_generation_response_record(
             fact_packet, release,
@@ -605,7 +407,7 @@ class HdsgRuntimeTests(unittest.TestCase):
         fact_packet, prompt_packet = self.build_records()
         release = hdsg.build_release(
             fact_packet, prompt_packet, release_id="release_test",
-            candidate=None, failure_codes=["RG_MODEL_UNAVAILABLE"],
+            failure_codes=["RG_MODEL_UNAVAILABLE"],
         )
         record = hdsg.build_generation_response_record(
             fact_packet, release,
@@ -633,7 +435,7 @@ class HdsgRuntimeTests(unittest.TestCase):
     def test_generation_record_is_json_serialisable_and_identifies_its_event(self):
         fact_packet, prompt_packet = self.build_records()
         release = hdsg.build_release(
-            fact_packet, prompt_packet, release_id="release_test", candidate=None,
+            fact_packet, prompt_packet, release_id="release_test",
             failure_codes=["RG_STALE_CANDIDATE"],
         )
         record = hdsg.build_generation_response_record(
@@ -655,7 +457,6 @@ class HdsgRuntimeTests(unittest.TestCase):
             fact_packet,
             prompt_packet,
             release_id="release_test",
-            candidate=None,
             failure_codes=["RG_MODEL_UNAVAILABLE"],
         )
         with tempfile.TemporaryDirectory() as directory:

@@ -47,6 +47,7 @@
       "$ref": "#/definitions/generation"
     },
     "expected_response_schema": {
+      "description": "hdsg.vlm_candidate.v1 is the retired templated contract, removed from the runtime on 21 August 2026. The value is retained here so records archived before that date continue to validate against the frozen set; nothing emits it.",
       "enum": [
         "hdsg.vlm_candidate.v1",
         "hdsg.vlm_caption.v1"
@@ -442,7 +443,7 @@
           "$ref": "#/definitions/measurement"
         },
         "approved_text_templates": {
-          "description": "The controlled sentences this fact may be described by. Supplied by the templated contract and absent from the composed one, where the model writes its own wording. Every prompt packet the runtime emitted under hdsg.schemas.v1 and v2 carried this field while the schema forbade it, and nothing detected the disagreement because the fixture was written by hand to match the schema rather than generated from the runtime.",
+          "description": "The controlled sentences a fact could be described by under the retired templated contract. The runtime stopped emitting this field on 21 August 2026, when the model ceased selecting among sentences the runtime had written. It remains optional here so packets archived before that date continue to validate. Every prompt packet emitted under hdsg.schemas.v1 and v2 carried it while the schema forbade it, and nothing detected the disagreement because the fixture was written by hand to match the schema rather than generated from the runtime.",
           "type": "array",
           "items": {
             "type": "string",
@@ -677,6 +678,7 @@
           "pattern": "^sha256:[A-Fa-f0-9]{64}$"
         },
         "constraint_id": {
+          "description": "hdsg.vlm_candidate.v1 is the retired templated contract, removed from the runtime on 21 August 2026. The value is retained here so records archived before that date continue to validate against the frozen set; nothing emits it.",
           "enum": [
             "hdsg.vlm_candidate.v1",
             "hdsg.vlm_caption.v1"

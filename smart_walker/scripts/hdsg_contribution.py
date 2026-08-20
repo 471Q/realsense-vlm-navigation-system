@@ -13,11 +13,14 @@ therefore yields precisely the text the system would have shown with the model r
 from the archive without a model, a recording or a rerun.
 
 **What the comparison answers.** Chapter 2 section 2.5.6 requires the generative component to
-compose language rather than select from responses written in advance, and
-`HDSG_VERIFIED_GENERATION_POLICY.md` section 2 argues the implemented design does not meet that
-requirement. This module quantifies the argument over a whole run rather than over the single event
-recorded in that document. A run in which most events add no clause is direct evidence for the
-finding; a run in which most add several is evidence against it.
+compose language rather than select from responses written in advance.
+`HDSG_VERIFIED_GENERATION_POLICY.md` section 2 showed that the templated design did not meet that
+requirement, and it was removed on 21 August 2026 for that reason. The composed design meets it by
+construction, since the model writes the sentences, so the open question is no longer whether the
+model composes but whether what it composes tells the user anything the deterministic layer would
+not have told them anyway. This module answers that over a whole run: how often an accepted caption
+names a fact the fallback withheld, how often it only rephrases one the fallback already gave, and
+how often it reaches past the requirement set entirely.
 
 Nothing here reaches the walker display, and nothing here calls a model.
 """
@@ -56,10 +59,13 @@ class EventContribution:
 
     Two kinds of difference are distinguished, because they mean different things. A text that
     names a fact the deterministic rendering did not name carries information the deterministic
-    layer withheld. A text that names the same facts in different words carries none, since the
-    approved templates are synonyms of the fallback wording by construction. Counting the second as
-    contribution would report the generative layer as productive in proportion to how many
-    synonyms the template table happens to hold.
+    layer withheld. A text that names the same facts in other words carries none, whatever the
+    prose is like. Counting the second as contribution would report the generative layer as
+    productive in proportion to how freely it rephrases, which is a measure of the model's variety
+    rather than of what the user learns.
+
+    Both measures read the release's declared identifiers rather than its prose, so neither varies
+    with wording.
     """
 
     event_id: str
@@ -71,7 +77,7 @@ class EventContribution:
     dropped_clauses: list[str] = field(default_factory=list)
     added_facts: list[str] = field(default_factory=list)
     added_visual_clauses: int = 0
-    beyond_profile_clauses: list[str] = field(default_factory=list)
+    beyond_profile_facts: list[str] = field(default_factory=list)
 
     @property
     def identical(self) -> bool:
@@ -95,7 +101,7 @@ class EventContribution:
         The stricter of the two measures, and the one that attributes contribution to the model
         rather than to the profile.
         """
-        return bool(self.beyond_profile_clauses)
+        return bool(self.beyond_profile_facts)
 
     def as_record(self) -> dict:
         return {
@@ -109,7 +115,7 @@ class EventContribution:
             "dropped_clauses": list(self.dropped_clauses),
             "added_facts": list(self.added_facts),
             "added_visual_clauses": self.added_visual_clauses,
-            "beyond_profile_clauses": list(self.beyond_profile_clauses),
+            "beyond_profile_facts": list(self.beyond_profile_facts),
             "released_text": self.released_text,
             "deterministic_text": self.deterministic_text,
             "profile_text": self.profile_text,
@@ -133,20 +139,30 @@ def split_clauses(text: str) -> list[str]:
     return [item.strip() for item in SENTENCE_RE.split(str(text).strip()) if item.strip()]
 
 
-def clause_subject(clause: str) -> str:
-    """Returns a key identifying what a clause is about, independent of how it is worded.
+def profile_facts(prompt_packet: Mapping[str, Any]) -> set[str]:
+    """Returns identifiers for the facts the requirement construction selected.
 
-    Every rendered clause opens by naming its subject: "The centre sector", "A chair", "Possible
-    doorway". Taking the opening words therefore groups the approved synonyms of one fact together,
-    so that "The centre sector is constrained" and "The centre sector has limited clearance" are
-    recognised as describing the same thing.
+    The baseline for the stricter measure. A release naming only these added nothing the profile
+    had not already chosen, however it worded them.
 
-    This is a heuristic over rendered text rather than a structural attribution, and it holds
-    because both renderings place the subject first. A future clause form that opens differently
-    would need the attribution to come from the candidate's declared fact identifiers instead.
+    This replaced a heuristic that took the opening three words of each sentence as its subject.
+    That held only while both renderings were built from the same predicate table and placed the
+    subject first, which stopped being true when the model began composing its own prose: "The way
+    ahead narrows to 1.74 metres" and "The centre sector has limited clearance at 1.40 metres"
+    describe one fact and share no opening. Attributing from the declared identifiers is exact, and
+    it is the fix the heuristic's own documentation called for.
     """
-    words = str(clause).strip().split()
-    return " ".join(words[:3]).lower().rstrip(".,")
+    wanted: set[str] = set()
+    for requirement in prompt_packet.get("requirements", []):
+        wanted.update(str(item) for item in requirement.get("fact_ids", []))
+    named: set[str] = set()
+    for item in prompt_packet.get("permitted_facts", []):
+        if str(item.get("fact_id")) not in wanted:
+            continue
+        measurement = item.get("measurement")
+        if isinstance(measurement, Mapping) and measurement.get("measurement_id"):
+            named.add(str(measurement["measurement_id"]))
+    return named
 
 
 def facts_named(release: Mapping[str, Any]) -> set[str]:
@@ -166,9 +182,10 @@ def facts_named(release: Mapping[str, Any]) -> set[str]:
         for item in evidence.get("measurement_substitutions") or []
         if item.get("measurement_id")
     }
-    named.update(
-        f"visual:{item}" for item in evidence.get("released_visual_observation_ids") or []
-    )
+    # The recorded identifiers already carry the visual: prefix, so they are taken as they are.
+    # Adding another produced visual:visual:1, which was harmless while the value served only as a
+    # set key and misleading the moment it was reported.
+    named.update(str(item) for item in evidence.get("released_visual_observation_ids") or [])
     return named
 
 
@@ -183,7 +200,6 @@ def deterministic_release(fact_packet: Mapping[str, Any], prompt_packet: Mapping
         fact_packet,
         prompt_packet,
         release_id=release_id,
-        candidate=None,
         failure_codes=["RG_MODEL_UNAVAILABLE"],
     )
 
@@ -229,11 +245,7 @@ def compare_event(fact_packet: Mapping[str, Any], prompt_packet: Mapping[str, An
     visual = sum(1 for clause in added if VISUAL_CLAUSE_RE.match(clause))
     added_facts = sorted(facts_named(released) - facts_named(baseline))
 
-    profile_subjects = {clause_subject(clause) for clause in split_clauses(profile_baseline)}
-    beyond_profile = [
-        clause for clause in released_clauses
-        if clause_subject(clause) not in profile_subjects
-    ]
+    beyond_profile = sorted(facts_named(released) - profile_facts(prompt_packet))
 
     return EventContribution(
         event_id=released["identity"]["event_id"],
@@ -245,7 +257,7 @@ def compare_event(fact_packet: Mapping[str, Any], prompt_packet: Mapping[str, An
         dropped_clauses=dropped,
         added_facts=[item for item in added_facts if not item.startswith("visual:")],
         added_visual_clauses=visual,
-        beyond_profile_clauses=beyond_profile,
+        beyond_profile_facts=beyond_profile,
     )
 
 
@@ -320,8 +332,8 @@ def summarise(contributions: Iterable[EventContribution]) -> dict:
         # what the requirement construction contributed.
         "accepted_beyond_profile": accepted_beyond,
         "accepted_beyond_profile_rate": rate(accepted_beyond, len(accepted)),
-        "beyond_profile_clauses_total": sum(
-            len(item.beyond_profile_clauses) for item in items
+        "beyond_profile_facts_total": sum(
+            len(item.beyond_profile_facts) for item in items
         ),
         "events": total,
         "accepted_events": len(accepted),

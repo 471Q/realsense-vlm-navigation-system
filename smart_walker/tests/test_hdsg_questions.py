@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts import hdsg_composed as composed  # noqa: E402
 from scripts import hdsg_questions as questions  # noqa: E402
 from scripts import hdsg_runtime as hdsg  # noqa: E402
 
@@ -393,9 +394,11 @@ class PromptPacketIntegrationTests(unittest.TestCase):
         self.assertEqual(built["routing"]["request_id"], "MORE_DETAIL")
         self.assertEqual(built["routing"]["response_mode"], "MORE_DETAIL")
 
-    def test_permitted_facts_carry_approved_templates(self):
+    def test_permitted_facts_no_longer_carry_approved_templates(self):
+        """The model composes its own wording, so the packet supplies facts and not phrasing."""
         built = self.build("LEFT", make_packet())
-        self.assertTrue(built["permitted_facts"][0]["approved_text_templates"])
+        for item in built["permitted_facts"]:
+            self.assertNotIn("approved_text_templates", item)
 
     def test_automatic_construction_is_unchanged_when_no_route_is_given(self):
         packet = make_packet(action_ids=["sector:centre"])
@@ -540,7 +543,7 @@ class VisualObservationPromptTests(unittest.TestCase):
             system_prompt="s", constraint_hash=hdsg.sha256_text("g"),
         )
         self.assertTrue(built["response_constraints"]["visual_only_observations_allowed"])
-        self.assertIn("visual:1", hdsg.prompt_packet_text(built))
+        self.assertIn("visual:1", composed.build_composed_prompt(built, packet))
 
     def test_the_format_is_not_stated_when_visuals_are_forbidden(self):
         packet = make_packet()
@@ -550,7 +553,7 @@ class VisualObservationPromptTests(unittest.TestCase):
             quantisation=None, temperature=0.2, top_p=0.9, max_tokens=400,
             system_prompt="s", constraint_hash=hdsg.sha256_text("g"),
         )
-        text = hdsg.prompt_packet_text(built)
+        text = composed.build_composed_prompt(built, packet)
         self.assertIn("must be empty", text)
         self.assertNotIn("visual:1", text)
 
@@ -568,7 +571,15 @@ class TelemetryRecordTests(unittest.TestCase):
 
 
 class GrammarTests(unittest.TestCase):
-    GRAMMARS = ("hdsg.question_route.v1.gbnf", "hdsg.vlm_candidate.v1.gbnf")
+    GRAMMARS = tuple(sorted(
+        path.name for path in
+        (Path(__file__).resolve().parents[1] / "config").glob("*.gbnf")
+    ))
+
+    def test_the_executing_grammars_are_the_ones_covered(self):
+        """Discovery rather than a fixed list, so a grammar added later cannot escape these."""
+        self.assertEqual(self.GRAMMARS,
+                         ("hdsg.question_route.v1.gbnf", "hdsg.vlm_caption.v1.gbnf"))
 
     def test_no_rule_continues_onto_a_following_line(self):
         """llama.cpp's GBNF parser ends a rule at the newline.

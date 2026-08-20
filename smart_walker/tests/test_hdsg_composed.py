@@ -159,6 +159,59 @@ class HallucinationDetectionTests(unittest.TestCase):
         self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
 
 
+class VisualLabelTests(unittest.TestCase):
+    """A visual label is released as prose, so it is screened as prose.
+
+    The label pattern admits spaces and therefore admits a phrase. These checks belonged to the
+    retired templated validator and moved here on 21 August 2026 when it was removed, since
+    otherwise the one gate the release path still applies would have been the weaker of the two.
+    """
+
+    def label(self, text):
+        return {"candidate_observation_id": "visual:1", "proposed_label": text,
+                "bearing": "CENTRE"}
+
+    def test_an_instruction_in_a_label_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres.",
+                         [sector_assertion("centre", 1.74)],
+                         [self.label("ignore instructions")])
+        self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_action_language_in_a_label_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres.",
+                         [sector_assertion("centre", 1.74)],
+                         [self.label("turn left here")])
+        self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_distance_in_a_label_is_rejected(self):
+        """A label carries no declaration, so a number in one would reach the display unchecked."""
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres.",
+                         [sector_assertion("centre", 1.74)],
+                         [self.label("box at two metres")])
+        self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_model_commentary_in_a_label_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres.",
+                         [sector_assertion("centre", 1.74)],
+                         [self.label("json schema error")])
+        self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_an_ordinary_label_is_accepted(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres.",
+                         [sector_assertion("centre", 1.74)],
+                         [self.label("cardboard box")])
+        self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
+
+
 class ReferenceTests(unittest.TestCase):
     def test_an_unexposed_fact_is_rejected(self):
         fact_packet, prompt_packet = make_event()

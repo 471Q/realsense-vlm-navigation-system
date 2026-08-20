@@ -4,13 +4,13 @@
     "run_id": "run_fixture",
     "event_id": "evt_fixture",
     "observation_id": "obs_fixture",
-    "ticket_id": "ticket_fixture",
+    "ticket_id": null,
     "scenario_id": null,
     "source_mode": "LIVE"
   },
   "observation": {
-    "captured_at_utc": "2026-08-20T09:59:47.911Z",
-    "sensor_timestamp_ms": 1000.0,
+    "captured_at_utc": "2026-08-20T19:20:41.567Z",
+    "sensor_timestamp_ms": 1.0,
     "camera_model": "Intel RealSense D455f",
     "device_id": "d455f_01",
     "rgb_ref": "memory://obs_fixture/rgb",
@@ -27,41 +27,13 @@
     "intent": "FORWARD",
     "trigger_type": "USER_REQUESTED",
     "request_id": "MORE_DETAIL",
-    "input_method": "TYPED_QUESTION",
-    "control_id": "MORE_DETAIL",
+    "input_method": "SYSTEM",
+    "control_id": null,
     "response_mode": "MORE_DETAIL",
     "previous_guidance_signature": null,
     "current_guidance_signature": "CAUTION|REDIRECT|LEFT|sector:right|sector:centre,sector:left|VALID|"
   },
-  "objects": [
-    {
-      "fact_id": "object:3",
-      "detection_id": 0,
-      "track_id": 3,
-      "raw_label": "chair",
-      "canonical_label": "chair",
-      "ontology_class": "furniture",
-      "confidence": 0.82,
-      "bbox_xyxy": [
-        112.0,
-        180.0,
-        240.0,
-        360.0
-      ],
-      "bearing": "LEFT",
-      "distance_m": 1.62,
-      "distance_valid": true,
-      "distance_method": "D455F_LOWER_BBOX_MEDIAN",
-      "distance_bin": "NEAR",
-      "grounding": "YOLO_D455F",
-      "is_hazard": false,
-      "motion_state": "UNCONFIRMED",
-      "motion_confidence": null,
-      "motion_reason_codes": [],
-      "camera_motion_compensated": false,
-      "display_bounding_box": false
-    }
-  ],
+  "objects": [],
   "sectors": {
     "left": {
       "fact_id": "sector:left",

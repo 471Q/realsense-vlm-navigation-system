@@ -626,10 +626,8 @@ def main():
         help="write synchronised RGB and depth per observation during an evaluation run, "
              "so the run can be replayed under other conditions with identical input",
     )
-    default_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_candidate.v1.gbnf"
     default_catalogue = Path(__file__).resolve().parents[1] / "config" / "hdsg_request_catalogue.v1.json"
     default_route_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.question_route.v1.gbnf"
-    ap.add_argument("--grammar", type=Path, default=default_grammar)
     ap.add_argument("--request_catalogue", type=Path, default=default_catalogue)
     ap.add_argument("--route_grammar", type=Path, default=default_route_grammar,
                     help="the Tier 1 question classifier constraint")
@@ -638,17 +636,11 @@ def main():
     )
     ap.add_argument("--caption_grammar", type=Path, default=default_caption_grammar,
                     help="the composed caption constraint")
-    ap.add_argument("--generation", choices=["composed", "templated"], default="composed",
-                    help="composed: the model writes the caption in its own words and declares "
-                         "every number it states, which the gate checks against the Fact Packet. "
-                         "templated: the superseded design in which the model selects among "
-                         "approved sentences, retained as a comparison arm.")
     ap.add_argument("--caption_max_tokens", type=int, default=400,
-                    help="token budget for a composed caption. It needs a larger budget than the "
-                         "templated design because the reply carries prose and the declarations "
-                         "for every number in it. A budget too small truncates the JSON and the "
-                         "reply is discarded as a parse failure. The deployed model settles "
-                         "at around 240, so this is headroom rather than a target.")
+                    help="token budget for a composed caption. The reply carries prose and a "
+                         "declaration for every number in it. A budget too small truncates the "
+                         "JSON and the reply is discarded as a parse failure. The deployed model "
+                         "settles at around 240, so this is headroom rather than a target.")
     ap.add_argument("--caption_timeout_s", type=float, default=45.0,
                     help="request timeout for a composed caption. Larger than --vlm_timeout_s "
                          "because the detector runs continuously on the same GPU and the guidance "
@@ -679,11 +671,6 @@ def main():
 
     if rs is None:
         raise RuntimeError("pyrealsense2 is required for the canonical D455f implementation.")
-    try:
-        args._hdsg_grammar = args.grammar.read_text(encoding="utf-8")
-    except OSError as error:
-        raise RuntimeError(f"The approved generation constraint could not be loaded: {args.grammar}") from error
-    constraint_hash = hdsg.sha256_file(args.grammar)
     if args.unconstrained:
         print("[hdsg] " + "=" * 68)
         print("[hdsg] UNCONSTRAINED DIAGNOSTIC MODE")
@@ -692,23 +679,17 @@ def main():
         print("[hdsg] This run is not evaluation evidence. The caption stays deterministic.")
         print("[hdsg] " + "=" * 68)
 
-    # The composed design constrains the reply's structure while leaving the caption free, so its
-    # grammar replaces the candidate grammar rather than supplementing it.
-    caption_grammar_text: Optional[str] = None
-    if args.generation == "composed":
-        try:
-            caption_grammar_text = args.caption_grammar.read_text(encoding="utf-8")
-        except OSError as error:
-            raise RuntimeError(
-                f"The composed caption constraint could not be loaded: {args.caption_grammar}"
-            ) from error
-        print(f"[hdsg] generation: composed captions, declared values checked to "
-              f"{args.value_tolerance_m:.2f} m")
-        # The packet must record the digest of the grammar that constrained the call, not of the
-        # templated one it would otherwise default to.
-        constraint_hash = hdsg.sha256_file(args.caption_grammar)
-    else:
-        print("[hdsg] generation: templated, the superseded comparison arm")
+    # The caption grammar constrains the reply's structure while leaving the caption itself free.
+    # It is the only constraint the release path applies, and the packet records its digest.
+    try:
+        caption_grammar_text: Optional[str] = args.caption_grammar.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(
+            f"The composed caption constraint could not be loaded: {args.caption_grammar}"
+        ) from error
+    constraint_hash = hdsg.sha256_file(args.caption_grammar)
+    print(f"[hdsg] generation: composed captions, declared values checked to "
+          f"{args.value_tolerance_m:.2f} m")
 
     route_grammar_text: Optional[str] = None
     if args.answer_questions and not args.unconstrained:
@@ -724,13 +705,11 @@ def main():
         if (request_catalogue.get("catalogue_version") != "hdsg.request_catalogue.v1"
                 or not required_requests.issubset(request_catalogue.get("requests", {}))):
             raise ValueError("The required evaluated request profiles are absent.")
-        args.system = str(request_catalogue["system_prompt"])
-        # The composed call sends a different system prompt, so the packet must record that one
-        # or its system_prompt_hash names text the model never received.
-        composed_system = str(request_catalogue.get("composed_system_prompt")
-                              or hdsg_composed.COMPOSED_SYSTEM_PROMPT)
-        composed_system_id = str(request_catalogue.get("composed_system_prompt_id")
-                                 or "hdsg.composed_caption.v1")
+        # The catalogue is the single source for the text sent to the model, so the digest the
+        # prompt packet records cannot name text the model never received.
+        composed_system = str(request_catalogue["composed_system_prompt"])
+        composed_system_id = str(request_catalogue["composed_system_prompt_id"])
+        args.system = composed_system
     except (OSError, ValueError, TypeError, json.JSONDecodeError, KeyError) as error:
         raise RuntimeError(
             f"The approved request catalogue could not be loaded: {args.request_catalogue}"
@@ -881,58 +860,47 @@ def main():
     def generate_candidate(fact_packet: dict, prompt_packet: dict, image,
                            fixed_instruction: str) -> tuple[Optional[dict], list[str],
                                                             Optional[str], list[dict]]:
-        """Runs one generation and gates it under whichever design is selected.
+        """Runs one generation and gates the caption it returns.
 
-        Returns the candidate, its reason codes, the raw reply and the scored assertions. The
-        assertions are empty under the templated design, which declares none.
-
-        Both call sites share this so the two designs differ in one place rather than two.
+        Returns the candidate, its reason codes, the raw reply and the scored assertions. Both call
+        sites share this so the generation path has one implementation.
         """
         raw_response: Optional[str] = None
         scored: list[dict] = []
         candidate: Optional[dict] = None
         codes: list[str] = []
         try:
-            if args.generation == "composed":
-                args._user_txt_for_payload = hdsg_composed.build_composed_prompt(
-                    prompt_packet, fact_packet, fixed_instruction
+            args._user_txt_for_payload = hdsg_composed.build_composed_prompt(
+                prompt_packet, fact_packet, fixed_instruction
+            )
+            raw_response = _call_vlm_with_fallbacks(
+                args.endpoint, image, args,
+                system=composed_system,
+                grammar=caption_grammar_text,
+                max_tokens=args.caption_max_tokens,
+                timeout_s=args.caption_timeout_s,
+            )
+            candidate, codes = hdsg_composed.parse_caption_candidate(raw_response)
+            if candidate is None and not str(raw_response).rstrip().endswith("}"):
+                # A grammar-constrained reply that stops before its closing brace ran out of
+                # tokens rather than being malformed. The two are indistinguishable in the
+                # reason code, so the distinction is drawn here.
+                print(f"[hdsg] caption truncated at {len(raw_response or '')} characters; "
+                      f"raise --caption_max_tokens above {args.caption_max_tokens}")
+            if candidate is not None:
+                record("vlm_caption", candidate)
+                gate_codes, scored = hdsg_composed.validate_caption_candidate(
+                    candidate, prompt_packet, fact_packet,
+                    detector_classes=detector_classes,
+                    value_tolerance_m=args.value_tolerance_m,
                 )
-                raw_response = _call_vlm_with_fallbacks(
-                    args.endpoint, image, args,
-                    system=composed_system,
-                    grammar=caption_grammar_text,
-                    max_tokens=args.caption_max_tokens,
-                    timeout_s=args.caption_timeout_s,
-                )
-                candidate, codes = hdsg_composed.parse_caption_candidate(raw_response)
-                if candidate is None and not str(raw_response).rstrip().endswith("}"):
-                    # A grammar-constrained reply that stops before its closing brace ran out of
-                    # tokens rather than being malformed. The two are indistinguishable in the
-                    # reason code, so the distinction is drawn here.
-                    print(f"[hdsg] caption truncated at {len(raw_response or '')} characters; "
-                          f"raise --caption_max_tokens above {args.caption_max_tokens}")
-                if candidate is not None:
-                    record("vlm_candidate", candidate)
-                    gate_codes, scored = hdsg_composed.validate_caption_candidate(
-                        candidate, prompt_packet, fact_packet,
-                        detector_classes=detector_classes,
-                        value_tolerance_m=args.value_tolerance_m,
-                    )
-                    codes = list(codes) + list(gate_codes)
-                    if gate_codes:
-                        # A gate rejection is otherwise silent: the user sees the deterministic
-                        # fallback, which for several sector states is worded identically to an
-                        # accepted caption, so nothing on screen indicates a rejection occurred.
-                        print(f"[hdsg] caption rejected {gate_codes}: "
-                              f"{str(candidate.get('caption'))[:160]}")
-            else:
-                args._user_txt_for_payload = hdsg.prompt_packet_text(
-                    prompt_packet, fixed_instruction
-                )
-                raw_response = _call_vlm_with_fallbacks(args.endpoint, image, args)
-                candidate, codes = hdsg.parse_candidate(raw_response)
-                if candidate is not None:
-                    record("vlm_candidate", candidate)
+                codes = list(codes) + list(gate_codes)
+                if gate_codes:
+                    # A gate rejection is otherwise silent: the user sees the deterministic
+                    # fallback, which for several sector states is worded identically to an
+                    # accepted caption, so nothing on screen indicates a rejection occurred.
+                    print(f"[hdsg] caption rejected {gate_codes}: "
+                          f"{str(candidate.get('caption'))[:160]}")
         except Exception as error:
             print(f"[hdsg] constrained generation failed: {error}")
             return None, [hdsg.generation_failure_code(error)], raw_response, scored
@@ -944,15 +912,10 @@ def main():
     def make_release(fact_packet: dict, prompt_packet: dict, release_id: str,
                      candidate: Optional[dict], failure_codes: list[str],
                      scored: list[dict], **kwargs) -> dict:
-        """Builds the release under whichever design is selected."""
-        if args.generation == "composed":
-            return hdsg_composed.build_composed_release(
-                fact_packet, prompt_packet, release_id=release_id, candidate=candidate,
-                scored_assertions=scored, failure_codes=failure_codes, **kwargs
-            )
-        return hdsg.build_release(
+        """Builds the release from an accepted caption or from the deterministic layer."""
+        return hdsg_composed.build_composed_release(
             fact_packet, prompt_packet, release_id=release_id, candidate=candidate,
-            failure_codes=failure_codes, **kwargs
+            scored_assertions=scored, failure_codes=failure_codes, **kwargs
         )
 
     def generation_worker():
@@ -1141,16 +1104,13 @@ def main():
             quantisation=args.quantisation,
             temperature=args.temperature,
             top_p=args.top_p,
-            max_tokens=args.max_tokens,
-            system_prompt=(composed_system if args.generation == "composed" else args.system),
+            max_tokens=args.caption_max_tokens,
+            system_prompt=composed_system,
             constraint_hash=constraint_hash,
             prompt_profile_id=str(route_entry["prompt_profile_id"]),
-            system_prompt_id=(composed_system_id if args.generation == "composed"
-                              else str(request_catalogue["system_prompt_id"])),
+            system_prompt_id=composed_system_id,
             question_requirements=requirement_set,
-            expected_response_schema=(
-                hdsg.CAPTION_SCHEMA if args.generation == "composed" else hdsg.CANDIDATE_SCHEMA
-            ),
+            expected_response_schema=hdsg.CAPTION_SCHEMA,
         )
         prompt_packet["image"]["transform"].update({
             "longest_side_px": int(args.image_size),
@@ -1250,15 +1210,12 @@ def main():
             quantisation=args.quantisation,
             temperature=args.temperature,
             top_p=args.top_p,
-            max_tokens=args.max_tokens,
-            system_prompt=(composed_system if args.generation == "composed" else args.system),
+            max_tokens=args.caption_max_tokens,
+            system_prompt=composed_system,
             constraint_hash=constraint_hash,
             prompt_profile_id=str(catalogue_entry["prompt_profile_id"]),
-            system_prompt_id=(composed_system_id if args.generation == "composed"
-                              else str(request_catalogue["system_prompt_id"])),
-            expected_response_schema=(
-                hdsg.CAPTION_SCHEMA if args.generation == "composed" else hdsg.CANDIDATE_SCHEMA
-            ),
+            system_prompt_id=composed_system_id,
+            expected_response_schema=hdsg.CAPTION_SCHEMA,
         )
         prompt_packet["image"]["transform"].update({
             "longest_side_px": int(args.image_size),
@@ -1281,7 +1238,6 @@ def main():
             fact_packet,
             prompt_packet,
             release_id=immediate_release_id,
-            candidate=None,
             pending=True,
         )
         publish_release(immediate, "authoritative_interim_release")
@@ -1455,7 +1411,7 @@ def main():
         )
         record("full_fact_packet", packet)
         release = hdsg.build_release(
-            packet, {}, release_id=allocate("release", "release"), candidate=None, no_intent=True,
+            packet, {}, release_id=allocate("release", "release"), no_intent=True,
         )
         publish_release(release)
 
@@ -1842,7 +1798,7 @@ def main():
                         else:
                             record("full_fact_packet", packet)
                             release = hdsg.build_release(
-                                packet, {}, release_id=allocate("release", "release"), candidate=None,
+                                packet, {}, release_id=allocate("release", "release"),
                             )
                             publish_release(release)
 
