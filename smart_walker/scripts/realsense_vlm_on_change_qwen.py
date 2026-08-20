@@ -640,6 +640,11 @@ def main():
                          "every number it states, which the gate checks against the Fact Packet. "
                          "templated: the superseded design in which the model selects among "
                          "approved sentences, retained as a comparison arm.")
+    ap.add_argument("--caption_max_tokens", type=int, default=600,
+                    help="token budget for a composed caption. It needs a larger budget than the "
+                         "templated design because the reply carries prose and the declarations "
+                         "for every number in it. A budget too small truncates the JSON and the "
+                         "reply is discarded as a parse failure.")
     ap.add_argument("--value_tolerance_m", type=float,
                     default=hdsg_composed.DEFAULT_VALUE_TOLERANCE_M,
                     help="how far a declared value may sit from its measurement before the "
@@ -878,8 +883,15 @@ def main():
                     args.endpoint, image, args,
                     system=hdsg_composed.COMPOSED_SYSTEM_PROMPT,
                     grammar=caption_grammar_text,
+                    max_tokens=args.caption_max_tokens,
                 )
                 candidate, codes = hdsg_composed.parse_caption_candidate(raw_response)
+                if candidate is None and not str(raw_response).rstrip().endswith("}"):
+                    # A grammar-constrained reply that stops before its closing brace ran out of
+                    # tokens rather than being malformed. The two are indistinguishable in the
+                    # reason code, so the distinction is drawn here.
+                    print(f"[hdsg] caption truncated at {len(raw_response or '')} characters; "
+                          f"raise --caption_max_tokens above {args.caption_max_tokens}")
                 if candidate is not None:
                     record("vlm_candidate", candidate)
                     gate_codes, scored = hdsg_composed.validate_caption_candidate(
