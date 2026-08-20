@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "urn:hdsg:schema:fact-packet:v1",
-  "title": "HDSG Full Fact Packet v1",
+  "title": "HDSG Full Fact Packet v2",
   "description": "Authoritative pre-VLM evidence for one HDSG event.",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "hdsg.fact_packet.v1"
+      "const": "hdsg.fact_packet.v2"
     },
     "identity": {
       "$ref": "#/definitions/identity"
@@ -63,11 +63,17 @@
       "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
     },
     "ticket_id": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "pattern": "^ticket_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
     },
     "scenario_id": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "pattern": "^scenario_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
     },
     "fact_id": {
@@ -110,7 +116,10 @@
           "$ref": "#/definitions/scenario_id"
         },
         "source_mode": {
-          "enum": ["LIVE", "REPLAY"]
+          "enum": [
+            "LIVE",
+            "REPLAY"
+          ]
         }
       }
     },
@@ -149,12 +158,18 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
         },
         "rgb_ref": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
         "depth_ref": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
@@ -171,7 +186,11 @@
           "type": "boolean"
         },
         "measurement_state": {
-          "enum": ["VALID", "PARTIAL", "INVALID"]
+          "enum": [
+            "VALID",
+            "PARTIAL",
+            "INVALID"
+          ]
         },
         "validity_reason_codes": {
           "type": "array",
@@ -200,7 +219,13 @@
       ],
       "properties": {
         "intent": {
-          "enum": ["FORWARD", "LEFT", "RIGHT", "BACKWARD", "NONE"]
+          "enum": [
+            "FORWARD",
+            "LEFT",
+            "RIGHT",
+            "BACKWARD",
+            "NONE"
+          ]
         },
         "trigger_type": {
           "enum": [
@@ -215,20 +240,43 @@
           ]
         },
         "request_id": {
-          "enum": ["AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"]
+          "enum": [
+            "AUTO_GUIDANCE",
+            "MORE_DETAIL",
+            "REASSESS"
+          ]
         },
         "input_method": {
-          "enum": ["SYSTEM", "ONSCREEN_CONTROL", "KEYBOARD_SHORTCUT"]
+          "enum": [
+            "SYSTEM",
+            "ONSCREEN_CONTROL",
+            "KEYBOARD_SHORTCUT",
+            "TYPED_QUESTION"
+          ]
         },
         "control_id": {
-          "type": ["string", "null"],
-          "enum": [null, "MORE_DETAIL", "REASSESS"]
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "MORE_DETAIL",
+            "REASSESS"
+          ]
         },
         "response_mode": {
-          "enum": ["AUTOMATIC", "MORE_DETAIL", "REASSESSMENT"]
+          "enum": [
+            "AUTOMATIC",
+            "MORE_DETAIL",
+            "REASSESSMENT"
+          ]
         },
         "previous_guidance_signature": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 512
         },
         "current_guidance_signature": {
@@ -273,19 +321,28 @@
           "minimum": 0
         },
         "track_id": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0
         },
         "raw_label": {
           "$ref": "#/definitions/non_empty_string"
         },
         "canonical_label": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 128
         },
         "ontology_class": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 128
         },
@@ -304,33 +361,63 @@
           }
         },
         "bearing": {
-          "enum": ["LEFT", "CENTRE", "RIGHT"]
+          "enum": [
+            "LEFT",
+            "CENTRE",
+            "RIGHT"
+          ]
         },
         "distance_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "exclusiveMinimum": 0
         },
         "distance_valid": {
           "type": "boolean"
         },
         "distance_method": {
-          "type": ["string", "null"],
-          "enum": [null, "D455F_LOWER_BBOX_MEDIAN", "D455F_BBOX_MEDIAN"]
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "D455F_LOWER_BBOX_MEDIAN",
+            "D455F_BBOX_MEDIAN"
+          ]
         },
         "distance_bin": {
-          "enum": ["VERY_CLOSE", "NEAR", "MID", "FAR", "UNKNOWN"]
+          "enum": [
+            "VERY_CLOSE",
+            "NEAR",
+            "MID",
+            "FAR",
+            "UNKNOWN"
+          ]
         },
         "grounding": {
-          "enum": ["YOLO_D455F", "YOLO_ONLY"]
+          "enum": [
+            "YOLO_D455F",
+            "YOLO_ONLY"
+          ]
         },
         "is_hazard": {
           "type": "boolean"
         },
         "motion_state": {
-          "enum": ["UNCONFIRMED", "STATIONARY", "MOVING"]
+          "enum": [
+            "UNCONFIRMED",
+            "STATIONARY",
+            "MOVING"
+          ]
         },
         "motion_confidence": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "minimum": 0,
           "maximum": 1
         },
@@ -364,7 +451,10 @@
                 "exclusiveMinimum": 0
               },
               "distance_method": {
-                "enum": ["D455F_LOWER_BBOX_MEDIAN", "D455F_BBOX_MEDIAN"]
+                "enum": [
+                  "D455F_LOWER_BBOX_MEDIAN",
+                  "D455F_BBOX_MEDIAN"
+                ]
               },
               "grounding": {
                 "const": "YOLO_D455F"
@@ -433,7 +523,10 @@
           "pattern": "^sector:(left|centre|right)$"
         },
         "clearance_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "exclusiveMinimum": 0
         },
         "valid": {
@@ -447,7 +540,12 @@
           }
         },
         "status": {
-          "enum": ["CLEAR", "CONSTRAINED", "BLOCKED", "UNKNOWN"]
+          "enum": [
+            "CLEAR",
+            "CONSTRAINED",
+            "BLOCKED",
+            "UNKNOWN"
+          ]
         }
       },
       "allOf": [
@@ -466,7 +564,11 @@
                 "exclusiveMinimum": 0
               },
               "status": {
-                "enum": ["CLEAR", "CONSTRAINED", "BLOCKED"]
+                "enum": [
+                  "CLEAR",
+                  "CONSTRAINED",
+                  "BLOCKED"
+                ]
               }
             }
           },
@@ -486,7 +588,11 @@
     "sectors": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["left", "centre", "right"],
+      "required": [
+        "left",
+        "centre",
+        "right"
+      ],
       "properties": {
         "left": {
           "allOf": [
@@ -535,7 +641,11 @@
     "rule_fired": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fact_id", "rule_id", "supporting_fact_ids"],
+      "required": [
+        "fact_id",
+        "rule_id",
+        "supporting_fact_ids"
+      ],
       "properties": {
         "fact_id": {
           "type": "string",
@@ -584,13 +694,22 @@
           }
         },
         "source": {
-          "enum": ["OBJECT", "SECTOR", "CONDITION", "BOTH", "NONE"]
+          "enum": [
+            "OBJECT",
+            "SECTOR",
+            "CONDITION",
+            "BOTH",
+            "NONE"
+          ]
         },
         "scoreable": {
           "type": "boolean"
         },
         "unscoreable_reason": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 256
         }
@@ -617,23 +736,53 @@
       ],
       "properties": {
         "object_advisory": {
-          "enum": ["SAFE", "CAUTION", "STOP"]
+          "enum": [
+            "SAFE",
+            "CAUTION",
+            "STOP"
+          ]
         },
         "sector_advisory": {
-          "enum": ["SAFE", "CAUTION", "STOP"]
+          "enum": [
+            "SAFE",
+            "CAUTION",
+            "STOP"
+          ]
         },
         "composite_advisory": {
-          "enum": ["SAFE", "CAUTION", "STOP"]
+          "enum": [
+            "SAFE",
+            "CAUTION",
+            "STOP"
+          ]
         },
         "scene_advisory": {
-          "enum": ["SAFE", "CAUTION", "STOP"]
+          "enum": [
+            "SAFE",
+            "CAUTION",
+            "STOP"
+          ]
         },
         "motion_decision": {
-          "type": ["string", "null"],
-          "enum": [null, "PROCEED", "SLOW", "REDIRECT", "STOP"]
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "PROCEED",
+            "SLOW",
+            "REDIRECT",
+            "STOP"
+          ]
         },
         "selected_sector": {
-          "enum": ["LEFT", "CENTRE", "RIGHT", "NONE"]
+          "enum": [
+            "LEFT",
+            "CENTRE",
+            "RIGHT",
+            "NONE"
+          ]
         },
         "interaction_state": {
           "enum": [
@@ -647,17 +796,29 @@
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": ["LEFT", "CENTRE", "RIGHT"]
+            "enum": [
+              "LEFT",
+              "CENTRE",
+              "RIGHT"
+            ]
           }
         },
         "selection_status": {
-          "enum": ["SELECTED", "CHOICE_REQUIRED", "UNAVAILABLE"]
+          "enum": [
+            "SELECTED",
+            "CHOICE_REQUIRED",
+            "UNAVAILABLE"
+          ]
         },
         "selection_options": {
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": ["LEFT", "CENTRE", "RIGHT"]
+            "enum": [
+              "LEFT",
+              "CENTRE",
+              "RIGHT"
+            ]
           }
         },
         "rules_fired": {
@@ -678,7 +839,10 @@
       }
     },
     "nullable_non_negative_number": {
-      "type": ["number", "null"],
+      "type": [
+        "number",
+        "null"
+      ],
       "minimum": 0
     },
     "configuration": {
@@ -764,7 +928,10 @@
           }
         },
         "post_reorientation_stable_observations": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1
         },
         "post_reorientation_max_variation_m": {
@@ -773,7 +940,11 @@
         "sector_geometry": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["top_fraction", "bottom_fraction", "horizontal_divisions"],
+          "required": [
+            "top_fraction",
+            "bottom_fraction",
+            "horizontal_divisions"
+          ],
           "properties": {
             "top_fraction": {
               "type": "number",
@@ -806,22 +977,34 @@
               "type": "boolean"
             },
             "tracker_id": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "maxLength": 128
             },
             "camera_motion_compensation": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "maxLength": 128
             },
             "movement_threshold_m": {
               "$ref": "#/definitions/nullable_non_negative_number"
             },
             "confirmation_observations": {
-              "type": ["integer", "null"],
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 1
             },
             "lost_after_observations": {
-              "type": ["integer", "null"],
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 1
             }
           }

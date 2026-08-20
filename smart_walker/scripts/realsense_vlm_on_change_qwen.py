@@ -1138,6 +1138,9 @@ def main():
             prompt_profile_id=str(route_entry["prompt_profile_id"]),
             system_prompt_id=str(request_catalogue["system_prompt_id"]),
             question_requirements=requirement_set,
+            expected_response_schema=(
+                hdsg.CAPTION_SCHEMA if args.generation == "composed" else hdsg.CANDIDATE_SCHEMA
+            ),
         )
         prompt_packet["image"]["transform"].update({
             "longest_side_px": int(args.image_size),
@@ -1242,6 +1245,9 @@ def main():
             constraint_hash=constraint_hash,
             prompt_profile_id=str(catalogue_entry["prompt_profile_id"]),
             system_prompt_id=str(request_catalogue["system_prompt_id"]),
+            expected_response_schema=(
+                hdsg.CAPTION_SCHEMA if args.generation == "composed" else hdsg.CANDIDATE_SCHEMA
+            ),
         )
         prompt_packet["image"]["transform"].update({
             "longest_side_px": int(args.image_size),
@@ -1646,12 +1652,9 @@ def main():
                     "MORE_DETAIL", "MORE_DETAIL", "USER_REQUESTED", latest_observation_id,
                     time.monotonic() * 1000.0, latest_objects, latest_sector_facts,
                     latest_authority,
-                    # input_method is a frozen enumeration in hdsg.fact_packet.v1 with no member
-                    # for typed text. The chat box is an on-screen widget, so ONSCREEN_CONTROL is
-                    # the accurate member of the set that exists. A TYPED_QUESTION member belongs
-                    # in the next schema set with the rest of the question additions; until then
-                    # the question_route record is what distinguishes a question from a button.
-                    input_method="ONSCREEN_CONTROL", control_id="MORE_DETAIL",
+                    # hdsg.fact_packet.v2 carries TYPED_QUESTION, so a question is recorded as
+                    # what it is rather than as the button whose profile it borrows.
+                    input_method="TYPED_QUESTION", control_id="MORE_DETAIL",
                 )
                 record("full_fact_packet", packet)
                 try:

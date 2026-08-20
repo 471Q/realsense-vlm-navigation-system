@@ -1,0 +1,23 @@
+{
+  "schema_version": "hdsg.vlm_caption.v1",
+  "caption": "The way ahead narrows to 1.74 metres, with 3.13 metres of room to the left.",
+  "assertions": [
+    {
+      "fact_id": "sector:centre",
+      "measurement_id": "m:sector:centre:clearance",
+      "stated_value": 1.74
+    },
+    {
+      "fact_id": "sector:left",
+      "measurement_id": "m:sector:left:clearance",
+      "stated_value": 3.13
+    }
+  ],
+  "visual_observations": [
+    {
+      "candidate_observation_id": "visual:1",
+      "proposed_label": "doorway",
+      "bearing": "LEFT"
+    }
+  ]
+}

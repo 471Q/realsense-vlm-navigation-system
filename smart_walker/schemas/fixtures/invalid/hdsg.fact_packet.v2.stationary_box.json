@@ -1,5 +1,5 @@
 {
-  "schema_version": "hdsg.fact_packet.v1",
+  "schema_version": "hdsg.fact_packet.v2",
   "identity": {},
   "observation": {},
   "interaction": {},

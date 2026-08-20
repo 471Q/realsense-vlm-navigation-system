@@ -14,8 +14,9 @@ text-template-field ::= "\"text_template\"" ws ":" ws json-string
 visuals-field ::= "\"visual_observations\"" ws ":" ws visual-array
 visual-array ::= "[" ws "]" | "[" ws visual-observation (ws "," ws visual-observation)? ws "]"
 visual-observation ::= "{" ws visual-id-field "," ws proposed-label-field "," ws bearing-field ws "}"
-visual-id-field ::= "\"candidate_observation_id\"" ws ":" ws json-string
-proposed-label-field ::= "\"proposed_label\"" ws ":" ws json-string
+visual-id-field ::= "\"candidate_observation_id\"" ws ":" ws "\"visual:" positive-integer "\""
+proposed-label-field ::= "\"proposed_label\"" ws ":" ws "\"" lower-word (" " lower-word)* "\""
+lower-word ::= [a-z] [a-z0-9_]*
 bearing-field ::= "\"bearing\"" ws ":" ws ("\"LEFT\"" | "\"CENTRE\"" | "\"RIGHT\"")
 
 single-string-array ::= "[" ws json-string ws "]"

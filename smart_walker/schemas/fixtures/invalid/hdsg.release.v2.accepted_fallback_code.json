@@ -1,5 +1,5 @@
 {
-  "schema_version": "hdsg.release.v1",
+  "schema_version": "hdsg.release.v2",
   "identity": {},
   "authority": {},
   "content": {},
@@ -9,6 +9,8 @@
     "candidate_status": "ACCEPTED",
     "gate_outcome": "ACCEPTED",
     "primary_reason_code": "RG_ACTION_LANGUAGE_DETECTED",
-    "reason_codes": ["RG_ACTION_LANGUAGE_DETECTED"]
+    "reason_codes": [
+      "RG_ACTION_LANGUAGE_DETECTED"
+    ]
   }
 }

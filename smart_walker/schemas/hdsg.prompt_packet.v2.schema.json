@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "urn:hdsg:schema:prompt-packet:v1",
-  "title": "HDSG Restricted Prompt Packet v1",
+  "title": "HDSG Restricted Prompt Packet v2",
   "description": "Restricted and traceable input supplied to the generative model.",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "hdsg.prompt_packet.v1"
+      "const": "hdsg.prompt_packet.v2"
     },
     "routing": {
       "$ref": "#/definitions/routing"
@@ -47,7 +47,10 @@
       "$ref": "#/definitions/generation"
     },
     "expected_response_schema": {
-      "const": "hdsg.vlm_candidate.v1"
+      "enum": [
+        "hdsg.vlm_candidate.v1",
+        "hdsg.vlm_caption.v1"
+      ]
     }
   },
   "allOf": [
@@ -104,7 +107,7 @@
                 "const": 4
               },
               "max_visual_observations": {
-                "const": 1
+                "const": 2
               }
             }
           }
@@ -152,15 +155,24 @@
       "pattern": "^m:[a-z][a-z0-9._-]*(?::[a-z0-9._-]+)+$"
     },
     "measurement": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
-      "required": ["measurement_id", "unit", "source_pointer"],
+      "required": [
+        "measurement_id",
+        "unit",
+        "source_pointer"
+      ],
       "properties": {
         "measurement_id": {
           "$ref": "#/definitions/measurement_id"
         },
         "unit": {
-          "enum": ["metre"]
+          "enum": [
+            "metre"
+          ]
         },
         "source_pointer": {
           "type": "string",
@@ -193,10 +205,18 @@
           "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
         },
         "request_id": {
-          "enum": ["AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"]
+          "enum": [
+            "AUTO_GUIDANCE",
+            "MORE_DETAIL",
+            "REASSESS"
+          ]
         },
         "response_mode": {
-          "enum": ["AUTOMATIC", "MORE_DETAIL", "REASSESSMENT"]
+          "enum": [
+            "AUTOMATIC",
+            "MORE_DETAIL",
+            "REASSESSMENT"
+          ]
         },
         "prompt_profile_id": {
           "type": "string",
@@ -207,7 +227,12 @@
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["included", "observation_id", "rgb_ref", "transform"],
+      "required": [
+        "included",
+        "observation_id",
+        "rgb_ref",
+        "transform"
+      ],
       "properties": {
         "included": {
           "const": true
@@ -217,7 +242,10 @@
           "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
         },
         "rgb_ref": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
@@ -240,10 +268,16 @@
               "const": true
             },
             "encoding": {
-              "enum": ["jpeg", "png"]
+              "enum": [
+                "jpeg",
+                "png"
+              ]
             },
             "jpeg_quality": {
-              "type": ["integer", "null"],
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 1,
               "maximum": 100
             }
@@ -281,7 +315,12 @@
     "requirement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requirement_id", "role", "match", "fact_ids"],
+      "required": [
+        "requirement_id",
+        "role",
+        "match",
+        "fact_ids"
+      ],
       "properties": {
         "requirement_id": {
           "type": "string",
@@ -297,7 +336,10 @@
           ]
         },
         "match": {
-          "enum": ["ANY_OF", "ALL_OF"]
+          "enum": [
+            "ANY_OF",
+            "ALL_OF"
+          ]
         },
         "fact_ids": {
           "type": "array",
@@ -328,7 +370,11 @@
           "$ref": "#/definitions/fact_id"
         },
         "fact_type": {
-          "enum": ["SECTOR", "OBJECT", "CONDITION"]
+          "enum": [
+            "SECTOR",
+            "OBJECT",
+            "CONDITION"
+          ]
         },
         "name": {
           "type": "string",
@@ -345,20 +391,45 @@
             "MID",
             "FAR",
             "PRESENT",
-            "ACTIVE"
+            "ACTIVE",
+            "UNKNOWN"
           ]
         },
         "bearing": {
-          "type": ["string", "null"],
-          "enum": [null, "LEFT", "CENTRE", "RIGHT"]
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "LEFT",
+            "CENTRE",
+            "RIGHT"
+          ]
         },
         "grounding": {
-          "type": ["string", "null"],
-          "enum": [null, "YOLO_D455F", "YOLO_ONLY", "DERIVED"]
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "YOLO_D455F",
+            "YOLO_ONLY",
+            "DERIVED"
+          ]
         },
         "motion_state": {
-          "type": ["string", "null"],
-          "enum": [null, "UNCONFIRMED", "STATIONARY", "MOVING"]
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "UNCONFIRMED",
+            "STATIONARY",
+            "MOVING"
+          ]
         },
         "supporting_fact_ids": {
           "type": "array",
@@ -369,6 +440,15 @@
         },
         "measurement": {
           "$ref": "#/definitions/measurement"
+        },
+        "approved_text_templates": {
+          "description": "The controlled sentences this fact may be described by. Supplied by the templated contract and absent from the composed one, where the model writes its own wording. Every prompt packet the runtime emitted under hdsg.schemas.v1 and v2 carried this field while the schema forbade it, and nothing detected the disagreement because the fixture was written by hand to match the schema rather than generated from the runtime.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
         }
       },
       "allOf": [
@@ -386,7 +466,11 @@
                 "pattern": "^sector:(left|centre|right)$"
               },
               "state": {
-                "enum": ["CLEAR", "CONSTRAINED", "BLOCKED"]
+                "enum": [
+                  "CLEAR",
+                  "CONSTRAINED",
+                  "BLOCKED"
+                ]
               },
               "bearing": {
                 "type": "null"
@@ -417,16 +501,34 @@
                 "pattern": "^object:[A-Za-z0-9._-]+$"
               },
               "state": {
-                "enum": ["VERY_CLOSE", "NEAR", "MID", "FAR", "PRESENT"]
+                "enum": [
+                  "VERY_CLOSE",
+                  "NEAR",
+                  "MID",
+                  "FAR",
+                  "PRESENT",
+                  "UNKNOWN"
+                ]
               },
               "bearing": {
-                "enum": ["LEFT", "CENTRE", "RIGHT"]
+                "enum": [
+                  "LEFT",
+                  "CENTRE",
+                  "RIGHT"
+                ]
               },
               "grounding": {
-                "enum": ["YOLO_D455F", "YOLO_ONLY"]
+                "enum": [
+                  "YOLO_D455F",
+                  "YOLO_ONLY"
+                ]
               },
               "motion_state": {
-                "enum": ["UNCONFIRMED", "STATIONARY", "MOVING"]
+                "enum": [
+                  "UNCONFIRMED",
+                  "STATIONARY",
+                  "MOVING"
+                ]
               }
             }
           }
@@ -509,7 +611,10 @@
           "maximum": 2
         },
         "max_text_chars": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1
         },
         "language": {
@@ -543,7 +648,10 @@
           "pattern": "^sha256:[A-Fa-f0-9]{64}$"
         },
         "quantisation": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 64
         },
         "temperature": {
@@ -569,7 +677,10 @@
           "pattern": "^sha256:[A-Fa-f0-9]{64}$"
         },
         "constraint_id": {
-          "const": "hdsg.vlm_candidate.v1"
+          "enum": [
+            "hdsg.vlm_candidate.v1",
+            "hdsg.vlm_caption.v1"
+          ]
         },
         "constraint_hash": {
           "type": "string",

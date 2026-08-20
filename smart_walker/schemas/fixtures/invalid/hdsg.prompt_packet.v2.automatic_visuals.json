@@ -1,5 +1,5 @@
 {
-  "schema_version": "hdsg.prompt_packet.v1",
+  "schema_version": "hdsg.prompt_packet.v2",
   "routing": {
     "response_mode": "AUTOMATIC"
   },

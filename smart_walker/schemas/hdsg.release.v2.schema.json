@@ -1,14 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "urn:hdsg:schema:release:v1",
-  "title": "HDSG Authoritative Release Object v1",
+  "title": "HDSG Authoritative Release Object v2",
   "description": "The only record from which user-visible caption text may be consumed.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "identity", "authority", "content", "evidence", "verification"],
+  "required": [
+    "schema_version",
+    "identity",
+    "authority",
+    "content",
+    "evidence",
+    "verification"
+  ],
   "properties": {
     "schema_version": {
-      "const": "hdsg.release.v1"
+      "const": "hdsg.release.v2"
     },
     "identity": {
       "$ref": "#/definitions/identity"
@@ -38,6 +45,8 @@
     "reason_code": {
       "enum": [
         "RG_ACCEPTED",
+        "RG_NO_INTENT_EXPRESSED",
+        "RG_GENERATION_PENDING",
         "RG_MODEL_UNAVAILABLE",
         "RG_GENERATION_TIMEOUT",
         "RG_CONSTRAINT_FAILURE",
@@ -55,6 +64,7 @@
         "RG_MOVEMENT_FACT_REQUIRED",
         "RG_SUBJECT_MISMATCH",
         "RG_STATE_EXPRESSION_MISMATCH",
+        "RG_STATED_VALUE_MISMATCH",
         "RG_NEGATION_DETECTED",
         "RG_ACTION_LANGUAGE_DETECTED",
         "RG_DIRECT_NUMBER_DETECTED",
@@ -89,11 +99,18 @@
           "pattern": "^obs_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
         },
         "ticket_id": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^ticket_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
         },
         "request_id": {
-          "enum": ["AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"]
+          "enum": [
+            "AUTO_GUIDANCE",
+            "MORE_DETAIL",
+            "REASSESS"
+          ]
         },
         "released_at_utc": {
           "type": "string",
@@ -114,27 +131,48 @@
       ],
       "properties": {
         "scene_advisory": {
-          "enum": ["SAFE", "CAUTION", "STOP"]
+          "enum": [
+            "SAFE",
+            "CAUTION",
+            "STOP"
+          ]
         },
         "motion_decision": {
-          "enum": ["PROCEED", "SLOW", "REDIRECT", "STOP"]
+          "enum": [
+            "PROCEED",
+            "SLOW",
+            "REDIRECT",
+            "STOP"
+          ]
         },
         "selected_sector": {
-          "enum": ["LEFT", "CENTRE", "RIGHT", "NONE"]
+          "enum": [
+            "LEFT",
+            "CENTRE",
+            "RIGHT",
+            "NONE"
+          ]
         },
         "interaction_state": {
           "enum": [
             "GUIDANCE_ACTIVE",
             "AWAITING_SECTOR_CHOICE",
             "REORIENTATION_REQUIRED",
-            "POST_REORIENTATION_STABILISING"
-          ]
+            "POST_REORIENTATION_STABILISING",
+            "IDLE_NO_INTENT",
+            "GENERATION_PENDING"
+          ],
+          "description": "IDLE_NO_INTENT and GENERATION_PENDING were introduced by the intent-triggered explanation policy and never reached this enumeration, so every idle and every interim release was non-conformant from 19 August 2026."
         },
         "selection_options": {
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": ["LEFT", "CENTRE", "RIGHT"]
+            "enum": [
+              "LEFT",
+              "CENTRE",
+              "RIGHT"
+            ]
           }
         },
         "action_template_id": {
@@ -161,7 +199,11 @@
           "else": {
             "properties": {
               "selected_sector": {
-                "enum": ["LEFT", "CENTRE", "RIGHT"]
+                "enum": [
+                  "LEFT",
+                  "CENTRE",
+                  "RIGHT"
+                ]
               }
             }
           }
@@ -228,16 +270,19 @@
       "properties": {
         "action_text": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 256
+          "maxLength": 256,
+          "description": "Empty in the IDLE_NO_INTENT state, where no intent has been expressed and there is no action to state. The minimum length was removed for that reason rather than to relax the contract on an active release."
         },
         "reason_text": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 2000
+          "maxLength": 2000,
+          "description": "Empty in the IDLE_NO_INTENT and GENERATION_PENDING states, where no reason has been established or released yet."
         },
         "interaction_text": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 512
         },
@@ -252,7 +297,6 @@
         },
         "caption_text": {
           "type": "string",
-          "minLength": 1,
           "maxLength": 10000
         }
       }
@@ -260,7 +304,10 @@
     "measurement_substitution": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["measurement_id", "formatted_value"],
+      "required": [
+        "measurement_id",
+        "formatted_value"
+      ],
       "properties": {
         "measurement_id": {
           "$ref": "#/definitions/measurement_id"
@@ -283,11 +330,11 @@
       "properties": {
         "action_binding_fact_ids": {
           "type": "array",
-          "minItems": 1,
           "uniqueItems": true,
           "items": {
             "$ref": "#/definitions/fact_id"
-          }
+          },
+          "description": "Empty in the IDLE_NO_INTENT state, where no intent has been expressed and no fact is binding an action. The minimum was removed for that reason rather than to permit an active release with no binding."
         },
         "scene_binding_fact_ids": {
           "type": "array",
@@ -332,13 +379,23 @@
       ],
       "properties": {
         "release_mode": {
-          "enum": ["VLM_ACCEPTED", "DETERMINISTIC_FALLBACK"]
+          "enum": [
+            "VLM_ACCEPTED",
+            "DETERMINISTIC_FALLBACK"
+          ]
         },
         "candidate_status": {
-          "enum": ["ACCEPTED", "REJECTED", "UNAVAILABLE"]
+          "enum": [
+            "ACCEPTED",
+            "REJECTED",
+            "UNAVAILABLE"
+          ]
         },
         "gate_outcome": {
-          "enum": ["ACCEPTED", "REJECTED_FALLBACK"]
+          "enum": [
+            "ACCEPTED",
+            "REJECTED_FALLBACK"
+          ]
         },
         "primary_reason_code": {
           "$ref": "#/definitions/reason_code"
@@ -357,13 +414,16 @@
           "maxLength": 512
         },
         "fact_packet_schema": {
-          "const": "hdsg.fact_packet.v1"
+          "const": "hdsg.fact_packet.v2"
         },
         "prompt_packet_schema": {
-          "const": "hdsg.prompt_packet.v1"
+          "const": "hdsg.prompt_packet.v2"
         },
         "candidate_schema": {
-          "const": "hdsg.vlm_candidate.v1"
+          "enum": [
+            "hdsg.vlm_candidate.v1",
+            "hdsg.vlm_caption.v1"
+          ]
         },
         "configuration_id": {
           "type": "string",
@@ -408,7 +468,10 @@
           "else": {
             "properties": {
               "candidate_status": {
-                "enum": ["REJECTED", "UNAVAILABLE"]
+                "enum": [
+                  "REJECTED",
+                  "UNAVAILABLE"
+                ]
               },
               "gate_outcome": {
                 "const": "REJECTED_FALLBACK"

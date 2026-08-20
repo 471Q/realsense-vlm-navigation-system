@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hdsg.local/schemas/hdsg.vlm_caption.v1.schema.json",
+  "title": "HDSG Composed VLM Caption v1",
+  "description": "A caption composed by the generative layer in its own words, together with a declaration of every numeric value it stated and the fact each one came from. Declaration is what makes the release gate's comparison exact: the model states the attribution, so the gate compares declared values with measured ones rather than recovering a number from prose and inferring which fact it refers to. The record carries no action field, so the model cannot set or alter the action tuple.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "caption", "assertions", "visual_observations"],
+  "properties": {
+    "schema_version": {"const": "hdsg.vlm_caption.v1"},
+    "caption": {
+      "description": "The composed text. Deliberately unconstrained in shape, because the design requires the model to compose language rather than select from responses written in advance. What it may contain is established by the release gate, not by this schema.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "assertions": {
+      "description": "One entry for every numeric value the caption states. A numeral in the caption with no entry here is rejected, so a value the model invented cannot reach the display by being omitted.",
+      "type": "array",
+      "maxItems": 8,
+      "items": {"$ref": "#/definitions/assertion"}
+    },
+    "visual_observations": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {"$ref": "#/definitions/visual_observation"}
+    }
+  },
+  "definitions": {
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact_id", "measurement_id", "stated_value"],
+      "properties": {
+        "fact_id": {"$ref": "#/definitions/fact_id"},
+        "measurement_id": {"$ref": "#/definitions/measurement_id"},
+        "stated_value": {
+          "description": "The value as written into the caption, which may be rounded. The release gate compares it with the measurement and rejects the candidate when the two differ by more than the frozen tolerance.",
+          "type": "number"
+        }
+      }
+    },
+    "visual_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_observation_id", "proposed_label", "bearing"],
+      "properties": {
+        "candidate_observation_id": {"type": "string", "pattern": "^visual:[1-9][0-9]*$"},
+        "proposed_label": {"type": "string", "pattern": "^[a-z][a-z0-9_ ]{0,47}$"},
+        "bearing": {"enum": ["LEFT", "CENTRE", "RIGHT"]}
+      }
+    },
+    "fact_id": {
+      "type": "string",
+      "pattern": "^(?:sector:(?:left|centre|right)|object:[A-Za-z0-9._-]+|condition:[a-z][a-z0-9._-]*)$"
+    },
+    "measurement_id": {
+      "type": "string",
+      "pattern": "^m:[a-z][a-z0-9._-]*(?::[a-z0-9._-]+)+$"
+    }
+  }
+}

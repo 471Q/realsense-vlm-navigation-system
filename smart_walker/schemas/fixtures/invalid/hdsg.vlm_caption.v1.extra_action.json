@@ -1,0 +1,13 @@
+{
+  "schema_version": "hdsg.vlm_caption.v1",
+  "caption": "The way ahead narrows to 1.74 metres.",
+  "assertions": [
+    {
+      "fact_id": "sector:centre",
+      "measurement_id": "m:sector:centre:clearance",
+      "stated_value": 1.74
+    }
+  ],
+  "visual_observations": [],
+  "motion_decision": "PROCEED"
+}

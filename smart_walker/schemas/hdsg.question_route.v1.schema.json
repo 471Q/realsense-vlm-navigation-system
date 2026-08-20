@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hdsg.local/schemas/hdsg.question_route.v1.schema.json",
+  "title": "HDSG Question Route v1",
+  "description": "The Tier 1 classifier's output. A typed question is read only by this call, whose grammar admits exactly one of eight route tokens, so free text selects which measured facts may be described and never becomes output itself. The record is deliberately minimal: a wider reply would give the classifier a channel through which the question's wording could reach the answer. HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "route"],
+  "properties": {
+    "schema_version": {"const": "hdsg.question_route.v1"},
+    "route": {
+      "enum": [
+        "LEFT",
+        "CENTRE",
+        "RIGHT",
+        "HAZARDS",
+        "EXPLAIN_DECISION",
+        "SCENE_OVERVIEW",
+        "REASSESS",
+        "OUT_OF_SCOPE"
+      ]
+    }
+  }
+}

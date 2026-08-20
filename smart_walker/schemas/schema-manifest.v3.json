@@ -1,0 +1,62 @@
+{
+  "schema_set_version": "hdsg.schemas.v3",
+  "json_schema_draft": "draft-07",
+  "supersedes": "hdsg.schemas.v2",
+  "notes": [
+    "Three record contracts advanced. The fact packet records a typed question as TYPED_QUESTION rather than as the on-screen control whose profile it borrows. The prompt packet records which of the two candidate contracts was actually constrained, since expected_response_schema and constraint_id were pinned to the templated contract and therefore misreported a composed run. The release admits a composed candidate and carries RG_STATED_VALUE_MISMATCH, the one reason code the composed design adds.",
+    "hdsg.vlm_caption.v1 is the composed candidate contract: a caption in the model's own words together with a declaration of every numeric value it stated. Declaration is what keeps the gate's comparison exact, since recovering a number from prose and inferring which fact it refers to is inference the gate does not perform.",
+    "hdsg.question_route.v1 is the Tier 1 classifier's output, previously present as a grammar with no schema and absent from the v2 manifest.",
+    "hdsg.vlm_candidate.v1 is unchanged as a record and keeps its identifier. Its grammar changed: candidate_observation_id and proposed_label were free strings while the validator required visual:N and a lower-case label, which is the drift that caused every response carrying a visual observation to be rejected against Qwen3-VL-4B.",
+    "All three grammars are now covered. The v2 manifest hashed one, which left the routing and caption constraints able to drift from their validators undetected.",
+    "RG_NO_INTENT_EXPRESSED and RG_GENERATION_PENDING were added to the runtime by the intent-triggered explanation policy on 19 August 2026 and never reached the frozen enumeration, so every idle and every interim release since then has been non-conformant. Nothing detected it because the fixtures validate rather than the live output. The freeze tests now compare the runtime's own reason-code order against the enumeration.",
+    "The valid fixtures for the fact packet, prompt packet and release are generated from the runtime rather than written by hand. A hand-written fixture agrees with the schema by construction and therefore proves nothing about the records the system emits, which is how approved_text_templates stayed absent from the prompt packet schema while every packet carried it.",
+    "The More detail profile's visual-observation maximum was raised from one to two on 20 August 2026 to make that profile describe the whole scene, and the frozen prompt packet schema still pinned it to one, so every More detail packet since then was non-conformant. The profile limits and the schema's conditionals are now bound by a test."
+  ],
+  "files": [
+    {
+      "record_schema": "hdsg.fact_packet.v2",
+      "path": "hdsg.fact_packet.v2.schema.json",
+      "sha256": "9fc94d6ca1ea77a3bb5590ab5701804b40313ce50f9e5af034f732f74936f1f9"
+    },
+    {
+      "record_schema": "hdsg.prompt_packet.v2",
+      "path": "hdsg.prompt_packet.v2.schema.json",
+      "sha256": "a4ccee1e9605ccd360cfafcc52fa9e46a95bd430ecb56cfa1df7d15eec1221b2"
+    },
+    {
+      "record_schema": "hdsg.vlm_candidate.v1",
+      "path": "hdsg.vlm_candidate.v1.schema.json",
+      "sha256": "43475ee839e889630e076dd305e9c583478d727627ecea91530e2241390e9ebb"
+    },
+    {
+      "record_schema": "hdsg.vlm_caption.v1",
+      "path": "hdsg.vlm_caption.v1.schema.json",
+      "sha256": "1ca9ec3b7cd34993c76f57e3f6971c79e7f019317441b0b200648726f4af77e0"
+    },
+    {
+      "record_schema": "hdsg.question_route.v1",
+      "path": "hdsg.question_route.v1.schema.json",
+      "sha256": "9d5d6d6fd4fedaa1639c3f75f6148e4a6e852d3806361272cc9d83641c44c0d2"
+    },
+    {
+      "record_schema": "hdsg.release.v2",
+      "path": "hdsg.release.v2.schema.json",
+      "sha256": "46a3ea3e27773f4c2895b00244fe1d52c6ccae2f6afdfeea0504923cd26ffcde"
+    },
+    {
+      "record_schema": "hdsg.vlm_candidate.v1",
+      "path": "../config/hdsg.vlm_candidate.v1.gbnf",
+      "sha256": "71799a847dfb42c67280b2902d12c48735b0471c1a03d557cdfc11c8dff1e24e"
+    },
+    {
+      "record_schema": "hdsg.vlm_caption.v1",
+      "path": "../config/hdsg.vlm_caption.v1.gbnf",
+      "sha256": "7a36aba4ff5576d246d662e1690bbd854c152de52f2cb528dae871cb133e64ba"
+    },
+    {
+      "record_schema": "hdsg.question_route.v1",
+      "path": "../config/hdsg.question_route.v1.gbnf",
+      "sha256": "b704adc54179731f89b93da9cb50504d1ab4a771e34bb79b3c9da3f137f24396"
+    }
+  ]
+}

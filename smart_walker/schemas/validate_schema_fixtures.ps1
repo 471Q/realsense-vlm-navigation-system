@@ -2,28 +2,33 @@
 #
 # Requires PowerShell 7 or later: Test-Json's -SchemaFile parameter is the schema engine the
 # freeze was recorded against, and Windows PowerShell 5.1 does not support it. The complementary
-# Python checks in tests/test_schema_freeze.py run anywhere and cover manifest drift and the
-# runtime validator binding, which this script does not.
+# Python checks run anywhere: tests/test_schema_freeze.py covers manifest drift and the runtime
+# validator binding, and tests/test_schema_conformance.py validates the records the runtime
+# actually emits, which no fixture can establish.
 
 $ErrorActionPreference = 'Stop'
 
 $schemaRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $validRoot = Join-Path $schemaRoot 'fixtures/valid'
 $invalidRoot = Join-Path $schemaRoot 'fixtures/invalid'
-$manifestPath = Join-Path $schemaRoot 'schema-manifest.v2.json'
+$manifestPath = Join-Path $schemaRoot 'schema-manifest.v3.json'
 
 $validCases = @(
-    @('hdsg.fact_packet.v1.schema.json', 'hdsg.fact_packet.v1.json'),
-    @('hdsg.prompt_packet.v1.schema.json', 'hdsg.prompt_packet.v1.json'),
+    @('hdsg.fact_packet.v2.schema.json', 'hdsg.fact_packet.v2.json'),
+    @('hdsg.prompt_packet.v2.schema.json', 'hdsg.prompt_packet.v2.json'),
     @('hdsg.vlm_candidate.v1.schema.json', 'hdsg.vlm_candidate.v1.json'),
-    @('hdsg.release.v1.schema.json', 'hdsg.release.v1.json')
+    @('hdsg.vlm_caption.v1.schema.json', 'hdsg.vlm_caption.v1.json'),
+    @('hdsg.question_route.v1.schema.json', 'hdsg.question_route.v1.json'),
+    @('hdsg.release.v2.schema.json', 'hdsg.release.v2.json')
 )
 
 $invalidCases = @(
-    @('hdsg.fact_packet.v1.schema.json', 'hdsg.fact_packet.v1.stationary_box.json'),
-    @('hdsg.prompt_packet.v1.schema.json', 'hdsg.prompt_packet.v1.automatic_visuals.json'),
+    @('hdsg.fact_packet.v2.schema.json', 'hdsg.fact_packet.v2.stationary_box.json'),
+    @('hdsg.prompt_packet.v2.schema.json', 'hdsg.prompt_packet.v2.automatic_visuals.json'),
     @('hdsg.vlm_candidate.v1.schema.json', 'hdsg.vlm_candidate.v1.extra_action.json'),
-    @('hdsg.release.v1.schema.json', 'hdsg.release.v1.accepted_fallback_code.json')
+    @('hdsg.vlm_caption.v1.schema.json', 'hdsg.vlm_caption.v1.extra_action.json'),
+    @('hdsg.question_route.v1.schema.json', 'hdsg.question_route.v1.unknown_route.json'),
+    @('hdsg.release.v2.schema.json', 'hdsg.release.v2.accepted_fallback_code.json')
 )
 
 $failures = [System.Collections.Generic.List[string]]::new()

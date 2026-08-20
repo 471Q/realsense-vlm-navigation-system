@@ -1,0 +1,161 @@
+{
+  "schema_version": "hdsg.fact_packet.v2",
+  "identity": {
+    "run_id": "run_fixture",
+    "event_id": "evt_fixture",
+    "observation_id": "obs_fixture",
+    "ticket_id": "ticket_fixture",
+    "scenario_id": null,
+    "source_mode": "LIVE"
+  },
+  "observation": {
+    "captured_at_utc": "2026-08-20T09:59:47.911Z",
+    "sensor_timestamp_ms": 1000.0,
+    "camera_model": "Intel RealSense D455f",
+    "device_id": "d455f_01",
+    "rgb_ref": "memory://obs_fixture/rgb",
+    "depth_ref": "memory://obs_fixture/depth",
+    "mirror_view": false,
+    "depth_aligned_to_rgb": true,
+    "rgb_valid": true,
+    "depth_valid": true,
+    "measurement_state": "VALID",
+    "validity_reason_codes": [],
+    "rear_state": "UNOBSERVED"
+  },
+  "interaction": {
+    "intent": "FORWARD",
+    "trigger_type": "USER_REQUESTED",
+    "request_id": "MORE_DETAIL",
+    "input_method": "TYPED_QUESTION",
+    "control_id": "MORE_DETAIL",
+    "response_mode": "MORE_DETAIL",
+    "previous_guidance_signature": null,
+    "current_guidance_signature": "CAUTION|REDIRECT|LEFT|sector:right|sector:centre,sector:left|VALID|"
+  },
+  "objects": [
+    {
+      "fact_id": "object:3",
+      "detection_id": 0,
+      "track_id": 3,
+      "raw_label": "chair",
+      "canonical_label": "chair",
+      "ontology_class": "furniture",
+      "confidence": 0.82,
+      "bbox_xyxy": [
+        112.0,
+        180.0,
+        240.0,
+        360.0
+      ],
+      "bearing": "LEFT",
+      "distance_m": 1.62,
+      "distance_valid": true,
+      "distance_method": "D455F_LOWER_BBOX_MEDIAN",
+      "distance_bin": "NEAR",
+      "grounding": "YOLO_D455F",
+      "is_hazard": false,
+      "motion_state": "UNCONFIRMED",
+      "motion_confidence": null,
+      "motion_reason_codes": [],
+      "camera_motion_compensated": false,
+      "display_bounding_box": false
+    }
+  ],
+  "sectors": {
+    "left": {
+      "fact_id": "sector:left",
+      "clearance_m": 3.13,
+      "valid": true,
+      "invalid_reason_codes": [],
+      "status": "CLEAR"
+    },
+    "centre": {
+      "fact_id": "sector:centre",
+      "clearance_m": 1.74,
+      "valid": true,
+      "invalid_reason_codes": [],
+      "status": "CONSTRAINED"
+    },
+    "right": {
+      "fact_id": "sector:right",
+      "clearance_m": 0.55,
+      "valid": true,
+      "invalid_reason_codes": [],
+      "status": "BLOCKED"
+    }
+  },
+  "deterministic": {
+    "object_advisory": "CAUTION",
+    "sector_advisory": "CAUTION",
+    "composite_advisory": "CAUTION",
+    "scene_advisory": "CAUTION",
+    "motion_decision": "REDIRECT",
+    "selected_sector": "LEFT",
+    "interaction_state": "GUIDANCE_ACTIVE",
+    "clear_sectors": [
+      "LEFT"
+    ],
+    "selection_status": "SELECTED",
+    "selection_options": [],
+    "rules_fired": [],
+    "scene_binding": {
+      "primary_fact_id": "sector:right",
+      "accepted_fact_ids": [
+        "sector:right"
+      ],
+      "source": "SECTOR",
+      "scoreable": true,
+      "unscoreable_reason": null
+    },
+    "action_binding": {
+      "primary_fact_id": "sector:centre",
+      "accepted_fact_ids": [
+        "sector:centre",
+        "sector:left"
+      ],
+      "source": "SECTOR",
+      "scoreable": true,
+      "unscoreable_reason": null
+    },
+    "scene_fact_required": false
+  },
+  "configuration": {
+    "software_version": "hdsg-v1",
+    "rule_set_version": "rules-v1",
+    "configuration_hash": "sha256:4aef88ce51714f446c08a6cb3b7636f18a2742afa3bacc2f650c64915bc59341",
+    "ontology_hash": "sha256:b640ff16203e5b7149c8e1a8365c4021be04b193f9ef617c54f34b62423b67a7",
+    "detector_model": "yolov8n.pt",
+    "detector_confidence_threshold": 0.35,
+    "thresholds_m": {
+      "object_stop_below": 0.7,
+      "object_caution_below": 1.5,
+      "hazard_stop_at_or_below": 2.0,
+      "sector_blocked_below": 0.7,
+      "sector_clear_at_or_above": 2.0,
+      "binding_tie_margin": 0.15,
+      "sector_choice_tolerance": 0.1
+    },
+    "post_reorientation_stable_observations": 4,
+    "post_reorientation_max_variation_m": 0.1,
+    "sector_geometry": {
+      "top_fraction": 0.55,
+      "bottom_fraction": 0.95,
+      "horizontal_divisions": 3
+    },
+    "motion_tracking": {
+      "enabled": true,
+      "tracker_id": "botsort.v1",
+      "camera_motion_compensation": "OPTICAL_FLOW_MEDIAN",
+      "movement_threshold_m": 0.12,
+      "confirmation_observations": 4,
+      "lost_after_observations": 12
+    },
+    "timing_ms": {
+      "restrictive_transition_persistence": 150,
+      "recovery_transition_persistence": 500,
+      "reassessment_cooldown": 1500.0,
+      "more_detail_freshness": 5000.0
+    }
+  }
+}

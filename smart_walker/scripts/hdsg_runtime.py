@@ -24,10 +24,15 @@ except ImportError:
 SOFTWARE_VERSION = "hdsg-v1"
 RULE_SET_VERSION = "rules-v1"
 CONFIGURATION_ID = "hdsg_config.v1"
-FACT_PACKET_SCHEMA = "hdsg.fact_packet.v1"
-PROMPT_PACKET_SCHEMA = "hdsg.prompt_packet.v1"
+# hdsg.schemas.v3. Three records advanced because their contracts changed: the fact packet records
+# a typed question as one, the prompt packet records which of the two candidate contracts was
+# actually constrained, and the release admits a composed candidate and its one new reason code.
+# The templated candidate contract is unchanged and keeps its identifier.
+FACT_PACKET_SCHEMA = "hdsg.fact_packet.v2"
+PROMPT_PACKET_SCHEMA = "hdsg.prompt_packet.v2"
 CANDIDATE_SCHEMA = "hdsg.vlm_candidate.v1"
-RELEASE_SCHEMA = "hdsg.release.v1"
+CAPTION_SCHEMA = "hdsg.vlm_caption.v1"
+RELEASE_SCHEMA = "hdsg.release.v2"
 
 SEVERITY = {"SAFE": 0, "CAUTION": 1, "STOP": 2}
 SECTORS = ("LEFT", "CENTRE", "RIGHT")
@@ -897,6 +902,7 @@ def build_prompt_packet(
     prompt_profile_id: Optional[str] = None,
     system_prompt_id: str = "hdsg.reason_only.v1",
     question_requirements: Optional[list[dict]] = None,
+    expected_response_schema: str = CANDIDATE_SCHEMA,
 ) -> dict:
     """Builds the restricted facts and response profile supplied to the VLM.
 
@@ -926,6 +932,7 @@ def build_prompt_packet(
             max_tokens=max_tokens, system_prompt=system_prompt, constraint_hash=constraint_hash,
             system_prompt_id=system_prompt_id, max_reasons=max_reasons,
             max_visuals=max_visuals, allow_visuals=allow_visuals,
+            expected_response_schema=expected_response_schema,
         )
 
     action_ids = list(deterministic["action_binding"]["accepted_fact_ids"])
@@ -1002,6 +1009,7 @@ def build_prompt_packet(
         max_tokens=max_tokens, system_prompt=system_prompt, constraint_hash=constraint_hash,
         system_prompt_id=system_prompt_id, max_reasons=max_reasons,
         max_visuals=max_visuals, allow_visuals=allow_visuals,
+        expected_response_schema=expected_response_schema,
     )
 
 
@@ -1025,6 +1033,7 @@ def _finish_prompt_packet(
     max_reasons: int,
     max_visuals: int,
     allow_visuals: bool,
+    expected_response_schema: str = CANDIDATE_SCHEMA,
 ) -> dict:
     """Resolves the permitted facts and assembles the packet body.
 
@@ -1084,10 +1093,10 @@ def _finish_prompt_packet(
             "max_tokens": int(max_tokens),
             "system_prompt_id": system_prompt_id,
             "system_prompt_hash": sha256_text(system_prompt),
-            "constraint_id": CANDIDATE_SCHEMA,
+            "constraint_id": expected_response_schema,
             "constraint_hash": constraint_hash,
         },
-        "expected_response_schema": CANDIDATE_SCHEMA,
+        "expected_response_schema": expected_response_schema,
     }
 
 
