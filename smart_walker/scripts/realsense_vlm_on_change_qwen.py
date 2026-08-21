@@ -646,10 +646,6 @@ def main():
                          "because the detector runs continuously on the same GPU and the guidance "
                          "and question workers can be generating at once, so a call that takes "
                          "eight seconds on an idle device takes considerably longer in a live run.")
-    ap.add_argument("--value_tolerance_m", type=float,
-                    default=hdsg_composed.DEFAULT_VALUE_TOLERANCE_M,
-                    help="how far a declared value may sit from its measurement before the "
-                         "caption is rejected as a detected hallucination")
     ap.add_argument("--answer_questions", nargs="?", const=True, default=True,
                     type=_parse_bool_argument,
                     help="answer typed questions from the web UI chat box; when false a question "
@@ -688,8 +684,7 @@ def main():
             f"The composed caption constraint could not be loaded: {args.caption_grammar}"
         ) from error
     constraint_hash = hdsg.sha256_file(args.caption_grammar)
-    print(f"[hdsg] generation: composed captions, declared values checked to "
-          f"{args.value_tolerance_m:.2f} m")
+    print("[hdsg] generation: composed captions, values checked exactly against measurement")
 
     route_grammar_text: Optional[str] = None
     if args.answer_questions and not args.unconstrained:
@@ -901,7 +896,6 @@ def main():
                 gate_codes, scored = hdsg_composed.validate_caption_candidate(
                     candidate, prompt_packet, fact_packet,
                     detector_classes=detector_classes,
-                    value_tolerance_m=args.value_tolerance_m,
                 )
                 codes = list(codes) + list(gate_codes)
                 if gate_codes:

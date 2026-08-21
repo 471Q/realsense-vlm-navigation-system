@@ -14,7 +14,9 @@ numbers with measured ones and searches the caption for tokens that must not app
 candidate violating any of them is rejected and the deterministic fallback is released instead:
 
 1. The caption cannot issue or alter an instruction, so the action the user acts on is unaffected.
-2. Every number reaching the display is one the Fact Packet measured, within the frozen tolerance.
+2. Every number reaching the display is a measured value stated exactly, at the precision the
+   deterministic renderer uses. There is no tolerance, so the same sensor reading appears the same
+   way whether the gate accepted a caption or fell back.
 3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. This
    covers a distance written in words as well as one written in digits: scanning only for digits
    left "roughly five metres" unchecked against a measured 1.74 m, which is the failure mode the
@@ -33,8 +35,13 @@ is the one Chapter 1 paragraph 110 already states.
 
 **Detected disagreement is a result, not only a safeguard.** A model that cannot state a number
 cannot be observed to state a wrong one. Letting it state numbers and checking them yields the rate
-at which the deployed model's spatial estimates disagree with measurement, which is the figure
-Chapter 2 cites from Chen et al., obtained here on the deployed model and hardware.
+at which the deployed model alters a value it was handed, and the size of each alteration is
+recorded whether or not the caption is released.
+
+That rate is not the same quantity as the spatial-estimation error Chapter 2 cites from Chen et al.
+Here the model is given the measurement, so a disagreement is a transcription failure. The
+estimation error is what `C0_VLM_ONLY` and `C1_GROUNDED_UNGATED` measure, where the model has no
+measurements to transcribe. The two must not be reported as one figure.
 """
 
 from __future__ import annotations
@@ -51,11 +58,21 @@ except ImportError:  # invoked as a plain script rather than as part of the pack
 
 CAPTION_SCHEMA = "hdsg.vlm_caption.v1"
 
-# The tolerance within which a declared value is treated as agreeing with its measurement. It is
-# generous enough to admit the rounding a natural caption performs ("1.7" for 1.74) and tight
-# enough that a fabricated distance fails. Frozen with the rest of the protocol configuration.
-DEFAULT_VALUE_TOLERANCE_M = 0.10
-
+# A measurement is displayed as measured, and a caption states it as displayed. There is no
+# tolerance.
+#
+# An earlier design admitted a 0.10 m window so a caption could round, on the reasoning that "about
+# 1.7 metres" reads more naturally than "1.74 metres". Three things were wrong with it. The
+# deterministic renderer formats every measurement to MEASUREMENT_DECIMALS, so the same sensor
+# reading appeared as 1.74 on a fallback and could appear as 1.7 on an accepted caption, which made
+# what the user saw depend on whether the gate happened to accept. The window also composed with the
+# separate window between the caption and its declaration, so two checks inside 0.10 m each put a
+# number on the display 0.15 m from the truth. And a tolerance turns a categorical property into a
+# quantitative one for no gain: the model is handed the value, so restating it is transcription, not
+# estimation, and a transcription that alters the number is a defect however small the alteration.
+#
+# The deviation is still recorded on every declaration, so the size of a disagreement remains
+# reportable even though any disagreement rejects.
 MAX_CAPTION_CHARS = 400
 
 # Any numeral in the caption, including a bare integer and a value written without its leading zero.
@@ -151,27 +168,24 @@ def grounding_values(assertions: Sequence[Mapping[str, Any]],
 
 
 def undeclared_numbers(caption: str, assertions: Sequence[Mapping[str, Any]],
-                       fact_packet: Mapping[str, Any],
-                       value_tolerance_m: float = DEFAULT_VALUE_TOLERANCE_M) -> list[str]:
+                       fact_packet: Mapping[str, Any]) -> list[str]:
     """Returns the numbers a caption states that no declared measurement accounts for.
 
-    **The comparison is against the measurement, not against the declared value.** Checking the
-    prose against the declaration and the declaration against the measurement lets the two
-    allowances stack: a caption reading "2 metres" could declare 1.95 and be measured at 1.85, pass
-    both checks, and put a number on the display 0.15 m from the truth under a tolerance of 0.10.
-    Comparing the written number directly to what was measured bounds the error the reader actually
-    sees, which is the property the module claims.
+    **The comparison is against the measurement, not against the declared value**, and it is exact
+    at the precision the measurement is displayed to. Comparing the prose against the declaration
+    and the declaration against the measurement let two windows compose, so a caption could put a
+    number on the display further from the truth than either check permitted on its own.
 
-    It also removes any need to reason about how the number was written. A caption may round as
-    freely as it likes, because "1.7" for a measured 1.74 is inside the tolerance and "2" is not.
+    Exact comparison also removes any need to reason about how the number was written. A caption
+    states the measurement or it does not.
 
     Exposed so an analysis of an archived run can report which numbers went undeclared, rather than
     only that some did. The release records the reason code; this recovers the token behind it.
     """
-    grounded = grounding_values(assertions, fact_packet)
+    grounded = {hdsg.display_value(value) for value in grounding_values(assertions, fact_packet)}
     return [
         token for token, value in _caption_numbers(caption)
-        if not any(abs(value - measured) <= float(value_tolerance_m) for measured in grounded)
+        if hdsg.display_value(value) not in grounded
     ]
 
 
@@ -273,15 +287,21 @@ def validate_caption_candidate(
     fact_packet: Mapping[str, Any],
     *,
     detector_classes: Iterable[str],
-    value_tolerance_m: float = DEFAULT_VALUE_TOLERANCE_M,
 ) -> tuple[list[str], list[dict]]:
     """Checks a composed candidate and returns its reason codes and scored assertions.
+
+    A declared value must be the measured value at the precision it is displayed to. There is no
+    tolerance, because the model is handed the measurement and restating it is transcription rather
+    than estimation: a number the model altered is a number the Fact Packet did not supply, however
+    small the alteration.
 
     Every declaration appears in the scored list, including one the schema check refused, so the
     count of what the model declared is the count of what it declared. The scored assertions are
     returned whether or not the candidate is accepted, because the disagreement between a declared
     value and its measurement is the measurement this design exists to produce and is wanted for a
-    rejected candidate as much as an accepted one.
+    rejected candidate as much as an accepted one. `absolute_error_m` is recorded on every
+    comparable declaration, so the size of a disagreement stays reportable although any
+    disagreement rejects.
 
     `detector_classes` carries no default. An empty vocabulary turns the object check into a
     no-operation, and a property that holds by construction must not be able to switch itself off
@@ -365,10 +385,9 @@ def validate_caption_candidate(
             entry["outcome"] = "NOT_MEASURED"
             scored.append(entry)
             continue
-        error = abs(float(stated) - float(measured))
-        entry["absolute_error_m"] = round(error, 3)
-        entry["within_tolerance"] = error <= float(value_tolerance_m)
-        if not entry["within_tolerance"]:
+        entry["absolute_error_m"] = round(abs(float(stated) - float(measured)), 3)
+        entry["exact"] = hdsg.display_value(stated) == hdsg.display_value(measured)
+        if not entry["exact"]:
             errors.append("RG_STATED_VALUE_MISMATCH")
             entry["outcome"] = "DISAGREES"
         else:
@@ -380,7 +399,7 @@ def validate_caption_candidate(
     # declarations. RG_DIRECT_NUMBER_DETECTED already means a number reached the text without
     # provenance, which is exactly what an undeclared number is under this design, so reusing it
     # keeps the reason-code enumeration unchanged.
-    if undeclared_numbers(caption, assertions, fact_packet, value_tolerance_m):
+    if undeclared_numbers(caption, assertions, fact_packet):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     seen_visual_ids: set[str] = set()
@@ -424,13 +443,13 @@ COMPOSED_SYSTEM_PROMPT = (
 
 _COMPOSED_INSTRUCTION = """Write one short caption describing the space around the walker, in your own words, for someone who cannot see it well.
 
-Use the measurements below. Write the distances into your sentences naturally, in metres.
+Use the measurements below. Write the distances into your sentences in metres, exactly as they are given. Do not round them, do not approximate them, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres.
 
 Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id looks like sector:centre, measurement_id looks like m:sector:centre:clearance. For a clearance of 1.74 metres at the centre, the declaration is:
 
   {{"fact_id": "sector:centre", "measurement_id": "m:sector:centre:clearance", "stated_value": 1.74}}
 
-A number in the caption that is not declared, or a declared value that does not match the measurement, causes the caption to be discarded. This applies to a distance written as a word as much as to one written in digits: "two metres" needs its declaration exactly as "2.0 metres" does. Round if it reads better, and declare the value you wrote rather than the one you rounded from.
+A number in the caption that is not declared, or any number that differs from its measurement, causes the caption to be discarded. This applies to a distance written as a word as much as to one written in digits.
 
 Rules:
   Describe only. Never say what the person should do, and never name a direction to take.
@@ -465,7 +484,9 @@ def describe_permitted_facts(prompt_packet: Mapping[str, Any],
             value = measured_value(fact_packet, measurement["measurement_id"])
             if value is not None:
                 parts.append(f"measurement_id {measurement['measurement_id']}")
-                parts.append(f"measured {float(value):.2f} metres")
+                # Presented through the shared formatter, so what the model is asked to write is
+                # the string the deterministic renderer would have displayed for the same value.
+                parts.append(f"measured {hdsg._format_measurement(value)}")
         lines.append(", ".join(parts))
     return "\n".join(lines)
 
@@ -565,7 +586,7 @@ def build_composed_release(
     substitutions = {
         str(item["measurement_id"]):
             {"measurement_id": str(item["measurement_id"]),
-             "formatted_value": f"{float(item['measured_value']):.2f} metres"}
+             "formatted_value": hdsg._format_measurement(item["measured_value"])}
         for item in scored_assertions
         if item.get("measured_value") is not None and item.get("measurement_id")
     }

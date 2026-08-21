@@ -1064,8 +1064,20 @@ def _reason_sort(codes: Iterable[str]) -> list[str]:
     return sorted(set(codes), key=lambda code: order.get(code, len(order)))
 
 
+# The precision every measurement is displayed at, whichever layer renders it. The gate compares a
+# caption's numbers against measurements at this precision, so the constant is shared rather than
+# repeated: a renderer showing two decimals while the gate compared three would reject a caption for
+# stating exactly what the system was about to display.
+MEASUREMENT_DECIMALS = 2
+
+
+def display_value(value: Any) -> float:
+    """Returns a measurement as it is displayed, which is the value the gate holds a caption to."""
+    return float(f"{float(value):.{MEASUREMENT_DECIMALS}f}")
+
+
 def _format_measurement(value: Any) -> str:
-    return f"{float(value):.2f} metres"
+    return f"{float(value):.{MEASUREMENT_DECIMALS}f} metres"
 
 
 def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], list[str], list[dict]]:

@@ -389,6 +389,14 @@ compares every declaration against the Fact Packet and releases the deterministi
 account instead when one disagrees. The action the user acts on is produced by the
 deterministic layer in every case and is unaffected by what the model wrote.
 
+**A measurement is stated exactly.** There is no tolerance: a value the model
+rounded, approximated or spelled out as a word is a value it altered, and the
+caption is refused. An earlier design admitted a 0.10 m window so the prose could
+read more naturally, which meant the same sensor reading appeared as 1.74 on a
+deterministic fallback and could appear as 1.7 on an accepted caption. The size of
+every disagreement is still recorded, so how far the model departed remains
+reportable even though any departure rejects.
+
 An earlier design had the model select among controlled sentences the runtime had
 written, substituting measurements into placeholders. It was removed on 21 August
 2026: assembling the sentence from a fixed predicate table left the model choosing

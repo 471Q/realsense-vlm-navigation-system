@@ -89,14 +89,18 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(comp.assertion_summary(scored)["agreement_rate"], 1.0)
 
-    def test_rounding_within_tolerance_is_accepted(self):
-        # A natural caption rounds. The tolerance exists to admit that without admitting invention.
+    def test_a_rounded_value_is_rejected_and_its_error_recorded(self):
+        """The measurement is stated as measured. A rounded value is a value the model altered.
+
+        The deterministic renderer displays 1.74, so admitting 1.7 here would make what the user
+        sees depend on whether the gate accepted rather than on what the sensor read.
+        """
         fact_packet, prompt_packet = make_event()
         cand = candidate("The way ahead narrows to about 1.7 metres.",
                          [sector_assertion("centre", 1.7)])
         errors, scored = check(cand, fact_packet, prompt_packet)
-        self.assertEqual(errors, [])
-        self.assertEqual(scored[0]["outcome"], "AGREES")
+        self.assertIn("RG_STATED_VALUE_MISMATCH", errors)
+        self.assertEqual(scored[0]["outcome"], "DISAGREES")
         self.assertAlmostEqual(scored[0]["absolute_error_m"], 0.04, places=3)
 
     def test_prose_naming_a_non_detector_word_is_allowed(self):
@@ -243,43 +247,50 @@ class DeclarationCountTests(unittest.TestCase):
             comp.validate_caption_candidate(cand, prompt_packet, fact_packet)
 
 
-class WrittenNumberAgreementTests(unittest.TestCase):
-    """The number the reader sees is compared with the measurement, not with the declaration.
+class ExactValueTests(unittest.TestCase):
+    """The number the reader sees is the measurement, stated exactly, or the caption is refused.
 
-    Checking prose against declaration and declaration against measurement lets the two allowances
-    stack, so a caption could put a number on the display further from the truth than the tolerance
-    permits while passing both checks. Comparing the written number directly to what was measured
-    bounds the error the reader actually sees, which is the property the module claims.
+    Two allowances used to compose here: the prose was compared with the declaration and the
+    declaration with the measurement, each inside a window, so a caption could put a number on the
+    display further from the truth than either check permitted alone. Exactness removes the
+    composition along with the windows.
     """
 
-    def test_a_caption_may_round(self):
+    def test_the_measurement_stated_exactly_is_accepted(self):
         fact_packet, prompt_packet = make_event()
-        cand = candidate("The way ahead narrows to 1.7 metres.",
+        cand = candidate("The way ahead narrows to 1.74 metres.",
                          [sector_assertion("centre", 1.74)])
         self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
 
-    def test_a_caption_may_not_round_past_the_tolerance(self):
-        """2 for 1.74 overstates the clearance, and overstating it is the direction that walks
-        someone into what is not there."""
+    def test_a_caption_may_not_round(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.7 metres.",
+                         [sector_assertion("centre", 1.74)])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_caption_may_not_approximate_to_a_whole_number(self):
         fact_packet, prompt_packet = make_event()
         cand = candidate("The way ahead narrows to 2 metres.",
                          [sector_assertion("centre", 1.74)])
         self.assertIn("RG_DIRECT_NUMBER_DETECTED",
                       check(cand, fact_packet, prompt_packet)[0])
 
-    def test_the_two_allowances_do_not_stack(self):
-        """Each hop was within tolerance and the reader still saw a number 0.15 m from the truth."""
+    def test_a_declaration_near_but_not_equal_to_the_measurement_is_refused(self):
+        """Under a 0.10 m window this passed, and the release then displayed a number the sensor
+        never reported."""
         fact_packet, prompt_packet = make_event(depths=(3.13, 1.85, 1.16))
-        cand = candidate("The way ahead narrows to 2 metres.",
+        cand = candidate("The way ahead narrows to 1.95 metres.",
                          [sector_assertion("centre", 1.95)])
         errors, scored = check(cand, fact_packet, prompt_packet)
-        self.assertEqual(scored[0]["outcome"], "AGREES", "the declaration is inside the tolerance")
-        self.assertIn("RG_DIRECT_NUMBER_DETECTED", errors, "the written number is not")
+        self.assertIn("RG_STATED_VALUE_MISMATCH", errors)
+        self.assertFalse(scored[0]["exact"])
 
-    def test_a_written_number_inside_the_tolerance_is_accepted(self):
-        fact_packet, prompt_packet = make_event(depths=(3.13, 1.85, 1.16))
-        cand = candidate("The way ahead narrows to 1.9 metres.",
-                         [sector_assertion("centre", 1.85)])
+    def test_a_trailing_zero_is_the_same_value(self):
+        """Comparison is at the displayed precision, so 2.5 and 2.50 are one number."""
+        fact_packet, prompt_packet = make_event(depths=(2.5, 1.74, 1.16))
+        cand = candidate("There is 2.50 metres of room to the left.",
+                         [sector_assertion("left", 2.5)])
         self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
 
     def test_an_uncounted_half_is_rejected(self):
@@ -289,6 +300,12 @@ class WrittenNumberAgreementTests(unittest.TestCase):
                          [sector_assertion("centre", 1.00)])
         self.assertIn("RG_DIRECT_NUMBER_DETECTED",
                       check(cand, fact_packet, prompt_packet)[0])
+
+    def test_the_gate_and_the_renderer_agree_on_precision(self):
+        """A renderer showing two decimals while the gate compared three would refuse a caption for
+        stating exactly what the system was about to display."""
+        self.assertEqual(hdsg.display_value(1.7423), 1.74)
+        self.assertEqual(hdsg._format_measurement(1.7423), "1.74 metres")
 
 
 class PluralTests(unittest.TestCase):
