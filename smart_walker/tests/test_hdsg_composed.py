@@ -247,6 +247,158 @@ class DeclarationCountTests(unittest.TestCase):
             comp.validate_caption_candidate(cand, prompt_packet, fact_packet)
 
 
+class UnpinnedGuardTests(unittest.TestCase):
+    """One test per gate check that mutation testing showed no test protected.
+
+    On 22 August 2026, deleting any of ten of the twenty-two guards in
+    `validate_caption_candidate` left the whole suite green. Two of them screened the caption for
+    model commentary and for transcribed visible text, which are two of the four properties the
+    module claims hold by construction, and most of the rest were the visual observation checks.
+    A suite that passes while half the safety checks are absent reports the absence of tests rather
+    than the absence of defects, which is why every one of those defects had to be found by reading.
+
+    Each test here fails if its guard is removed. Adding a guard without adding one of these is the
+    thing to avoid.
+    """
+
+    def valid(self, **over):
+        base = {"caption": "The way ahead narrows to 1.74 metres.",
+                "assertions": [sector_assertion("centre", 1.74)], "visuals": ()}
+        base.update(over)
+        return candidate(base["caption"], base["assertions"], base["visuals"])
+
+    def visual(self, **over):
+        item = {"candidate_observation_id": "visual:1", "proposed_label": "doorway",
+                "bearing": "LEFT"}
+        item.update(over)
+        return item
+
+    # -- profile limits ------------------------------------------------------------------
+    def test_more_visual_observations_than_the_profile_permits_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        limit = prompt_packet["response_constraints"]["max_visual_observations"]
+        visuals = [self.visual(candidate_observation_id=f"visual:{n}")
+                   for n in range(1, limit + 2)]
+        self.assertIn("RG_PROFILE_LIMIT_EXCEEDED",
+                      check(self.valid(visuals=visuals), fact_packet, prompt_packet)[0])
+
+    def test_a_visual_observation_under_a_profile_that_forbids_them_is_rejected(self):
+        """The automatic guidance profile permits none, so one offered there is out of contract.
+
+        The count limit is left alone deliberately. Setting both to zero would let the count check
+        catch this on its own, and the permission check could then be deleted with the suite green.
+        """
+        fact_packet, prompt_packet = make_event()
+        prompt_packet["response_constraints"]["visual_only_observations_allowed"] = False
+        self.assertIn("RG_PROFILE_LIMIT_EXCEEDED",
+                      check(self.valid(visuals=[self.visual()]), fact_packet, prompt_packet)[0])
+
+    def test_a_caption_longer_than_the_profile_permits_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        limit = prompt_packet["response_constraints"].get("max_text_chars") or comp.MAX_CAPTION_CHARS
+        cand = self.valid(caption="The way ahead narrows to 1.74 metres. " + "x" * limit)
+        self.assertIn("RG_PROFILE_LIMIT_EXCEEDED", check(cand, fact_packet, prompt_packet)[0])
+
+    # -- caption content screens ---------------------------------------------------------
+    def test_model_commentary_in_the_caption_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        for caption in ("The model reports 1.74 metres ahead.",
+                        "Unable to judge the space, but the schema gives 1.74 metres.",
+                        "From the image, 1.74 metres lies ahead."):
+            with self.subTest(caption=caption):
+                self.assertIn("RG_MODEL_COMMENTARY_DETECTED",
+                              check(self.valid(caption=caption), fact_packet, prompt_packet)[0])
+
+    def test_transcribed_visible_text_is_rejected(self):
+        """Writing in the scene is untrusted content, and a caption repeating it carries it to the
+        user as though the walker had established it."""
+        fact_packet, prompt_packet = make_event()
+        for caption in ('The sign says the way is closed, and 1.74 metres lie ahead.',
+                        'A door 1.74 metres ahead reads "staff only".'):
+            with self.subTest(caption=caption):
+                self.assertIn("RG_VISIBLE_TEXT_CONTENT_DETECTED",
+                              check(self.valid(caption=caption), fact_packet, prompt_packet)[0])
+
+    # -- declaration shape ---------------------------------------------------------------
+    def test_a_non_numeric_stated_value_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        for value in ("1.74", None, True, [1.74]):
+            with self.subTest(value=value):
+                cand = self.valid(assertions=[{"fact_id": "sector:centre",
+                                               "measurement_id": "m:sector:centre:clearance",
+                                               "stated_value": value}])
+                self.assertIn("RG_SCHEMA_FAILURE", check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_fact_with_no_reliable_reading_exposes_no_measurement(self):
+        """A sector the depth camera could not read is still describable, but carries no value.
+
+        The fact stays in the permitted set, so the caption may say the reading is unavailable. What
+        it may not do is declare a measurement of it, because there is none to compare against.
+        """
+        fact_packet, prompt_packet = make_event(
+            depths=(3.13, None, 1.16), statuses=("CLEAR", "UNKNOWN", "CONSTRAINED"))
+        centre = next(item for item in prompt_packet["permitted_facts"]
+                      if item["fact_id"] == "sector:centre")
+        self.assertIsNone(centre.get("measurement"))
+        cand = self.valid(assertions=[sector_assertion("centre", 1.74)])
+        self.assertIn("RG_MEASUREMENT_REFERENCE_INVALID",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_measurement_the_packet_exposes_but_cannot_resolve_is_rejected(self):
+        """Fault injection: the two records disagree about what was measured.
+
+        The prompt packet is built from the fact packet but is a separate record, so a measurement
+        can be offered to the model and then not be resolvable. The gate must refuse rather than
+        compare against nothing, and no ordinary scene produces this, which is why the guard went
+        unprotected until mutation testing found it.
+        """
+        fact_packet, prompt_packet = make_event()
+        fact_packet["sectors"]["centre"]["clearance_m"] = None
+        cand = self.valid(assertions=[sector_assertion("centre", 1.74)])
+        errors, scored = check(cand, fact_packet, prompt_packet)
+        self.assertIn("RG_MEASUREMENT_REFERENCE_INVALID", errors)
+        self.assertEqual(scored[0]["outcome"], "NOT_MEASURED")
+
+    # -- visual observation shape --------------------------------------------------------
+    def test_a_visual_observation_of_the_wrong_shape_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        for visual in ("doorway", {"proposed_label": "doorway"},
+                       {"candidate_observation_id": "visual:1", "proposed_label": "doorway",
+                        "bearing": "LEFT", "distance_m": 2.0}):
+            with self.subTest(visual=visual):
+                # Built directly rather than through the helper, which coerces each observation to
+                # a dict and so cannot express one that is not a mapping at all.
+                cand = {"schema_version": comp.CAPTION_SCHEMA,
+                        "caption": "The way ahead narrows to 1.74 metres.",
+                        "assertions": [sector_assertion("centre", 1.74)],
+                        "visual_observations": [visual]}
+                self.assertIn("RG_SCHEMA_FAILURE", check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_malformed_or_repeated_observation_identifier_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        for visuals in ([self.visual(candidate_observation_id="obs-1")],
+                        [self.visual(candidate_observation_id="visual:0")],
+                        [self.visual(), self.visual()]):
+            with self.subTest(visuals=visuals):
+                self.assertIn("RG_SCHEMA_FAILURE",
+                              check(self.valid(visuals=visuals), fact_packet, prompt_packet)[0])
+
+    def test_a_label_outside_the_permitted_character_set_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        for label in ("Doorway", "door-way", "", "x" * 49):
+            with self.subTest(label=label):
+                cand = self.valid(visuals=[self.visual(proposed_label=label)])
+                self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED",
+                              check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_bearing_outside_the_three_sectors_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        for bearing in ("BEHIND", "left", None, "CENTER"):
+            with self.subTest(bearing=bearing):
+                cand = self.valid(visuals=[self.visual(bearing=bearing)])
+                self.assertIn("RG_SCHEMA_FAILURE", check(cand, fact_packet, prompt_packet)[0])
+
+
 class ExactValueTests(unittest.TestCase):
     """The number the reader sees is the measurement, stated exactly, or the caption is refused.
 
