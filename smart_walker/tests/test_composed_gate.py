@@ -418,6 +418,85 @@ class AttributionTests(unittest.TestCase):
                         packet, prompt)
         self.assertEqual([], codes)
 
+    # A bearing phrase says where a thing is. It is not the subject of the sentence, and it sits
+    # between an object and its distance in the most natural way of describing one, so treating it
+    # as an equal competitor refused two of five object captions.
+
+    def test_a_bearing_between_an_object_and_its_distance(self):
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       bearing="LEFT", distance_m=1.62))
+        codes, _ = gate(caption("The chair on the left is 1.62 metres away.",
+                                [declares_object(3, 1.62)]), packet, prompt)
+        self.assertEqual([], codes)
+
+    def test_a_bearing_in_an_appositive(self):
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       bearing="LEFT", distance_m=1.62))
+        codes, _ = gate(caption("There is a chair to the left, 1.62 metres away.",
+                                [declares_object(3, 1.62)]), packet, prompt)
+        self.assertEqual([], codes)
+
+    def test_a_sector_stated_only_through_a_bearing_phrase(self):
+        """Dropping bearing phrases outright would refuse this, which is the ordinary way to state
+        a sector clearance. They yield to another subject rather than being discarded."""
+        self.assertAccepted("There is 3.13 metres on the left.", [declares("left", LEFT)])
+
+    def test_a_bearing_phrase_far_from_another_subject_still_wins(self):
+        """The frozen fixture's caption. An earlier form of the bearing rule made a bearing phrase
+        yield to any other mention in the sentence however distant, so 3.13 was attributed to an
+        "ahead" 58 characters away rather than to the "to the left" beside it. No test caught that;
+        the fixture generator refused to run. This is that caption, pinned."""
+        self.assertAccepted(
+            "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left.",
+            [declares("centre", CENTRE), declares("left", LEFT)])
+
+    def test_a_bearing_phrase_with_no_subject_beside_it_is_refused(self):
+        """The rule removes a bearing phrase from competition; it does not supply a subject. "There
+        is 1.62 metres to the left" never says what is 1.62 metres away."""
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       bearing="LEFT", distance_m=1.62))
+        codes, _ = gate(caption("There is 1.62 metres to the left.", [declares_object(3, 1.62)]),
+                        packet, prompt)
+        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+
+    def test_a_bare_sector_still_competes_against_an_object(self):
+        """The yielding applies to a sector inside a bearing phrase, not to one named plainly. "The
+        left is 1.62 metres wide" attributes a chair's distance to the sector and must be refused."""
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       bearing="LEFT", distance_m=1.62))
+        codes, _ = gate(caption("The left is 1.62 metres wide.", [declares_object(3, 1.62)]),
+                        packet, prompt)
+        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+
+    def test_a_sentence_ending_in_a_number_still_ends(self):
+        """The full stop after 3.13 has a digit in front of it. Excluding a boundary on that basis
+        made the whole caption one sentence, so every fact named anywhere in it competed."""
+        self.assertAccepted("The left is 3.13. The centre is 1.74.",
+                            [declares("left", LEFT), declares("centre", CENTRE)])
+
+    def test_a_swap_across_a_sentence_ending_in_a_number(self):
+        self.assertRefused("The left is 1.16. The centre is 1.74.",
+                           [declares("right", RIGHT), declares("centre", CENTRE)])
+
+    def test_two_objects_of_one_class_are_one_mention_of_both(self):
+        """A label is shared, so "the chair" in a room with two chairs names both. Resolving that
+        as an overlap kept whichever was found first and discarded the other, so a caption
+        describing the second was refused for naming the first."""
+        from scripts import hdsg_runtime as hdsg
+        objects = hdsg.normalise_objects([
+            {"id": 0, "track_id": 3, "raw_label": "chair", "canonical_class": "chair",
+             "ontology_class": "furniture", "conf": 0.8, "bbox_xyxy": [10, 10, 90, 200],
+             "bearing": "LEFT", "distance_m": 1.62,
+             "distance_method": "D455F_LOWER_BBOX_MEDIAN"},
+            {"id": 1, "track_id": 5, "raw_label": "chair", "canonical_class": "chair",
+             "ontology_class": "furniture", "conf": 0.8, "bbox_xyxy": [10, 10, 90, 200],
+             "bearing": "RIGHT", "distance_m": 2.40,
+             "distance_method": "D455F_LOWER_BBOX_MEDIAN"}])
+        packet = event(objects=objects)[0]
+        mentions = composed._fact_mentions("A chair stands there.", packet)
+        self.assertEqual(1, len(mentions))
+        self.assertEqual({"object:3", "object:5"}, set(mentions[0].facts))
+
     def test_a_quoted_identifier_does_not_name_a_fact(self):
         """Quoting sector:centre is not describing a place, so it must not satisfy the check."""
         self.assertRefused("A clearance of 1.74 metres is recorded at sector:centre.",
@@ -684,6 +763,34 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             composed.build_composed_release(
                 self.packet, self.prompt, release_id="release_6", candidate=self.candidate)
+
+
+class FrozenFixtureTests(unittest.TestCase):
+    """The caption in the frozen schema fixture must still pass the gate.
+
+    Nothing exercised this. A change to the attribution check refused the fixture, 125 tests passed,
+    and only `schemas/generate_fixtures.py` noticed, because it refuses to write a fixture the gate
+    would reject. That guard runs when somebody thinks to run it. This runs every time.
+
+    The fixture is the record every schema conformance claim rests on, so a gate that would refuse
+    it means the frozen set no longer describes what the runtime can produce.
+    """
+
+    def test_the_frozen_caption_passes_the_gate(self):
+        import json
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        record = json.loads((root / "schemas" / "fixtures" / "valid"
+                             / "hdsg.vlm_caption.v1.json").read_text(encoding="utf-8"))
+        fact_packet = json.loads((root / "schemas" / "fixtures" / "valid"
+                                  / "hdsg.fact_packet.v2.json").read_text(encoding="utf-8"))
+        prompt_packet = json.loads((root / "schemas" / "fixtures" / "valid"
+                                    / "hdsg.prompt_packet.v2.json").read_text(encoding="utf-8"))
+        codes, scored = composed.validate_caption_candidate(
+            record, prompt_packet, fact_packet, detector_classes=DETECTOR_CLASSES)
+        self.assertEqual([], codes)
+        self.assertTrue(scored)
+        self.assertTrue(all(item["outcome"] == "AGREES" for item in scored))
 
 
 class PromptTests(unittest.TestCase):

@@ -59,6 +59,13 @@ is not a fact the number was declared against, two different facts are equally n
 names no fact at all. The vocabulary is closed, eleven words and phrases across the three sectors,
 and for an object it is the detector's label for it.
 
+Two refinements, both grounded in the Fact Packet rather than in sentence structure. One span may
+name several facts, because two objects of a class share a label, and "the chair" in a room with two
+chairs is one phrase referring to whichever the declaration names rather than an ambiguity between
+them. And a sector named inside a bearing phrase, "on the left", stops competing for a number whose
+fact is an object the packet already places in that sector, because there the phrase repeats the
+object's own bearing instead of naming a second thing.
+
 Confining the search to one sentence is what allows a caption of more than one sentence. Without it
 "The left is open for 3.13 metres. The right is tighter at 1.16 metres." put 3.13 exactly as far
 from "left" as from "right" and was refused as ambiguous on account of a word in the sentence after
@@ -99,7 +106,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 try:
     from . import hdsg_runtime as hdsg
@@ -321,11 +328,35 @@ def _fact_terms(fact_id: str, fact_packet: Mapping[str, Any]) -> tuple[str, ...]
     return ()
 
 
-def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[tuple[int, int, str]]:
-    """Returns where the caption names each fact, as (start, end, fact_id).
+# A sector named after one of these is saying where something is, not naming the sector as the
+# subject of the sentence. "The chair on the left is 1.62 metres away" is about the chair.
+_BEARING_LEAD_RE = re.compile(
+    r"\b(?:on|to|towards?|at|along)\s+(?:the|your|its)?\s*$", re.IGNORECASE)
+
+
+class Mention(NamedTuple):
+    """One place the caption names one or more facts."""
+
+    start: int
+    end: int
+    facts: frozenset
+    bearing_phrase: bool
+
+
+def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[Mention]:
+    """Returns where the caption names each fact.
 
     Overlapping matches are resolved in favour of the longer term, which is how "right in front of
     the walker" is read as one mention of the centre rather than as a mention of the right.
+
+    **One span can name several facts.** Two objects of the same class share a label, so "the chair"
+    in a room with two chairs is one mention of both. Resolving that as an overlap kept whichever
+    was found first and silently discarded the other, so a caption describing the second chair was
+    refused for naming the first.
+
+    **A sector inside a bearing phrase is marked, not dropped.** "on the left" says where something
+    is. Whether it is also the subject of the sentence cannot be settled here, because it depends on
+    which fact the number belongs to, so the mention is flagged and `attribution_failures` decides.
 
     Identifiers are masked first, so a model quoting "sector:centre" into the prose does not thereby
     name the centre. Quoting an identifier is not describing a place.
@@ -334,25 +365,31 @@ def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[tuple[i
     fact_ids = list(SECTOR_TERMS) + [
         str(item["fact_id"]) for item in fact_packet.get("objects", []) if item.get("fact_id")
     ]
-    found: list[tuple[int, int, str]] = []
+    found: dict[tuple[int, int], set[str]] = {}
     for fact_id in fact_ids:
         for term in _fact_terms(fact_id, fact_packet):
             if not term:
                 continue
-            found.extend((m.start(), m.end(), fact_id)
-                         for m in re.finditer(rf"\b{re.escape(term)}\b", masked))
-    found.sort(key=lambda span: (span[0], span[0] - span[1]))
-    kept: list[tuple[int, int, str]] = []
-    for span in found:
-        if any(span[0] < other[1] and other[0] < span[1] for other in kept):
+            for match in re.finditer(rf"\b{re.escape(term)}\b", masked):
+                found.setdefault((match.start(), match.end()), set()).add(fact_id)
+
+    kept: list[Mention] = []
+    for (start, end) in sorted(found, key=lambda span: (span[0], span[0] - span[1])):
+        if any(start < other.end and other.start < end for other in kept):
             continue
-        kept.append(span)
+        kept.append(Mention(start, end, frozenset(found[(start, end)]),
+                            bool(_BEARING_LEAD_RE.search(masked[:start]))))
     return kept
 
 
 # Sentence boundaries, used to stop a fact named in one sentence from competing for a number stated
-# in another. A full stop between two digits is not a boundary, since it is a decimal point.
-_SENTENCE_END_RE = re.compile(r"(?<!\d)[.;!?](?!\d)")
+# in another.
+#
+# A decimal point is excluded by what follows it, not by what precedes it. Excluding both stopped a
+# sentence ending in a number from being a sentence at all: "The left is 3.13. The centre is clear."
+# was one span, because the full stop after 3.13 has a digit in front of it. Every fact named in the
+# rest of the caption then competed for that number.
+_SENTENCE_END_RE = re.compile(r"[.;!?](?!\d)")
 
 
 def _sentence_bounds(caption: str, position: int) -> tuple[int, int]:
@@ -365,11 +402,20 @@ def _sentence_bounds(caption: str, position: int) -> tuple[int, int]:
     return start, len(caption)
 
 
-def _distance(number: tuple[int, int, str], mention: tuple[int, int, str]) -> int:
-    if mention[1] <= number[0]:
-        return number[0] - mention[1]
-    if number[1] <= mention[0]:
-        return mention[0] - number[1]
+def _bearing_sector(fact_id: str, fact_packet: Mapping[str, Any]) -> Optional[str]:
+    """Returns the sector an object lies in, as a fact identifier, or None if it is not an object."""
+    for item in fact_packet.get("objects", []):
+        if item.get("fact_id") == fact_id:
+            sector = f"sector:{str(item.get('bearing') or '').lower()}"
+            return sector if sector in SECTOR_TERMS else None
+    return None
+
+
+def _distance(number: tuple[int, int, str], mention: Mention) -> int:
+    if mention.end <= number[0]:
+        return number[0] - mention.end
+    if number[1] <= mention.start:
+        return mention.start - number[1]
     return 0
 
 
@@ -414,19 +460,40 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
         # from "right", and a truthful caption was refused as ambiguous because of a fact named in
         # the sentence after it.
         low, high = _sentence_bounds(caption, number[0])
-        local = [m for m in mentions if m[0] >= low and m[1] <= high]
-        if not local:
+        local = [m for m in mentions if m.start >= low and m.end <= high]
+        # "The chair on the left is 1.62 metres away" is about the chair, but the bearing sits
+        # between the object and its distance and so wins on nearness every time, which refused two
+        # of five naturally worded object captions. A bearing phrase therefore stops competing when
+        # it names the sector the packet already records the candidate object as lying in: there it
+        # is repeating the object's own bearing rather than naming a second thing.
+        #
+        # The test is against the packet, not against the sentence. An earlier attempt made bearing
+        # phrases yield to any other mention in the sentence, however distant, and that refused the
+        # frozen fixture: in "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the
+        # left" the bearing phrase is the nearer and correct subject for 3.13, while "ahead" is 58
+        # characters away. No test caught it; the fixture generator did.
+        redundant = {
+            sector for sector in (_bearing_sector(f, fact_packet) for f in candidates) if sector
+        }
+        subjects = [m for m in local
+                    if not (m.bearing_phrase and m.facts and set(m.facts) <= redundant)]
+        if not subjects:
             failures.append({"number": token, "declared_for": candidates,
                              "reason": "FACT_NOT_NAMED"})
             continue
-        shortest = min(_distance(number, mention) for mention in local)
-        nearest = {mention[2] for mention in local if _distance(number, mention) == shortest}
-        if len(nearest) > 1:
+        shortest = min(_distance(number, mention) for mention in subjects)
+        nearest = [m for m in subjects if _distance(number, m) == shortest]
+        # Several spans equally near is an ambiguity only when they name different things. One span
+        # naming two facts is not: two chairs share a label, so "the chair" is one phrase referring
+        # to one of them, and the declaration says which.
+        if len({m.facts for m in nearest}) > 1:
+            failures.append({"number": token, "declared_for": candidates, "reason": "AMBIGUOUS",
+                             "nearest": sorted(set().union(*(m.facts for m in nearest)))})
+            continue
+        named = set().union(*(m.facts for m in nearest))
+        if not named & set(candidates):
             failures.append({"number": token, "declared_for": candidates,
-                             "reason": "AMBIGUOUS", "nearest": sorted(nearest)})
-        elif not nearest & set(candidates):
-            failures.append({"number": token, "declared_for": candidates,
-                             "reason": "MISATTRIBUTED", "nearest": sorted(nearest)})
+                             "reason": "MISATTRIBUTED", "nearest": sorted(named)})
     return failures
 
 
