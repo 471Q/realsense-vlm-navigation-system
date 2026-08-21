@@ -247,46 +247,33 @@ def _caption_numbers(caption: str) -> list[str]:
     return [token for _, _, token in _caption_number_spans(caption)]
 
 
-def grounding_values(assertions: Sequence[Mapping[str, Any]],
-                     fact_packet: Mapping[str, Any]) -> list[float]:
-    """Returns the measured values behind a candidate's declarations.
+def grounded_display_strings(scored: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Returns the digits a caption may use, one for each declaration the gate resolved.
 
-    The measured value rather than the declared one, because that is what the caption's prose is
-    checked against.
+    **Built from the scored declarations, not from the raw ones.** An earlier form resolved every
+    measurement identifier the candidate mentioned, whether or not the prompt had offered it and
+    whether or not it belonged to the fact the declaration named. A declaration the gate was about
+    to refuse therefore still licensed its value to appear in the prose, so the run recorded the
+    reference error and not the undeclared number that came with it.
     """
-    values: list[float] = []
-    for item in assertions:
-        if not isinstance(item, Mapping):
-            continue
-        measurement_id = item.get("measurement_id")
-        if not measurement_id:
-            continue
-        measured = measured_value(fact_packet, str(measurement_id))
-        if measured is not None:
-            values.append(float(measured))
-    return values
+    return {
+        _display_string(item["measured_value"]) for item in scored
+        if item.get("measured_value") is not None
+    }
 
 
-def declared_display_strings(assertions: Sequence[Mapping[str, Any]],
-                             fact_packet: Mapping[str, Any]) -> set[str]:
-    """Returns the digit strings a caption may use, one for each measurement it declared."""
-    return {_display_string(value) for value in grounding_values(assertions, fact_packet)}
+def undeclared_numbers(caption: str, scored: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Returns the numerals a caption states that no accepted declaration accounts for.
 
-
-def undeclared_numbers(caption: str, assertions: Sequence[Mapping[str, Any]],
-                       fact_packet: Mapping[str, Any]) -> list[str]:
-    """Returns the numbers a caption states that no declared measurement accounts for.
-
-    **The comparison is against the measurement, not against the declared value.** Comparing the
-    prose against the declaration and the declaration against the measurement let two windows
-    compose, so a caption could put a number on the display further from the truth than either
-    check permitted on its own.
+    **The comparison is against the measurement, not against the declared value.** A caption is
+    held to what the sensor reported, so a declaration that misstates its own measurement cannot
+    license the misstatement in the prose as well.
 
     Exposed so an analysis of an archived run can report which numbers went undeclared, rather than
     only that some did. The release records the reason code; this recovers the token behind it.
     """
-    permitted = declared_display_strings(assertions, fact_packet)
-    return [token for token in _caption_numbers(caption) if token not in permitted]
+    grounded = grounded_display_strings(scored)
+    return [token for token in _caption_numbers(caption) if token not in grounded]
 
 
 def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optional[float]:
@@ -589,12 +576,15 @@ def validate_caption_candidate(
     if _names_forbidden_term(caption, forbidden):
         errors.append("RG_OBJECT_REFERENCE_INVALID")
 
-    permitted_measurements = {
-        item["measurement"]["measurement_id"]
+    # The measurement each permitted fact carries, so a declaration can be checked against the
+    # pairing the prompt offered rather than only against the two lists separately.
+    measurement_of_fact = {
+        item["fact_id"]: (item["measurement"]["measurement_id"]
+                          if isinstance(item.get("measurement"), Mapping) else None)
         for item in prompt_packet["permitted_facts"]
-        if isinstance(item.get("measurement"), Mapping)
     }
-    permitted_fact_ids = {item["fact_id"] for item in prompt_packet["permitted_facts"]}
+    permitted_measurements = {value for value in measurement_of_fact.values() if value}
+    permitted_fact_ids = set(measurement_of_fact)
 
     caption_tokens = set(_caption_numbers(caption))
 
@@ -624,6 +614,19 @@ def validate_caption_candidate(
         if measurement_id not in permitted_measurements:
             errors.append("RG_MEASUREMENT_REFERENCE_INVALID")
             entry["outcome"] = "MEASUREMENT_NOT_PERMITTED"
+            scored.append(entry)
+            continue
+        # The measurement must be the one this fact carries. Checking the two lists separately let
+        # a candidate pair any permitted fact with any permitted measurement, and that pairing is
+        # the whole of the attribution: declaring fact_id sector:left against
+        # m:sector:centre:clearance made 1.74 the left sector's measured value as far as every
+        # later check was concerned, so "The left side is clear for 1.74 metres" was released
+        # against a left sector measured at 3.13. Nothing else detects it. The scored outcome is
+        # kept distinct from a measurement the prompt never offered, because a model pairing two
+        # real identifiers wrongly is not doing the same thing as one inventing an identifier.
+        if measurement_id != measurement_of_fact[fact_id]:
+            errors.append("RG_MEASUREMENT_REFERENCE_INVALID")
+            entry["outcome"] = "MEASUREMENT_NOT_FOR_FACT"
             scored.append(entry)
             continue
         measured = measured_value(fact_packet, str(measurement_id))
@@ -661,7 +664,7 @@ def validate_caption_candidate(
     # had been written twice, which is how a check and the analysis that reports on it drift apart:
     # a run would have recorded the code while the helper listing the offending tokens disagreed
     # about which they were.
-    if undeclared_numbers(caption, assertions, fact_packet):
+    if undeclared_numbers(caption, scored):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     # And every unit of length must carry a numeral in front of it. The check above sees numerals

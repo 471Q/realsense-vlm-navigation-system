@@ -182,9 +182,8 @@ class UndeclaredNumberTests(unittest.TestCase):
         """The helper an archive analysis calls and the check the gate runs are one implementation.
         Written twice, they would drift and a run would record a code the analysis disagreed with."""
         text = "The centre is 1.74 metres and the left is 9.99 metres."
-        self.assertEqual(["9.99"],
-                         composed.undeclared_numbers(text, [declares("centre", CENTRE)],
-                                                     self.packet))
+        _, scored = gate(caption(text, [declares("centre", CENTRE)]), self.packet, self.prompt)
+        self.assertEqual(["9.99"], composed.undeclared_numbers(text, scored))
 
 
 class DeclarationScoringTests(unittest.TestCase):
@@ -256,6 +255,45 @@ class DeclarationScoringTests(unittest.TestCase):
         self.assertIn("RG_MEASUREMENT_REFERENCE_INVALID", codes)
         self.assertEqual("NOT_MEASURED", scored[0]["outcome"])
         self.assertIsNone(scored[0]["measured_value"])
+
+    def test_a_measurement_belonging_to_another_fact_is_refused(self):
+        """The pairing is the whole of the attribution, and checking the permitted facts and the
+        permitted measurements as two separate lists let a candidate pair any of one with any of
+        the other. Declaring sector:left against m:sector:centre:clearance made 1.74 the left
+        sector's measured value as far as every later check was concerned, so "The left side is
+        clear for 1.74 metres" was released against a left sector measured at 3.13, with no reason
+        code and the declaration scored as agreement. Nothing else in the gate detects it."""
+        codes, scored = self.score(
+            "The left side is clear for 1.74 metres.",
+            [{"fact_id": "sector:left", "measurement_id": "m:sector:centre:clearance",
+              "stated_value": CENTRE}])
+        self.assertIn("RG_MEASUREMENT_REFERENCE_INVALID", codes)
+        self.assertEqual("MEASUREMENT_NOT_FOR_FACT", scored[0]["outcome"])
+
+    def test_an_object_taking_a_sector_measurement_is_refused(self):
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       bearing="LEFT", distance_m=1.62))
+        codes, scored = gate(
+            caption("A chair stands 1.74 metres away.",
+                    [{"fact_id": "object:3", "measurement_id": "m:sector:centre:clearance",
+                      "stated_value": CENTRE}]), packet, prompt)
+        self.assertIn("RG_MEASUREMENT_REFERENCE_INVALID", codes)
+        self.assertEqual("MEASUREMENT_NOT_FOR_FACT", scored[0]["outcome"])
+
+    def test_a_refused_declaration_does_not_ground_its_number(self):
+        """The grounded set was built from every identifier the candidate mentioned, so a
+        declaration the gate was about to refuse still licensed its value to appear in the prose.
+        The run then recorded the reference error without the undeclared number that came with it,
+        and the two are different things a model did."""
+        codes, _ = self.score(
+            "The left side is clear for 1.74 metres.",
+            [{"fact_id": "sector:left", "measurement_id": "m:sector:centre:clearance",
+              "stated_value": CENTRE}])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED", codes)
+
+    def test_the_correct_pairing_is_accepted(self):
+        self.assertEqual([], self.score("The left side is clear for 3.13 metres.",
+                                        [declares("left", LEFT)])[0])
 
     def test_a_malformed_declaration_still_appears_in_the_count(self):
         """The count of what the model declared is the count of what it declared, including what
