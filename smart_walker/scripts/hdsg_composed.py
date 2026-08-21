@@ -15,9 +15,14 @@ candidate violating any of them is rejected and the deterministic fallback is re
 
 1. The caption cannot issue or alter an instruction, so the action the user acts on is unaffected.
 2. Every number reaching the display is one the Fact Packet measured, within the frozen tolerance.
-3. Every numeral in the caption is declared, so an undeclared number cannot pass unchecked.
-4. No detector class absent from the Fact Packet can be named, which prevents the object
-   hallucination Chapter 2 section 2.7.1 documents rather than reducing its rate.
+3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. This
+   covers a distance written in words as well as one written in digits: scanning only for digits
+   left "roughly five metres" unchecked against a measured 1.74 m, which is the failure mode the
+   property exists to exclude.
+4. No detector class absent from the Fact Packet can be named, in any of its written forms, which
+   prevents the object hallucination Chapter 2 section 2.7.1 documents rather than reducing its
+   rate. Plural forms are enumerated rather than guessed by suffix, since a suffix misses "people"
+   and person is the class a walker is most often wrong about.
 
 What remains measured is whether the composed prose is otherwise a faithful account. That division
 is the one Chapter 1 paragraph 110 already states.
@@ -49,15 +54,38 @@ DEFAULT_VALUE_TOLERANCE_M = 0.10
 
 MAX_CAPTION_CHARS = 400
 
-# Any numeral in the caption, including a bare integer. Every one must be declared, so that a value
-# the model invented cannot reach the display by not being mentioned in the declarations.
-CAPTION_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+# Any numeral in the caption, including a bare integer and a value written without its leading zero.
+# Every one must be declared, so that a value the model invented cannot reach the display by not
+# being mentioned in the declarations.
+CAPTION_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 
 # A digit forming part of a word or an identifier rather than a measurement. "visual:1" is the case
 # that occurs in practice, when a model copies an observation identifier into the prose. Such a
 # digit is not a claim about the world, so treating it as an undeclared measurement would reject a
 # caption for a formatting slip rather than for a hallucination.
 _NON_MEASUREMENT_PREFIX_RE = re.compile(r"[A-Za-z:]")
+
+# A distance can be stated in words as readily as in digits, and "roughly five metres" is a claim
+# about the world in exactly the way "5.0 metres" is. Scanning only for digits left the whole class
+# undeclared and unchecked, so a spelled-out distance reached the display without ever meeting a
+# measurement.
+_WORD_NUMBER_VALUES = {
+    "zero": 0.0, "one": 1.0, "two": 2.0, "three": 3.0, "four": 4.0, "five": 5.0,
+    "six": 6.0, "seven": 7.0, "eight": 8.0, "nine": 9.0, "ten": 10.0,
+    "eleven": 11.0, "twelve": 12.0, "thirteen": 13.0, "fourteen": 14.0, "fifteen": 15.0,
+    "sixteen": 16.0, "seventeen": 17.0, "eighteen": 18.0, "nineteen": 19.0, "twenty": 20.0,
+}
+
+_DISTANCE_UNIT = r"(?:metres?|meters?|centimetres?|centimeters?|cm|mm)"
+
+# A word number counts as a stated distance only when a unit follows it, which is what separates
+# "two metres" from "no one ahead" and "one of the chairs". A bare digit needs no such test, because
+# a digit in a navigation caption is a measurement and an ordinary English word is not.
+_WORD_NUMBER_RE = re.compile(
+    r"\b(" + "|".join(_WORD_NUMBER_VALUES) + r")\b"
+    r"(?=\s+(?:and\s+a\s+half\s+)?" + _DISTANCE_UNIT + r"\b)",
+    re.IGNORECASE,
+)
 
 
 def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
@@ -80,15 +108,56 @@ def _declared_numbers(assertions: Sequence[Mapping[str, Any]]) -> list[float]:
     return values
 
 
-def _caption_numbers(caption: str) -> list[str]:
-    """Returns the numerals in a caption that are stated as measurements."""
-    found: list[str] = []
+def _caption_numbers(caption: str) -> list[tuple[str, float, int]]:
+    """Returns the numbers a caption states as measurements, in digits or in words.
+
+    Each entry is the text as written, its value, and the number of decimal places it was written
+    to. The precision is carried because it decides how far the written number may sit from the
+    value it declares: "1.7" is a faithful rendering of 1.74 and "2" is not.
+    """
+    found: list[tuple[str, float, int]] = []
     for match in CAPTION_NUMBER_RE.finditer(caption):
         start = match.start()
         if start > 0 and _NON_MEASUREMENT_PREFIX_RE.match(caption[start - 1]):
             continue
-        found.append(match.group(0))
+        token = match.group(0)
+        decimals = len(token.partition(".")[2])
+        found.append((token, float(token), decimals))
+    for match in _WORD_NUMBER_RE.finditer(caption):
+        token = match.group(1)
+        found.append((token, _WORD_NUMBER_VALUES[token.lower()], 0))
     return found
+
+
+def _rounding_allowance(decimals: int, value_tolerance_m: float) -> float:
+    """How far a written number may sit from the value it declares, given how it was written.
+
+    A caption rounds, and the design intends it to: the value tolerance exists so that "1.7" passes
+    against a measured 1.74. Matching the written number to the declaration within a fixed hundredth
+    of a metre contradicted that, and rejected the caption the prompt asks for.
+
+    The allowance is half a unit of the last written place, so one decimal admits 0.05 and two admit
+    0.005. It is capped at the value tolerance, because a whole number written for 1.74 is not a
+    rounding the reader can discount: "2 metres" overstates the clearance by more than the gate
+    allows a declaration to be wrong, and the overstatement is the direction that matters.
+    """
+    return min(max(0.005, 0.5 * (10.0 ** -decimals)), float(value_tolerance_m))
+
+
+def undeclared_numbers(caption: str, assertions: Sequence[Mapping[str, Any]],
+                       value_tolerance_m: float = DEFAULT_VALUE_TOLERANCE_M) -> list[str]:
+    """Returns the numbers a caption states that no declaration accounts for.
+
+    Exposed so an analysis of an archived run can report which numbers went undeclared, rather than
+    only that some did. The release records the reason code; this recovers the token behind it.
+    """
+    declared = _declared_numbers([item for item in assertions if isinstance(item, Mapping)])
+    missing: list[str] = []
+    for token, value, decimals in _caption_numbers(caption):
+        allowance = _rounding_allowance(decimals, value_tolerance_m)
+        if not any(abs(value - item) <= allowance for item in declared):
+            missing.append(token)
+    return missing
 
 
 def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optional[float]:
@@ -112,25 +181,75 @@ def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optio
     return None
 
 
+# Plurals that appending "s" does not produce. "person" is the one that matters: it is the class a
+# walker is most often wrong about, and a caption saying "two people" when the detector reported
+# nobody went unchecked while the same caption saying "a person" was rejected.
+_IRREGULAR_PLURALS = {
+    "person": "people",
+    "knife": "knives",
+    "mouse": "mice",
+    "sheep": "sheep",
+}
+
+# A class ending in a sibilant takes "es", so "bus" pluralises to "buses" and not to "buss".
+_SIBILANT_ENDINGS = ("s", "x", "z", "ch", "sh")
+
+
+def _surface_forms(term: str) -> set[str]:
+    """Returns the written forms of one detector class, singular and plural."""
+    lowered = str(term).lower().strip()
+    if not lowered:
+        return set()
+    forms = {lowered}
+    irregular = _IRREGULAR_PLURALS.get(lowered)
+    if irregular:
+        forms.add(irregular)
+    elif lowered.endswith(_SIBILANT_ENDINGS):
+        forms.add(lowered + "es")
+    elif lowered.endswith("y") and len(lowered) > 1 and lowered[-2] not in "aeiou":
+        forms.add(lowered[:-1] + "ies")
+    else:
+        forms.add(lowered + "s")
+    return forms
+
+
 def forbidden_entity_terms(fact_packet: Mapping[str, Any],
                            detector_classes: Iterable[str]) -> set[str]:
-    """Returns the detector classes the caption may not name.
+    """Returns the written forms the caption may not use, singular and plural.
 
     A class the detector did not report in this observation cannot be named, which is what makes
     object hallucination impossible rather than merely infrequent. Classes that are present are
     permitted, and so is any word outside the detector's vocabulary, since the check bounds what the
     model may assert about recognised objects rather than policing ordinary language.
+
+    Plurals are enumerated here rather than by appending "s" at the point of search, because a
+    single suffix does not cover the vocabulary: it misses "people" entirely and turns "bus" into
+    "buss".
     """
-    present = set()
+    present: set[str] = set()
     for item in fact_packet.get("objects", []):
         for key in ("canonical_label", "raw_label", "ontology_class"):
             value = item.get(key)
             if value:
-                present.add(str(value).lower())
-    return {
-        str(name).lower() for name in detector_classes
-        if str(name).lower() not in present
-    }
+                present.update(_surface_forms(str(value)))
+    forbidden: set[str] = set()
+    for name in detector_classes:
+        forms = _surface_forms(str(name))
+        if forms & present:
+            continue
+        forbidden.update(forms)
+    return forbidden
+
+
+def _names_forbidden_term(text: str, forbidden: Iterable[str]) -> bool:
+    """True when the text names one of the forbidden forms as a whole word.
+
+    Used for the caption and for a visual observation's label alike. The label was previously
+    compared by equality, so a forbidden class sitting inside a longer label passed unnoticed while
+    the same class alone was rejected.
+    """
+    lowered = str(text).lower()
+    return any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in forbidden)
 
 
 def validate_caption_candidate(
@@ -180,12 +299,11 @@ def validate_caption_candidate(
         errors.append("RG_VISIBLE_TEXT_CONTENT_DETECTED")
 
     forbidden = forbidden_entity_terms(fact_packet, detector_classes)
-    lowered = caption.lower()
-    if any(re.search(rf"\b{re.escape(term)}s?\b", lowered) for term in forbidden):
+    if _names_forbidden_term(caption, forbidden):
         errors.append("RG_OBJECT_REFERENCE_INVALID")
 
     permitted_measurements = {
-        item["measurement"]["measurement_id"]: item
+        item["measurement"]["measurement_id"]
         for item in prompt_packet["permitted_facts"]
         if isinstance(item.get("measurement"), Mapping)
     }
@@ -233,17 +351,13 @@ def validate_caption_candidate(
             entry["outcome"] = "AGREES"
         scored.append(entry)
 
-    # Every numeral in the prose must be declared. Without this an invented distance reaches the
-    # display simply by being omitted from the declarations.
-    declared = _declared_numbers([item for item in assertions if isinstance(item, Mapping)])
-    for token in _caption_numbers(caption):
-        value = float(token)
-        if not any(abs(value - item) <= 0.005 for item in declared):
-            # RG_DIRECT_NUMBER_DETECTED already means a number reached the text without
-            # provenance, which is exactly what an undeclared numeral is under this design. Reusing
-            # it keeps the schema delta to the one code that is genuinely new.
-            errors.append("RG_DIRECT_NUMBER_DETECTED")
-            break
+    # Every number the prose states must be declared, whether written in digits or in words.
+    # Without this an invented distance reaches the display simply by being omitted from the
+    # declarations. RG_DIRECT_NUMBER_DETECTED already means a number reached the text without
+    # provenance, which is exactly what an undeclared number is under this design, so reusing it
+    # keeps the reason-code enumeration unchanged.
+    if undeclared_numbers(caption, assertions, value_tolerance_m):
+        errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     seen_visual_ids: set[str] = set()
     for visual in visuals:
@@ -260,7 +374,7 @@ def validate_caption_candidate(
         seen_visual_ids.add(str(visual_id))
         if not isinstance(label, str) or not re.fullmatch(r"[a-z][a-z0-9_ ]{0,47}", label):
             errors.append("RG_UNAPPROVED_LANGUAGE_DETECTED")
-        elif label.lower() in forbidden:
+        elif _names_forbidden_term(label.replace("_", " "), forbidden):
             errors.append("RG_OBJECT_REFERENCE_INVALID")
         elif (hdsg.NUMBER_RE.search(label) or hdsg.ACTION_RE.search(label)
               or hdsg.COMMENTARY_RE.search(label)
@@ -292,7 +406,7 @@ Then declare every number you wrote. For each one give the fact_id and the measu
 
   {{"fact_id": "sector:centre", "measurement_id": "m:sector:centre:clearance", "stated_value": 1.74}}
 
-A number in the caption that is not declared, or a declared value that does not match the measurement, causes the caption to be discarded.
+A number in the caption that is not declared, or a declared value that does not match the measurement, causes the caption to be discarded. This applies to a distance written as a word as much as to one written in digits: "two metres" needs its declaration exactly as "2.0 metres" does. Round if it reads better, and declare the value you wrote rather than the one you rounded from.
 
 Rules:
   Describe only. Never say what the person should do, and never name a direction to take.
@@ -420,14 +534,20 @@ def build_composed_release(
     # The measured values behind the declared assertions are recorded as the substitutions, so the
     # release still states which measurements its text rests on and the contribution ablation can
     # read them.
+    #
+    # Deduplicated by identifier, as the deterministic builder also does. A caption may legitimately
+    # state one measurement twice, and without this the release carried the same substitution twice
+    # and violated the uniqueItems constraint its own frozen schema imposes.
+    substitutions = {
+        str(item["measurement_id"]):
+            {"measurement_id": str(item["measurement_id"]),
+             "formatted_value": f"{float(item['measured_value']):.2f} metres"}
+        for item in scored_assertions
+        if item.get("measured_value") is not None and item.get("measurement_id")
+    }
     release["evidence"] = {
         **base["evidence"],
-        "measurement_substitutions": [
-            {"measurement_id": item["measurement_id"],
-             "formatted_value": f"{float(item['measured_value']):.2f} metres"}
-            for item in scored_assertions
-            if item.get("measured_value") is not None and item.get("measurement_id")
-        ],
+        "measurement_substitutions": list(substitutions.values()),
         "released_visual_observation_ids": [
             item["candidate_observation_id"]
             for item in candidate.get("visual_observations", [])

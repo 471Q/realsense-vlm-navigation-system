@@ -6,6 +6,7 @@ carry a number that disagrees with its measurement, cannot carry a number it did
 cannot name a detector class the Fact Packet does not hold.
 """
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -159,6 +160,102 @@ class HallucinationDetectionTests(unittest.TestCase):
         self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
 
 
+class SpelledOutNumberTests(unittest.TestCase):
+    """A distance stated in words is a claim about the world exactly as a digit is.
+
+    Scanning only for digits left the whole class unchecked, so "roughly five metres" was released
+    against a measured 1.74 m with nothing compared. Found 22 August 2026 by reading the module
+    end to end rather than by any test failing.
+    """
+
+    def test_an_undeclared_word_number_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to about two metres.", [])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_word_number_contradicting_the_measurement_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("There is roughly five metres of clear space ahead.", [])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_word_number_is_rejected_even_when_a_true_value_is_declared(self):
+        """The declaration must account for the number the caption actually wrote."""
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to about two metres.",
+                         [sector_assertion("centre", 1.74)])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_ordinary_prose_containing_the_word_one_is_accepted(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres and no one is in the way.",
+                         [sector_assertion("centre", 1.74)])
+        self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
+
+    def test_the_undeclared_token_can_be_recovered_for_reporting(self):
+        """Chapter 5 reports a rate, and a rate without its instances cannot be checked."""
+        self.assertEqual(
+            comp.undeclared_numbers("Roughly five metres ahead, and 1.74 at the centre.",
+                                    [sector_assertion("centre", 1.74)]),
+            ["five"],
+        )
+
+
+class RoundingTests(unittest.TestCase):
+    """The value tolerance exists so a caption may round, and the prose check must agree with it."""
+
+    def test_one_decimal_may_round_its_declaration(self):
+        # Matching within a fixed hundredth rejected the caption the prompt asks for: the tolerance
+        # comment cites "1.7" for 1.74 as the case it exists to admit.
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.7 metres.",
+                         [sector_assertion("centre", 1.74)])
+        self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
+
+    def test_a_whole_number_may_not(self):
+        """2 for 1.74 overstates the clearance by more than a declaration is allowed to be wrong,
+        and overstating clearance is the direction that walks someone into what is not there."""
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 2 metres.",
+                         [sector_assertion("centre", 1.74)])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_the_allowance_is_capped_by_the_value_tolerance(self):
+        self.assertEqual(comp._rounding_allowance(2, 0.10), 0.005)
+        self.assertEqual(comp._rounding_allowance(1, 0.10), 0.05)
+        self.assertEqual(comp._rounding_allowance(0, 0.10), 0.10)
+
+
+class PluralTests(unittest.TestCase):
+    """Appending "s" covers neither "people" nor "buses", and person is the class that matters."""
+
+    def test_the_irregular_plural_of_an_absent_class_is_rejected(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("Two people are standing ahead.", [])
+        self.assertIn("RG_OBJECT_REFERENCE_INVALID",
+                      check(cand, fact_packet, prompt_packet)[0])
+
+    def test_a_sibilant_class_pluralises_with_es(self):
+        self.assertIn("buses", comp._surface_forms("bus"))
+        self.assertNotIn("buss", comp._surface_forms("bus"))
+
+    def test_person_and_people_are_both_forms(self):
+        self.assertEqual(comp._surface_forms("person"), {"person", "people"})
+
+    def test_a_present_class_may_be_named_in_either_form(self):
+        fact_packet, prompt_packet = make_event(objects=chair_object())
+        for text in ("A chair sits 1.62 metres to the left.",
+                     "Chairs are visible 1.62 metres to the left."):
+            with self.subTest(caption=text):
+                cand = candidate(text, [{"fact_id": "object:3",
+                                         "measurement_id": "m:object:3:distance",
+                                         "stated_value": 1.62}])
+                self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
+
+
 class VisualLabelTests(unittest.TestCase):
     """A visual label is released as prose, so it is screened as prose.
 
@@ -211,6 +308,16 @@ class VisualLabelTests(unittest.TestCase):
                          [self.label("cardboard box")])
         self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
 
+    def test_a_forbidden_class_inside_a_longer_label_is_rejected(self):
+        """Compared by equality, the label check disagreed with the caption check about the same
+        prohibition: "chair" was refused and "chair near door" was not."""
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("The way ahead narrows to 1.74 metres.",
+                         [sector_assertion("centre", 1.74)],
+                         [self.label("chair near door")])
+        self.assertIn("RG_OBJECT_REFERENCE_INVALID",
+                      check(cand, fact_packet, prompt_packet)[0])
+
 
 class ReferenceTests(unittest.TestCase):
     def test_an_unexposed_fact_is_rejected(self):
@@ -244,11 +351,32 @@ class CaptionNumberTests(unittest.TestCase):
         # world, and rejecting the caption for it would inflate the fallback rate.
         self.assertEqual(comp._caption_numbers("Shadows are visible, visual:1."), [])
 
+    def tokens(self, caption):
+        return [item[0] for item in comp._caption_numbers(caption)]
+
     def test_a_stated_distance_is_read(self):
-        self.assertEqual(comp._caption_numbers("Ahead is 1.74 metres."), ["1.74"])
+        self.assertEqual(comp._caption_numbers("Ahead is 1.74 metres."), [("1.74", 1.74, 2)])
 
     def test_a_bare_integer_is_read(self):
-        self.assertEqual(comp._caption_numbers("There are 3 metres of room."), ["3"])
+        self.assertEqual(comp._caption_numbers("There are 3 metres of room."), [("3", 3.0, 0)])
+
+    def test_a_value_written_without_its_leading_zero_is_read_as_a_fraction(self):
+        """Read as 74 rather than 0.74, the token could never match its own declaration."""
+        self.assertEqual(comp._caption_numbers("The gap is .74 metres."), [(".74", 0.74, 2)])
+
+    def test_a_distance_written_as_a_word_is_read(self):
+        self.assertEqual(comp._caption_numbers("Roughly five metres ahead."),
+                         [("five", 5.0, 0)])
+
+    def test_a_word_number_without_a_unit_is_not_a_measurement(self):
+        """"one" is an ordinary English word, and treating every instance as a stated distance
+        would reject a caption for saying nobody is present."""
+        self.assertEqual(self.tokens("No one is ahead, and one of the chairs is clear."), [])
+
+    def test_the_precision_written_is_carried(self):
+        # It decides how far the written number may sit from the value it declares.
+        self.assertEqual([item[2] for item in comp._caption_numbers("1.7 and 1.74 and 2")],
+                         [1, 2, 0])
 
 
 class ReleaseTests(unittest.TestCase):
@@ -257,6 +385,34 @@ class ReleaseTests(unittest.TestCase):
             fact_packet, prompt_packet, release_id="release_1", candidate=cand,
             scored_assertions=scored, failure_codes=errors,
         )
+
+    def test_one_measurement_stated_twice_yields_a_conformant_release(self):
+        """The release schema requires unique substitutions and the builder did not deduplicate.
+
+        A caption may legitimately state one measurement twice, so the runtime could emit a release
+        that violated its own frozen contract. Nothing detected it because no fixture and no test
+        declared the same measurement more than once.
+        """
+        try:
+            from jsonschema import Draft7Validator
+        except ImportError:  # pragma: no cover - only where the dependency is absent
+            self.skipTest("jsonschema is not installed")
+        fact_packet, prompt_packet = make_event()
+        cand = candidate(
+            "The way ahead narrows to 1.74 metres, still 1.74 metres at the centre.",
+            [sector_assertion("centre", 1.74), sector_assertion("centre", 1.74)],
+        )
+        errors, scored = check(cand, fact_packet, prompt_packet)
+        self.assertEqual(errors, [])
+        release = self.build(cand, errors, scored, fact_packet, prompt_packet)
+        substitutions = release["evidence"]["measurement_substitutions"]
+        self.assertEqual(len(substitutions), 1)
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "schemas" / "hdsg.release.v2.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual([], [error.message for error in
+                              Draft7Validator(schema).iter_errors(release)])
 
     def test_an_accepted_caption_becomes_the_reason_text(self):
         fact_packet, prompt_packet = make_event()
