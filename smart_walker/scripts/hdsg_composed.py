@@ -18,7 +18,11 @@ candidate violating any of them is rejected and the deterministic fallback is re
 3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. This
    covers a distance written in words as well as one written in digits: scanning only for digits
    left "roughly five metres" unchecked against a measured 1.74 m, which is the failure mode the
-   property exists to exclude.
+   property exists to exclude. The word vocabulary runs from zero to twenty, with or without a
+   trailing half, which spans the distances a walker's depth camera reports; a compound above that,
+   "one hundred metres", is outside it. An unquantified phrase such as "a few metres" is a
+   qualitative assertion rather than a number, and falls under the open decision recorded in
+   HDSG_VERIFIED_GENERATION_POLICY.md section 7.2.
 4. No detector class absent from the Fact Packet can be named, in any of its written forms, which
    prevents the object hallucination Chapter 2 section 2.7.1 documents rather than reducing its
    rate. Plural forms are enumerated rather than guessed by suffix, since a suffix misses "people"
@@ -81,11 +85,18 @@ _DISTANCE_UNIT = r"(?:metres?|meters?|centimetres?|centimeters?|cm|mm)"
 # A word number counts as a stated distance only when a unit follows it, which is what separates
 # "two metres" from "no one ahead" and "one of the chairs". A bare digit needs no such test, because
 # a digit in a navigation caption is a measurement and an ordinary English word is not.
+#
+# The trailing half is part of the value, not decoration. Admitting "and a half" into the lookahead
+# while valuing the phrase at the bare word would have released "one and a half metres" against a
+# measurement of 1.00 with the half unaccounted for.
 _WORD_NUMBER_RE = re.compile(
-    r"\b(" + "|".join(_WORD_NUMBER_VALUES) + r")\b"
-    r"(?=\s+(?:and\s+a\s+half\s+)?" + _DISTANCE_UNIT + r"\b)",
+    r"\b(?P<word>" + "|".join(_WORD_NUMBER_VALUES) + r")\b(?P<half>\s+and\s+a\s+half)?"
+    r"(?=\s+" + _DISTANCE_UNIT + r"\b)",
     re.IGNORECASE,
 )
+
+# "half a metre" states a distance without any number word before it.
+_BARE_HALF_RE = re.compile(r"\bhalf\s+(?:a|an)\s+(?=" + _DISTANCE_UNIT + r"\b)", re.IGNORECASE)
 
 
 def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
@@ -99,65 +110,69 @@ def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
     return value, []
 
 
-def _declared_numbers(assertions: Sequence[Mapping[str, Any]]) -> list[float]:
-    values: list[float] = []
-    for item in assertions:
-        raw = item.get("stated_value")
-        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            values.append(float(raw))
-    return values
-
-
-def _caption_numbers(caption: str) -> list[tuple[str, float, int]]:
+def _caption_numbers(caption: str) -> list[tuple[str, float]]:
     """Returns the numbers a caption states as measurements, in digits or in words.
 
-    Each entry is the text as written, its value, and the number of decimal places it was written
-    to. The precision is carried because it decides how far the written number may sit from the
-    value it declares: "1.7" is a faithful rendering of 1.74 and "2" is not.
+    Each entry is the text as written and the value it states, so a caller can report the token
+    that failed rather than only the value behind it.
     """
-    found: list[tuple[str, float, int]] = []
+    found: list[tuple[str, float]] = []
     for match in CAPTION_NUMBER_RE.finditer(caption):
         start = match.start()
         if start > 0 and _NON_MEASUREMENT_PREFIX_RE.match(caption[start - 1]):
             continue
-        token = match.group(0)
-        decimals = len(token.partition(".")[2])
-        found.append((token, float(token), decimals))
+        found.append((match.group(0), float(match.group(0))))
     for match in _WORD_NUMBER_RE.finditer(caption):
-        token = match.group(1)
-        found.append((token, _WORD_NUMBER_VALUES[token.lower()], 0))
+        value = _WORD_NUMBER_VALUES[match.group("word").lower()]
+        found.append((match.group(0), value + (0.5 if match.group("half") else 0.0)))
+    for match in _BARE_HALF_RE.finditer(caption):
+        found.append((match.group(0).strip(), 0.5))
     return found
 
 
-def _rounding_allowance(decimals: int, value_tolerance_m: float) -> float:
-    """How far a written number may sit from the value it declares, given how it was written.
+def grounding_values(assertions: Sequence[Mapping[str, Any]],
+                     fact_packet: Mapping[str, Any]) -> list[float]:
+    """Returns the measured values behind a candidate's declarations.
 
-    A caption rounds, and the design intends it to: the value tolerance exists so that "1.7" passes
-    against a measured 1.74. Matching the written number to the declaration within a fixed hundredth
-    of a metre contradicted that, and rejected the caption the prompt asks for.
-
-    The allowance is half a unit of the last written place, so one decimal admits 0.05 and two admit
-    0.005. It is capped at the value tolerance, because a whole number written for 1.74 is not a
-    rounding the reader can discount: "2 metres" overstates the clearance by more than the gate
-    allows a declaration to be wrong, and the overstatement is the direction that matters.
+    The measured value rather than the declared one, because that is what the caption's prose is
+    checked against.
     """
-    return min(max(0.005, 0.5 * (10.0 ** -decimals)), float(value_tolerance_m))
+    values: list[float] = []
+    for item in assertions:
+        if not isinstance(item, Mapping):
+            continue
+        measurement_id = item.get("measurement_id")
+        if not measurement_id:
+            continue
+        measured = measured_value(fact_packet, str(measurement_id))
+        if measured is not None:
+            values.append(float(measured))
+    return values
 
 
 def undeclared_numbers(caption: str, assertions: Sequence[Mapping[str, Any]],
+                       fact_packet: Mapping[str, Any],
                        value_tolerance_m: float = DEFAULT_VALUE_TOLERANCE_M) -> list[str]:
-    """Returns the numbers a caption states that no declaration accounts for.
+    """Returns the numbers a caption states that no declared measurement accounts for.
+
+    **The comparison is against the measurement, not against the declared value.** Checking the
+    prose against the declaration and the declaration against the measurement lets the two
+    allowances stack: a caption reading "2 metres" could declare 1.95 and be measured at 1.85, pass
+    both checks, and put a number on the display 0.15 m from the truth under a tolerance of 0.10.
+    Comparing the written number directly to what was measured bounds the error the reader actually
+    sees, which is the property the module claims.
+
+    It also removes any need to reason about how the number was written. A caption may round as
+    freely as it likes, because "1.7" for a measured 1.74 is inside the tolerance and "2" is not.
 
     Exposed so an analysis of an archived run can report which numbers went undeclared, rather than
     only that some did. The release records the reason code; this recovers the token behind it.
     """
-    declared = _declared_numbers([item for item in assertions if isinstance(item, Mapping)])
-    missing: list[str] = []
-    for token, value, decimals in _caption_numbers(caption):
-        allowance = _rounding_allowance(decimals, value_tolerance_m)
-        if not any(abs(value - item) <= allowance for item in declared):
-            missing.append(token)
-    return missing
+    grounded = grounding_values(assertions, fact_packet)
+    return [
+        token for token, value in _caption_numbers(caption)
+        if not any(abs(value - measured) <= float(value_tolerance_m) for measured in grounded)
+    ]
 
 
 def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optional[float]:
@@ -257,14 +272,20 @@ def validate_caption_candidate(
     prompt_packet: Mapping[str, Any],
     fact_packet: Mapping[str, Any],
     *,
-    detector_classes: Iterable[str] = (),
+    detector_classes: Iterable[str],
     value_tolerance_m: float = DEFAULT_VALUE_TOLERANCE_M,
 ) -> tuple[list[str], list[dict]]:
     """Checks a composed candidate and returns its reason codes and scored assertions.
 
-    The scored assertions are returned whether or not the candidate is accepted, because the
-    disagreement between a declared value and its measurement is the measurement this design
-    exists to produce and is wanted for a rejected candidate as much as an accepted one.
+    Every declaration appears in the scored list, including one the schema check refused, so the
+    count of what the model declared is the count of what it declared. The scored assertions are
+    returned whether or not the candidate is accepted, because the disagreement between a declared
+    value and its measurement is the measurement this design exists to produce and is wanted for a
+    rejected candidate as much as an accepted one.
+
+    `detector_classes` carries no default. An empty vocabulary turns the object check into a
+    no-operation, and a property that holds by construction must not be able to switch itself off
+    because a caller left an argument out.
     """
     errors: list[str] = []
     scored: list[dict] = []
@@ -313,12 +334,15 @@ def validate_caption_candidate(
         if not isinstance(item, Mapping) \
                 or set(item) != {"fact_id", "measurement_id", "stated_value"}:
             errors.append("RG_SCHEMA_FAILURE")
+            scored.append({"index": index, "outcome": "MALFORMED"})
             continue
         fact_id = item.get("fact_id")
         measurement_id = item.get("measurement_id")
         stated = item.get("stated_value")
         if not isinstance(stated, (int, float)) or isinstance(stated, bool):
             errors.append("RG_SCHEMA_FAILURE")
+            scored.append({"index": index, "fact_id": fact_id,
+                           "measurement_id": measurement_id, "outcome": "MALFORMED"})
             continue
         entry: dict[str, Any] = {
             "index": index, "fact_id": fact_id, "measurement_id": measurement_id,
@@ -356,7 +380,7 @@ def validate_caption_candidate(
     # declarations. RG_DIRECT_NUMBER_DETECTED already means a number reached the text without
     # provenance, which is exactly what an undeclared number is under this design, so reusing it
     # keeps the reason-code enumeration unchanged.
-    if undeclared_numbers(caption, assertions, value_tolerance_m):
+    if undeclared_numbers(caption, assertions, fact_packet, value_tolerance_m):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     seen_visual_ids: set[str] = set()

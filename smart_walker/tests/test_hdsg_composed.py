@@ -196,37 +196,99 @@ class SpelledOutNumberTests(unittest.TestCase):
 
     def test_the_undeclared_token_can_be_recovered_for_reporting(self):
         """Chapter 5 reports a rate, and a rate without its instances cannot be checked."""
+        fact_packet, _ = make_event()
         self.assertEqual(
             comp.undeclared_numbers("Roughly five metres ahead, and 1.74 at the centre.",
-                                    [sector_assertion("centre", 1.74)]),
+                                    [sector_assertion("centre", 1.74)], fact_packet),
             ["five"],
         )
 
 
-class RoundingTests(unittest.TestCase):
-    """The value tolerance exists so a caption may round, and the prose check must agree with it."""
+class DeclarationCountTests(unittest.TestCase):
+    def test_a_malformed_declaration_still_appears_in_the_scored_list(self):
+        """The summary reports what the model declared, so it must count what the model declared.
 
-    def test_one_decimal_may_round_its_declaration(self):
-        # Matching within a fixed hundredth rejected the caption the prompt asks for: the tolerance
-        # comment cites "1.7" for 1.74 as the case it exists to admit.
+        A declaration the schema check refused never reached the list, so an event where the model
+        declared two and mangled one was archived as having declared one. Chapter 5 reads that
+        count.
+        """
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("Ahead is 1.74 metres.",
+                         [sector_assertion("centre", 1.74), {"fact_id": "sector:left"}])
+        errors, scored = check(cand, fact_packet, prompt_packet)
+        self.assertIn("RG_SCHEMA_FAILURE", errors)
+        self.assertEqual(comp.assertion_summary(scored)["declared"], 2)
+        self.assertEqual([item["outcome"] for item in scored], ["AGREES", "MALFORMED"])
+
+    def test_a_malformed_declaration_contributes_no_substitution(self):
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("Ahead is 1.74 metres.",
+                         [sector_assertion("centre", 1.74), {"fact_id": "sector:left"}])
+        _, scored = check(cand, fact_packet, prompt_packet)
+        release = comp.build_composed_release(
+            fact_packet, prompt_packet, release_id="release_1", candidate=cand,
+            scored_assertions=scored, failure_codes=[],
+        )
+        self.assertEqual(len(release["evidence"]["measurement_substitutions"]), 1)
+
+    def test_the_detector_vocabulary_cannot_be_left_out(self):
+        """An empty vocabulary makes the object check a no-operation.
+
+        A property that holds by construction must not switch itself off because a caller omitted
+        an argument, so the parameter carries no default.
+        """
+        fact_packet, prompt_packet = make_event()
+        cand = candidate("A person stands 1.74 metres ahead.", [sector_assertion("centre", 1.74)])
+        with self.assertRaises(TypeError):
+            comp.validate_caption_candidate(cand, prompt_packet, fact_packet)
+
+
+class WrittenNumberAgreementTests(unittest.TestCase):
+    """The number the reader sees is compared with the measurement, not with the declaration.
+
+    Checking prose against declaration and declaration against measurement lets the two allowances
+    stack, so a caption could put a number on the display further from the truth than the tolerance
+    permits while passing both checks. Comparing the written number directly to what was measured
+    bounds the error the reader actually sees, which is the property the module claims.
+    """
+
+    def test_a_caption_may_round(self):
         fact_packet, prompt_packet = make_event()
         cand = candidate("The way ahead narrows to 1.7 metres.",
                          [sector_assertion("centre", 1.74)])
         self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
 
-    def test_a_whole_number_may_not(self):
-        """2 for 1.74 overstates the clearance by more than a declaration is allowed to be wrong,
-        and overstating clearance is the direction that walks someone into what is not there."""
+    def test_a_caption_may_not_round_past_the_tolerance(self):
+        """2 for 1.74 overstates the clearance, and overstating it is the direction that walks
+        someone into what is not there."""
         fact_packet, prompt_packet = make_event()
         cand = candidate("The way ahead narrows to 2 metres.",
                          [sector_assertion("centre", 1.74)])
         self.assertIn("RG_DIRECT_NUMBER_DETECTED",
                       check(cand, fact_packet, prompt_packet)[0])
 
-    def test_the_allowance_is_capped_by_the_value_tolerance(self):
-        self.assertEqual(comp._rounding_allowance(2, 0.10), 0.005)
-        self.assertEqual(comp._rounding_allowance(1, 0.10), 0.05)
-        self.assertEqual(comp._rounding_allowance(0, 0.10), 0.10)
+    def test_the_two_allowances_do_not_stack(self):
+        """Each hop was within tolerance and the reader still saw a number 0.15 m from the truth."""
+        fact_packet, prompt_packet = make_event(depths=(3.13, 1.85, 1.16))
+        cand = candidate("The way ahead narrows to 2 metres.",
+                         [sector_assertion("centre", 1.95)])
+        errors, scored = check(cand, fact_packet, prompt_packet)
+        self.assertEqual(scored[0]["outcome"], "AGREES", "the declaration is inside the tolerance")
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED", errors, "the written number is not")
+
+    def test_a_written_number_inside_the_tolerance_is_accepted(self):
+        fact_packet, prompt_packet = make_event(depths=(3.13, 1.85, 1.16))
+        cand = candidate("The way ahead narrows to 1.9 metres.",
+                         [sector_assertion("centre", 1.85)])
+        self.assertEqual(check(cand, fact_packet, prompt_packet)[0], [])
+
+    def test_an_uncounted_half_is_rejected(self):
+        """Valued at the bare word, "one and a half metres" put the half on the display unchecked."""
+        fact_packet, prompt_packet = make_event(depths=(3.13, 1.00, 1.16))
+        cand = candidate("The way ahead narrows to one and a half metres.",
+                         [sector_assertion("centre", 1.00)])
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                      check(cand, fact_packet, prompt_packet)[0])
 
 
 class PluralTests(unittest.TestCase):
@@ -355,28 +417,36 @@ class CaptionNumberTests(unittest.TestCase):
         return [item[0] for item in comp._caption_numbers(caption)]
 
     def test_a_stated_distance_is_read(self):
-        self.assertEqual(comp._caption_numbers("Ahead is 1.74 metres."), [("1.74", 1.74, 2)])
+        self.assertEqual(comp._caption_numbers("Ahead is 1.74 metres."), [("1.74", 1.74)])
 
     def test_a_bare_integer_is_read(self):
-        self.assertEqual(comp._caption_numbers("There are 3 metres of room."), [("3", 3.0, 0)])
+        self.assertEqual(comp._caption_numbers("There are 3 metres of room."), [("3", 3.0)])
 
     def test_a_value_written_without_its_leading_zero_is_read_as_a_fraction(self):
-        """Read as 74 rather than 0.74, the token could never match its own declaration."""
-        self.assertEqual(comp._caption_numbers("The gap is .74 metres."), [(".74", 0.74, 2)])
+        """Read as 74 rather than 0.74, the token could never match its own measurement."""
+        self.assertEqual(comp._caption_numbers("The gap is .74 metres."), [(".74", 0.74)])
 
     def test_a_distance_written_as_a_word_is_read(self):
-        self.assertEqual(comp._caption_numbers("Roughly five metres ahead."),
-                         [("five", 5.0, 0)])
+        self.assertEqual(comp._caption_numbers("Roughly five metres ahead."), [("five", 5.0)])
+
+    def test_a_trailing_half_is_part_of_the_value(self):
+        """Admitted into the lookahead and then not counted, "one and a half metres" was
+        valued at 1.0, so the half reached the display unaccounted for."""
+        self.assertEqual(comp._caption_numbers("Only one and a half metres remain."),
+                         [("one and a half", 1.5)])
+
+    def test_a_bare_half_is_a_stated_distance(self):
+        self.assertEqual(comp._caption_numbers("Barely half a metre remains."),
+                         [("half a", 0.5)])
 
     def test_a_word_number_without_a_unit_is_not_a_measurement(self):
         """"one" is an ordinary English word, and treating every instance as a stated distance
         would reject a caption for saying nobody is present."""
         self.assertEqual(self.tokens("No one is ahead, and one of the chairs is clear."), [])
 
-    def test_the_precision_written_is_carried(self):
-        # It decides how far the written number may sit from the value it declares.
-        self.assertEqual([item[2] for item in comp._caption_numbers("1.7 and 1.74 and 2")],
-                         [1, 2, 0])
+    def test_every_written_number_is_returned_with_its_value(self):
+        self.assertEqual(comp._caption_numbers("1.7 and 1.74 and 2"),
+                         [("1.7", 1.7), ("1.74", 1.74), ("2", 2.0)])
 
 
 class ReleaseTests(unittest.TestCase):

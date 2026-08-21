@@ -772,6 +772,15 @@ def main():
     # impossible rather than infrequent. A word outside this vocabulary is ordinary language and is
     # not policed.
     detector_classes = [str(name) for name in (getattr(model, "names", None) or {}).values()]
+    if not detector_classes:
+        # An empty vocabulary makes the object check a no-operation, so every class becomes
+        # nameable and the property stops holding without anything failing. Treated as a startup
+        # failure for the same reason a missing grammar is: silently bypassing the mechanism the
+        # architectural claim rests on is worse than not running.
+        raise RuntimeError(
+            "The detector reported no class vocabulary, so a caption could name any object. "
+            f"Check the weights given by --det_model: {args.det_model}."
+        )
     print(f"[hdsg] detector vocabulary: {len(detector_classes)} classes")
     use_cuda = bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
     if use_cuda:
