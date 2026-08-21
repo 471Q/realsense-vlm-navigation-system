@@ -14,21 +14,30 @@ numbers with measured ones and searches the caption for tokens that must not app
 candidate violating any of them is rejected and the deterministic fallback is released instead:
 
 1. The caption cannot issue or alter an instruction, so the action the user acts on is unaffected.
-2. Every number reaching the display is a measured value stated exactly, at the precision the
-   deterministic renderer uses. There is no tolerance, so the same sensor reading appears the same
-   way whether the gate accepted a caption or fell back.
+2. Every number reaching the display is a measured value written character for character as the
+   deterministic renderer would display it. There is no tolerance and no alternative spelling, so
+   one sensor reading reaches the user in one form whether the gate accepted a caption or fell
+   back. A measurement of 2.00 is written "2.00"; "2 metres" and "two metres" are rejected.
 3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. This
    covers a distance written in words as well as one written in digits: scanning only for digits
    left "roughly five metres" unchecked against a measured 1.74 m, which is the failure mode the
-   property exists to exclude. The word vocabulary runs from zero to twenty, with or without a
-   trailing half, which spans the distances a walker's depth camera reports; a compound above that,
-   "one hundred metres", is outside it. An unquantified phrase such as "a few metres" is a
-   qualitative assertion rather than a number, and falls under the open decision recorded in
+   property exists to exclude. An unquantified phrase such as "a few metres" is a qualitative
+   assertion rather than a number, and falls under the open decision recorded in
    HDSG_VERIFIED_GENERATION_POLICY.md section 7.2.
 4. No detector class absent from the Fact Packet can be named, in any of its written forms, which
    prevents the object hallucination Chapter 2 section 2.7.1 documents rather than reducing its
    rate. Plural forms are enumerated rather than guessed by suffix, since a suffix misses "people"
    and person is the class a walker is most often wrong about.
+
+**What these properties do not cover.** Each one constrains a value or a name in isolation. None
+constrains which fact a sentence attaches a value to, because the declaration states the attribution
+and the prose is not read. A caption that declares all three sector clearances correctly and then
+writes each one against the wrong sector passes every check: every number is measured, every number
+is declared, every declaration agrees with its measurement, and the sentence is false. Detecting it
+would require reading the prose to recover the attribution, which is the linguistic inference
+Chapter 3 excludes from the safety boundary. The attribution of prose to fact therefore remains
+measured rather than guaranteed, and `stated_in_caption` is recorded on each declaration so an
+analysis can at least separate a declaration the caption used from one it did not.
 
 What remains measured is whether the composed prose is otherwise a faithful account. That division
 is the one Chapter 1 paragraph 110 already states.
@@ -58,56 +67,73 @@ except ImportError:  # invoked as a plain script rather than as part of the pack
 
 CAPTION_SCHEMA = "hdsg.vlm_caption.v1"
 
-# A measurement is displayed as measured, and a caption states it as displayed. There is no
-# tolerance.
-#
-# An earlier design admitted a 0.10 m window so a caption could round, on the reasoning that "about
-# 1.7 metres" reads more naturally than "1.74 metres". Three things were wrong with it. The
-# deterministic renderer formats every measurement to MEASUREMENT_DECIMALS, so the same sensor
-# reading appeared as 1.74 on a fallback and could appear as 1.7 on an accepted caption, which made
-# what the user saw depend on whether the gate happened to accept. The window also composed with the
-# separate window between the caption and its declaration, so two checks inside 0.10 m each put a
-# number on the display 0.15 m from the truth. And a tolerance turns a categorical property into a
-# quantitative one for no gain: the model is handed the value, so restating it is transcription, not
-# estimation, and a transcription that alters the number is a defect however small the alteration.
-#
-# The deviation is still recorded on every declaration, so the size of a disagreement remains
-# reportable even though any disagreement rejects.
 MAX_CAPTION_CHARS = 400
 
+
+def _display_string(value: Any) -> str:
+    """Returns the digits a caption must use for a measurement, without the unit.
+
+    A caption states a measurement as the system displays it, character for character. There is no
+    tolerance, and there is no second acceptable spelling of the same value: a measurement of 1.74
+    is written "1.74", and nothing else is that measurement.
+
+    The comparison is made on the written token rather than on the number behind it, and that is
+    what makes the property hold. Parsing the token and comparing the resulting float admitted
+    three ways for a caption to display a figure the system never measured. "1.7449 metres" parsed
+    to a value that rounded onto 1.74 and was released with the invented precision intact. "2
+    metres" and "two metres" both parsed onto a measurement the deterministic renderer displays as
+    "2.00 metres", so the same sensor reading reached the user in a different form depending on
+    whether the gate happened to accept a caption. An earlier design went further and allowed a
+    0.10 m window as well, which composed with a second window between the caption and its
+    declaration and put numbers on the display 0.15 m from the truth.
+
+    The magnitude of a disagreement is still recorded on every declaration, so the size of an error
+    remains reportable although any error rejects.
+    """
+    return f"{float(value):.{hdsg.MEASUREMENT_DECIMALS}f}"
+
+
 # Any numeral in the caption, including a bare integer and a value written without its leading zero.
-# Every one must be declared, so that a value the model invented cannot reach the display by not
-# being mentioned in the declarations.
+# Every one must be a measurement written as displayed, so that a value the model invented cannot
+# reach the display by going unmentioned in the declarations.
 CAPTION_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 
-# A digit forming part of a word or an identifier rather than a measurement. "visual:1" is the case
-# that occurs in practice, when a model copies an observation identifier into the prose. Such a
-# digit is not a claim about the world, so treating it as an undeclared measurement would reject a
-# caption for a formatting slip rather than for a hallucination.
-_NON_MEASUREMENT_PREFIX_RE = re.compile(r"[A-Za-z:]")
-
-# A distance can be stated in words as readily as in digits, and "roughly five metres" is a claim
-# about the world in exactly the way "5.0 metres" is. Scanning only for digits left the whole class
-# undeclared and unchecked, so a spelled-out distance reached the display without ever meeting a
-# measurement.
-_WORD_NUMBER_VALUES = {
-    "zero": 0.0, "one": 1.0, "two": 2.0, "three": 3.0, "four": 4.0, "five": 5.0,
-    "six": 6.0, "seven": 7.0, "eight": 8.0, "nine": 9.0, "ten": 10.0,
-    "eleven": 11.0, "twelve": 12.0, "thirteen": 13.0, "fourteen": 14.0, "fifteen": 15.0,
-    "sixteen": 16.0, "seventeen": 17.0, "eighteen": 18.0, "nineteen": 19.0, "twenty": 20.0,
-}
+# The identifiers this system uses, which carry digits that are not claims about the world. A model
+# does copy one into the prose, and rejecting a caption for that would report a formatting slip as a
+# hallucination. Each is masked out before the caption is scanned.
+#
+# The previous exclusion tested the single character preceding a digit and skipped the digit when
+# that character was a letter or a colon. It therefore skipped every digit in "Clearance:9.99 metres
+# ahead" and in "about9.99 metres", so an invented distance passed the undeclared-number check
+# untouched and reached the display. The shapes are enumerated instead, so a colon the model wrote
+# for its own reasons grants no cover.
+_IDENTIFIER_RE = re.compile(
+    r"\b(?:m:)?(?:visual|object|sector):[A-Za-z0-9_]+(?::[a-z_]+)?\b", re.IGNORECASE
+)
 
 _DISTANCE_UNIT = r"(?:metres?|meters?|centimetres?|centimeters?|cm|mm)"
 
+# A distance can be stated in words as readily as in digits, and "roughly five metres" is a claim
+# about the world in exactly the way "5.00 metres" is. Scanning only for digits left the whole class
+# unchecked, so a spelled-out distance reached the display without ever meeting a measurement.
+#
+# No word is the displayed form of a measurement, so finding one of these is finding a violation.
+# The vocabulary exists to detect the phrase and to name it in the record, not to value it, which is
+# why the words carry no numeric values. The range runs to twenty because that spans the distances a
+# walker's depth camera reports; a compound above it, "one hundred metres", is outside the range and
+# outside what the sensor can produce.
+_WORD_NUMBERS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+    "nineteen", "twenty",
+)
+
 # A word number counts as a stated distance only when a unit follows it, which is what separates
 # "two metres" from "no one ahead" and "one of the chairs". A bare digit needs no such test, because
-# a digit in a navigation caption is a measurement and an ordinary English word is not.
-#
-# The trailing half is part of the value, not decoration. Admitting "and a half" into the lookahead
-# while valuing the phrase at the bare word would have released "one and a half metres" against a
-# measurement of 1.00 with the half unaccounted for.
+# a digit in a navigation caption is a measurement and an ordinary English word is not. A trailing
+# half is taken into the phrase so that the token reported is the whole of what was written.
 _WORD_NUMBER_RE = re.compile(
-    r"\b(?P<word>" + "|".join(_WORD_NUMBER_VALUES) + r")\b(?P<half>\s+and\s+a\s+half)?"
+    r"\b(?:" + "|".join(_WORD_NUMBERS) + r")\b(?:\s+and\s+a\s+half)?"
     r"(?=\s+" + _DISTANCE_UNIT + r"\b)",
     re.IGNORECASE,
 )
@@ -127,23 +153,17 @@ def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
     return value, []
 
 
-def _caption_numbers(caption: str) -> list[tuple[str, float]]:
-    """Returns the numbers a caption states as measurements, in digits or in words.
+def _caption_numbers(caption: str) -> list[str]:
+    """Returns every number a caption states, as written.
 
-    Each entry is the text as written and the value it states, so a caller can report the token
-    that failed rather than only the value behind it.
+    Identifiers are masked before the scan, so the digit inside "visual:1" is not read as a
+    measurement. A number written in words is returned as the phrase that was written, because the
+    token is what the check compares and reporting the phrase names what the caption actually said.
     """
-    found: list[tuple[str, float]] = []
-    for match in CAPTION_NUMBER_RE.finditer(caption):
-        start = match.start()
-        if start > 0 and _NON_MEASUREMENT_PREFIX_RE.match(caption[start - 1]):
-            continue
-        found.append((match.group(0), float(match.group(0))))
-    for match in _WORD_NUMBER_RE.finditer(caption):
-        value = _WORD_NUMBER_VALUES[match.group("word").lower()]
-        found.append((match.group(0), value + (0.5 if match.group("half") else 0.0)))
-    for match in _BARE_HALF_RE.finditer(caption):
-        found.append((match.group(0).strip(), 0.5))
+    masked = _IDENTIFIER_RE.sub(lambda match: "#" * len(match.group(0)), caption)
+    found = [match.group(0) for match in CAPTION_NUMBER_RE.finditer(masked)]
+    found.extend(match.group(0) for match in _WORD_NUMBER_RE.finditer(masked))
+    found.extend(match.group(0).strip() for match in _BARE_HALF_RE.finditer(masked))
     return found
 
 
@@ -167,26 +187,26 @@ def grounding_values(assertions: Sequence[Mapping[str, Any]],
     return values
 
 
+def declared_display_strings(assertions: Sequence[Mapping[str, Any]],
+                             fact_packet: Mapping[str, Any]) -> set[str]:
+    """Returns the digit strings a caption may use, one for each measurement it declared."""
+    return {_display_string(value) for value in grounding_values(assertions, fact_packet)}
+
+
 def undeclared_numbers(caption: str, assertions: Sequence[Mapping[str, Any]],
                        fact_packet: Mapping[str, Any]) -> list[str]:
     """Returns the numbers a caption states that no declared measurement accounts for.
 
-    **The comparison is against the measurement, not against the declared value**, and it is exact
-    at the precision the measurement is displayed to. Comparing the prose against the declaration
-    and the declaration against the measurement let two windows compose, so a caption could put a
-    number on the display further from the truth than either check permitted on its own.
-
-    Exact comparison also removes any need to reason about how the number was written. A caption
-    states the measurement or it does not.
+    **The comparison is against the measurement, not against the declared value.** Comparing the
+    prose against the declaration and the declaration against the measurement let two windows
+    compose, so a caption could put a number on the display further from the truth than either
+    check permitted on its own.
 
     Exposed so an analysis of an archived run can report which numbers went undeclared, rather than
     only that some did. The release records the reason code; this recovers the token behind it.
     """
-    grounded = {hdsg.display_value(value) for value in grounding_values(assertions, fact_packet)}
-    return [
-        token for token, value in _caption_numbers(caption)
-        if hdsg.display_value(value) not in grounded
-    ]
+    permitted = declared_display_strings(assertions, fact_packet)
+    return [token for token in _caption_numbers(caption) if token not in permitted]
 
 
 def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optional[float]:
@@ -222,6 +242,19 @@ _IRREGULAR_PLURALS = {
 
 # A class ending in a sibilant takes "es", so "bus" pluralises to "buses" and not to "buss".
 _SIBILANT_ENDINGS = ("s", "x", "z", "ch", "sh")
+
+# Singular nouns that end in "s". A visual label is rendered into the release with a verb, and
+# testing only for a trailing "s" produced "Possible bus are visible in the left".
+_SINGULAR_S_ENDINGS = ("ss", "us", "is", "as", "os")
+
+
+def _label_is_plural(label: str) -> bool:
+    """True when a visual observation's label takes a plural verb in the rendered sentence."""
+    words = str(label).split()
+    if not words:
+        return False
+    last = words[-1].lower()
+    return last.endswith("s") and not last.endswith(_SINGULAR_S_ENDINGS)
 
 
 def _surface_forms(term: str) -> set[str]:
@@ -350,6 +383,10 @@ def validate_caption_candidate(
     }
     permitted_fact_ids = {item["fact_id"] for item in prompt_packet["permitted_facts"]}
 
+    # Scanned once, then used both to score each declaration and to find prose numbers that no
+    # declaration accounts for.
+    caption_tokens = set(_caption_numbers(caption))
+
     for index, item in enumerate(assertions):
         if not isinstance(item, Mapping) \
                 or set(item) != {"fact_id", "measurement_id", "stated_value"}:
@@ -386,7 +423,15 @@ def validate_caption_candidate(
             scored.append(entry)
             continue
         entry["absolute_error_m"] = round(abs(float(stated) - float(measured)), 3)
-        entry["exact"] = hdsg.display_value(stated) == hdsg.display_value(measured)
+        # The declared value must be the measurement as displayed, not a value that rounds onto it.
+        # Rounding both sides scored a declaration of 1.7449 against a measurement of 1.74 as
+        # agreement, so a model altering a value below the display precision was counted as
+        # transcribing it faithfully and the agreement rate reported in Chapter 5 was inflated.
+        entry["exact"] = float(stated) == hdsg.display_value(measured)
+        # Whether the prose actually carries the value this declaration claims to account for. A
+        # declaration the caption never states widens the set of numbers the prose is allowed to
+        # contain without the model having written anything, so the two are recorded separately.
+        entry["stated_in_caption"] = _display_string(measured) in caption_tokens
         if not entry["exact"]:
             errors.append("RG_STATED_VALUE_MISMATCH")
             entry["outcome"] = "DISAGREES"
@@ -394,12 +439,13 @@ def validate_caption_candidate(
             entry["outcome"] = "AGREES"
         scored.append(entry)
 
-    # Every number the prose states must be declared, whether written in digits or in words.
-    # Without this an invented distance reaches the display simply by being omitted from the
-    # declarations. RG_DIRECT_NUMBER_DETECTED already means a number reached the text without
-    # provenance, which is exactly what an undeclared number is under this design, so reusing it
-    # keeps the reason-code enumeration unchanged.
-    if undeclared_numbers(caption, assertions, fact_packet):
+    # Every number the prose states must be a declared measurement written as the system displays
+    # it, whether the model wrote it in digits or in words. Without this an invented distance
+    # reaches the display simply by being omitted from the declarations.
+    # RG_DIRECT_NUMBER_DETECTED already means a number reached the text without provenance, which
+    # is exactly what an undeclared number is under this design, so reusing it keeps the
+    # reason-code enumeration unchanged.
+    if caption_tokens - declared_display_strings(assertions, fact_packet):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     seen_visual_ids: set[str] = set()
@@ -443,7 +489,7 @@ COMPOSED_SYSTEM_PROMPT = (
 
 _COMPOSED_INSTRUCTION = """Write one short caption describing the space around the walker, in your own words, for someone who cannot see it well.
 
-Use the measurements below. Write the distances into your sentences in metres, exactly as they are given. Do not round them, do not approximate them, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres.
+Use the measurements below. Write the distances into your sentences in metres, exactly as they are given, digit for digit. Do not round them, do not approximate them, do not drop a trailing zero, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres. A measurement given as 2.00 metres is written as 2.00 metres, not as 2 metres and not as two metres.
 
 Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id looks like sector:centre, measurement_id looks like m:sector:centre:clearance. For a clearance of 1.74 metres at the centre, the declaration is:
 
@@ -548,7 +594,7 @@ def build_composed_release(
     caption_text = str(candidate["caption"]).strip()
     visuals = [
         f"Possible {item['proposed_label'].replace('_', ' ')} "
-        f"{'are' if item['proposed_label'].endswith('s') else 'is'} "
+        f"{'are' if _label_is_plural(item['proposed_label']) else 'is'} "
         f"visible in the {item['bearing'].lower()}."
         for item in candidate.get("visual_observations", [])
     ]
@@ -590,8 +636,18 @@ def build_composed_release(
         for item in scored_assertions
         if item.get("measured_value") is not None and item.get("measurement_id")
     }
+    # The scene binding names the facts the released reason text rests on, so for an accepted
+    # caption it is the facts the caption declared. Inheriting it from the base release recorded the
+    # binding of the deterministic sentence that was composed and then discarded, which is a
+    # different set: a caption describing the centre was released carrying "sector:right" as its
+    # evidence. The action binding is left as the deterministic layer produced it, because the
+    # action really is the deterministic one.
+    scene_ids = list(dict.fromkeys(
+        str(item["fact_id"]) for item in scored_assertions if item.get("fact_id")
+    ))
     release["evidence"] = {
         **base["evidence"],
+        "scene_binding_fact_ids": scene_ids,
         "measurement_substitutions": list(substitutions.values()),
         "released_visual_observation_ids": [
             item["candidate_observation_id"]

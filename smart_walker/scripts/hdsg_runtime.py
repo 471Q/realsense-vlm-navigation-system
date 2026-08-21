@@ -70,7 +70,7 @@ REASON_CODE_ORDER = (
     "RG_OBJECT_REFERENCE_INVALID",
     # A declared value disagrees with the measurement it names. The central failure mode of the
     # composed-caption design and the one code it adds beyond the frozen v1 enumeration, which
-    # hdsg.schemas.v3 must therefore carry.
+    # hdsg.schemas.v4 must therefore carry.
     "RG_STATED_VALUE_MISMATCH",
     "RG_ACTION_LANGUAGE_DETECTED",
     "RG_DIRECT_NUMBER_DETECTED",
@@ -118,8 +118,19 @@ COMMENTARY_RE = re.compile(
     r"\b(?:model|prompt|system instruction|image|json|schema|candidate|validator|error|unable)\b",
     re.IGNORECASE,
 )
+# Reading out writing that appears in the scene is prohibited, so the check looks for a quoted span
+# and for the phrases that introduce one.
+#
+# A bare apostrophe was treated as a quotation mark. Under the templated design a caption was
+# assembled from approved clauses and never contained one, but a composed caption is ordinary
+# English prose, so "the room's centre is open" was rejected as visible text. That is a rejection for
+# a possessive rather than for a safety violation, and it would have inflated the measured rejection
+# rate for a reason unrelated to what the rate is reported to measure. A single-quoted span is still
+# caught, because its quotes are bounded by non-letters where a possessive apostrophe is not.
 VISIBLE_TEXT_RE = re.compile(
-    r"\b(?:the sign says|text says|written text|reads [\"'])|[\"']",
+    r"\b(?:the sign says|text says|written text|reads [\"'])"
+    r"|\""
+    r"|(?<![A-Za-z])'[^']{2,}'(?![A-Za-z])",
     re.IGNORECASE,
 )
 VISUAL_LABEL_PROHIBITED_RE = re.compile(

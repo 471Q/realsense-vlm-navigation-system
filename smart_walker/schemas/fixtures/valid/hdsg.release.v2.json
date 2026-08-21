@@ -29,7 +29,8 @@
       "sector:left"
     ],
     "scene_binding_fact_ids": [
-      "sector:right"
+      "sector:centre",
+      "sector:left"
     ],
     "measurement_substitutions": [
       {
