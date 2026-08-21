@@ -38,7 +38,9 @@ except ImportError:
 SOFTWARE_VERSION = "hdsg-v1"
 RULE_SET_VERSION = "rules-v1"
 CONFIGURATION_ID = "hdsg_config.v1"
-# hdsg.schemas.v4. The record contracts did not change at v4; the set lost one. The retired
+# hdsg.schemas.v5. The record contracts have not changed since v2. v4 removed the templated
+# candidate from the set and v5 revived RG_SUBJECT_MISMATCH for the composed attribution check, so
+# both are changes to what the set describes rather than to the shape of any record. The retired
 # templated candidate identifier survives in the release and prompt packet enumerations so that
 # archives recorded before 21 August 2026 still validate, and nothing here emits it.
 FACT_PACKET_SCHEMA = "hdsg.fact_packet.v2"

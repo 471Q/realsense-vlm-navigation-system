@@ -1,4 +1,4 @@
-# Frozen schema set: `hdsg.schemas.v4`
+# Frozen schema set: `hdsg.schemas.v5`
 
 The five record contracts the architecture is enforced through, their fixtures, the two grammars
 the runtime loads, the request catalogue holding every system prompt it sends, and a manifest
@@ -11,6 +11,23 @@ recording the SHA-256 of every one.
 | VLM Caption | `hdsg.vlm_caption.v1` | `hdsg.vlm_caption.v1.gbnf` |
 | Question Route | `hdsg.question_route.v1` | `hdsg.question_route.v1.gbnf` |
 | Authoritative Release Object | `hdsg.release.v2` | — |
+
+## What v5 changed and why
+
+The gate now reads the caption's prose for one purpose. A clause stating a number must name the
+fact that number was declared against, so a caption cannot declare all three sector clearances
+correctly and write each one against the wrong sector. That caption satisfied every other check
+and was false in every clause. Attribution is still taken from the declaration, so the reading can
+only refuse and never admit.
+
+`RG_SUBJECT_MISMATCH` carries the failure. It was retired with the templated contract a day
+earlier, where it meant a clause whose subject was not the fact the clause was chosen for. The
+enumeration is unchanged; only that member's description is corrected.
+
+v5 also settles how a measurement is compared. A caption states it as the deterministic renderer
+displays it, character for character, so `1.7449 metres` and `two metres` are both refused against
+a measurement displayed as `1.74 metres` and `2.00 metres` respectively. The full list is in the
+manifest notes.
 
 ## What v4 changed and why
 

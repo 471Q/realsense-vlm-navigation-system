@@ -1,8 +1,14 @@
 {
-  "schema_set_version": "hdsg.schemas.v4",
+  "schema_set_version": "hdsg.schemas.v5",
   "json_schema_draft": "draft-07",
-  "supersedes": "hdsg.schemas.v3",
+  "supersedes": "hdsg.schemas.v4",
   "notes": [
+    "The composed gate reads the caption's prose for one purpose: a clause stating a number must name the fact that number was declared against. Without it a caption could declare all three sector clearances correctly and write each one against the wrong sector, which satisfied every other check and was false in every clause. Attribution is still taken from the declaration, so the reading can only refuse and never admit, and Chapter 3 paragraph 740's objection to inferred attribution is not engaged.",
+    "RG_SUBJECT_MISMATCH is revived to carry it. The code was retired with the templated contract on 21 August 2026, where it meant a clause whose subject was not the fact the clause was chosen for. That is the same failure, read off a sentence the model composed rather than one the runtime wrote, so the enumeration is unchanged and only the description of that member is corrected. Six of the seven retired codes remain unreachable.",
+    "A caption states a measurement as the deterministic renderer displays it, character for character. The comparison had been made on the parsed value with both sides rounded, which accepted 1.7449 metres against a measured 1.74 and accepted both 2 metres and two metres against a measurement displayed as 2.00 metres. One sensor reading now reaches the user in one form whichever path the release took.",
+    "The identifier exclusion that lets a model copy visual:1 into the prose tested the single character before a digit. Clearance:9.99 metres therefore passed the undeclared-number check untouched and an invented distance reached the display. The identifier shapes are enumerated and masked instead.",
+    "An accepted caption records the facts it declared as its scene binding. It had inherited the binding of the deterministic sentence it replaces, so a caption describing the centre was released recording sector:right as its evidence.",
+    "VISIBLE_TEXT_RE no longer treats a bare apostrophe as a quotation mark. A templated caption was assembled from approved clauses and never carried a possessive; a composed caption is ordinary prose and does.",
     "The templated candidate contract is removed. Under it the runtime wrote a list of controlled sentences from a fixed predicate table and the model selected among them, so the released wording was the runtime's and the model's contribution was the choice between one approved synonym and another. hdsg.vlm_candidate.v1, its grammar, its two fixtures, validate_candidate, parse_candidate, prompt_packet_text and the approved-clause builder all go with it.",
     "The generative layer is now the composed contract alone. The model writes the caption in its own words with the measured values in the prose and declares each value it stated, and the gate compares every declaration against the Fact Packet.",
     "Three identifiers are retained in enumerations while nothing emits them: hdsg.vlm_candidate.v1 in expected_response_schema, constraint_id and candidate_schema. Records archived before 21 August 2026 carry them, and a frozen schema that cannot validate its own archive is of no use as evidence. approved_text_templates is retained in the prompt packet for the same reason and is optional.",
@@ -35,7 +41,7 @@
     {
       "record_schema": "hdsg.release.v2",
       "path": "hdsg.release.v2.schema.json",
-      "sha256": "a061bcd383eb424c1894f548443baeaa65a6524078ff0dfbe48ababaf798387e"
+      "sha256": "82b68e066fe64d24461d147fb267d7e9f5de9819ef002a358913ea6d057d049a"
     },
     {
       "record_schema": "hdsg.vlm_caption.v1",

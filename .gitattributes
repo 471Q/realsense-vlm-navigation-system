@@ -1,5 +1,5 @@
 # The frozen schema set is identified by the SHA-256 of each file's bytes, recorded in
-# smart_walker/schemas/schema-manifest.v4.json. Line-ending translation changes those bytes, so a
+# smart_walker/schemas/schema-manifest.v5.json. Line-ending translation changes those bytes, so a
 # checkout under core.autocrlf=true would write CRLF and every recorded digest would stop matching
 # on a clean clone, failing the conformance test for everyone except whoever generated the
 # manifest. These paths are therefore pinned to LF regardless of platform or local git settings.

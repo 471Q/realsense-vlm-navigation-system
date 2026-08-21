@@ -29,15 +29,25 @@ candidate violating any of them is rejected and the deterministic fallback is re
    rate. Plural forms are enumerated rather than guessed by suffix, since a suffix misses "people"
    and person is the class a walker is most often wrong about.
 
-**What these properties do not cover.** Each one constrains a value or a name in isolation. None
-constrains which fact a sentence attaches a value to, because the declaration states the attribution
-and the prose is not read. A caption that declares all three sector clearances correctly and then
-writes each one against the wrong sector passes every check: every number is measured, every number
-is declared, every declaration agrees with its measurement, and the sentence is false. Detecting it
-would require reading the prose to recover the attribution, which is the linguistic inference
-Chapter 3 excludes from the safety boundary. The attribution of prose to fact therefore remains
-measured rather than guaranteed, and `stated_in_caption` is recorded on each declaration so an
-analysis can at least separate a declaration the caption used from one it did not.
+**The fifth property, which is a filter rather than a construction.** The four above each constrain
+a value or a name in isolation, and none of them constrains which fact a sentence attaches a value
+to. A caption declaring all three sector clearances correctly and then writing each one against the
+wrong sector satisfied every one of them: every number measured, every number declared, every
+declaration in agreement, and all three statements false. The fifth check therefore reads the prose,
+and a clause stating a number must name the fact that number was declared against.
+
+The reading is mechanical and its result is used in one direction only. The caption is cut into
+clauses on punctuation and coordinating words, and each clause carrying a number must contain one of
+the words that denote the declared fact, which for a sector is a closed list of six and for an
+object is its detector label. Attribution is still taken from the declaration, so nothing is
+accepted on the strength of a linguistic reading; the reading can only refuse. Chapter 3 paragraph
+740 objects to attribution being inferred, and it is not: the inference here subtracts from what the
+declarations already permit.
+
+What the filter does not reach is recorded rather than hidden. A negated clause naming its fact
+passes, a falsehood carrying no number is untouched, and the construction nobody anticipated is by
+definition not covered. The residual rate is measured by hand against a sample of accepted captions,
+because only a reader finds what the check does not model.
 
 What remains measured is whether the composed prose is otherwise a faithful account. That division
 is the one Chapter 1 paragraph 110 already states.
@@ -228,6 +238,85 @@ def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optio
             if item.get("fact_id") == f"object:{token}":
                 return item.get("distance_m")
     return None
+
+
+# The words that denote each sector, as a closed list rather than as a similarity test. "ahead" and
+# its variants are included because a caption describing the space in front of the walker is more
+# likely to say "ahead" than "centre", and omitting them would refuse ordinary phrasing.
+SECTOR_TERMS = {
+    "sector:left": ("left",),
+    "sector:centre": ("centre", "center", "ahead", "in front", "straight ahead", "forward"),
+    "sector:right": ("right",),
+}
+
+# The caption is cut here before each clause is checked for the fact it names. The boundaries are
+# punctuation and coordinating words, which is tokenisation rather than parsing.
+#
+# A full stop or comma between two digits is not a boundary. Splitting on every full stop cut "1.74"
+# into "1" and "74", which left no clause carrying a recognisable number and silently passed every
+# caption through the check.
+_CLAUSE_SPLIT_RE = re.compile(
+    r"(?<!\d)[,;:.](?!\d)|\band\b|\bbut\b|\bwhile\b|\bwhereas\b|\bwhich\b|\bthan\b",
+    re.IGNORECASE,
+)
+
+
+def _fact_terms(fact_id: str, fact_packet: Mapping[str, Any]) -> tuple[str, ...]:
+    """Returns the words a clause may use to name one fact."""
+    if fact_id in SECTOR_TERMS:
+        return SECTOR_TERMS[fact_id]
+    for item in fact_packet.get("objects", []):
+        if item.get("fact_id") == fact_id:
+            label = item.get("canonical_label") or item.get("raw_label")
+            return (str(label).lower(),) if label else ()
+    return ()
+
+
+def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
+                         fact_packet: Mapping[str, Any]) -> list[dict]:
+    """Returns the clauses that state a number without naming the fact it was declared against.
+
+    A number is traced to its fact through the declarations, not through the prose: the clause is
+    searched only for the words that denote the fact the model itself said the number came from. A
+    clause naming no candidate fact cannot be attributed and is reported, and so is a clause naming
+    a second sector alongside the one declared, because the reader cannot tell which of the two the
+    number belongs to.
+
+    Reported rather than raised, so an analysis of an archived run can quote the clause that failed.
+    """
+    owners: dict[str, list[str]] = {}
+    for entry in scored:
+        measured = entry.get("measured_value")
+        if measured is None or not entry.get("fact_id"):
+            continue
+        owners.setdefault(_display_string(measured), []).append(str(entry["fact_id"]))
+
+    failures: list[dict] = []
+    for clause in _CLAUSE_SPLIT_RE.split(caption):
+        lowered = clause.lower()
+        for token in _caption_numbers(clause):
+            candidates = owners.get(token, [])
+            if not candidates:
+                continue  # an undeclared number, already refused by the check above
+            named = [
+                fact_id for fact_id in candidates
+                if any(term and re.search(rf"\b{re.escape(term)}\b", lowered)
+                       for term in _fact_terms(fact_id, fact_packet))
+            ]
+            if not named:
+                failures.append({"clause": clause.strip(), "number": token,
+                                 "declared_for": candidates, "reason": "FACT_NOT_NAMED"})
+                continue
+            competing = sorted(
+                other for other, terms in SECTOR_TERMS.items()
+                if other not in named
+                and any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in terms)
+            )
+            if named[0] in SECTOR_TERMS and competing:
+                failures.append({"clause": clause.strip(), "number": token,
+                                 "declared_for": named, "reason": "AMBIGUOUS",
+                                 "competing": competing})
+    return failures
 
 
 # Plurals that appending "s" does not produce. "person" is the one that matters: it is the class a
@@ -448,6 +537,17 @@ def validate_caption_candidate(
     if caption_tokens - declared_display_strings(assertions, fact_packet):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
+    # A number must sit in a clause that names the fact it was declared against. Without this a
+    # caption could declare all three sector clearances correctly and write each one against the
+    # wrong sector, which every other check passes and which is false in every clause.
+    #
+    # RG_SUBJECT_MISMATCH is the code for it. Under the templated contract it meant a clause whose
+    # subject was not the fact the clause was chosen for, which is the same failure read off a
+    # sentence the runtime had written rather than one the model composed. Reviving it keeps the
+    # enumeration unchanged and names the failure accurately.
+    if attribution_failures(caption, scored, fact_packet):
+        errors.append("RG_SUBJECT_MISMATCH")
+
     seen_visual_ids: set[str] = set()
     for visual in visuals:
         if not isinstance(visual, Mapping) \
@@ -490,6 +590,8 @@ COMPOSED_SYSTEM_PROMPT = (
 _COMPOSED_INSTRUCTION = """Write one short caption describing the space around the walker, in your own words, for someone who cannot see it well.
 
 Use the measurements below. Write the distances into your sentences in metres, exactly as they are given, digit for digit. Do not round them, do not approximate them, do not drop a trailing zero, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres. A measurement given as 2.00 metres is written as 2.00 metres, not as 2 metres and not as two metres.
+
+Keep each distance in the same clause as the thing it belongs to, and name that thing in words: write "the centre is clear for 1.74 metres", not "the centre is the widest, at 1.74 metres". A distance in a clause that does not name what it measures causes the caption to be discarded.
 
 Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id looks like sector:centre, measurement_id looks like m:sector:centre:clearance. For a clearance of 1.74 metres at the centre, the declaration is:
 
