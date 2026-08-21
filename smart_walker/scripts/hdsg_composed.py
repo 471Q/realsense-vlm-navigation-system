@@ -9,46 +9,74 @@ and deciding which of three sectors it refers to is linguistic inference, and Ch
 inference inside the safety boundary for that reason. The model states the attribution, so the
 comparison against the Fact Packet is exact.
 
-The prose is nonetheless read, once, by the attribution check described below, and the distinction
-matters. What the gate accepts rests on the declarations alone. Reading the prose can only add a
-refusal to a candidate the declarations had already permitted, never admit one they had not, so no
-released caption owes its release to a linguistic judgement.
+The prose is nonetheless read. It is scanned for instruction words, for commentary, for quoted text,
+for the names of absent detector classes, for the numbers it states, and for where it names each
+fact. What matters is not how often it is read but what a reading is permitted to do: every one of
+those scans can only add a refusal to a candidate the declarations had already permitted, and none
+can admit one they had not. No released caption owes its release to a linguistic judgement.
 
 **What is categorical here and what is measured.** Four properties hold by construction, because a
 candidate violating any of them is rejected and the deterministic fallback is released instead:
 
-1. The caption cannot issue or alter an instruction, so the action the user acts on is unaffected.
+1. The action the user acts on is produced by the deterministic layer and is not derived from the
+   caption, so no caption can alter it. The caption is separately screened against a fixed
+   vocabulary of instruction words, which lowers the chance of a caption reading as an instruction
+   without excluding it: a phrasing outside that vocabulary, such as "the wider side is the easier
+   one", is not caught. Only the first half of this property is categorical.
 2. Every number reaching the display is a measured value written character for character as the
    deterministic renderer would display it. There is no tolerance and no alternative spelling, so
    one sensor reading reaches the user in one form whether the gate accepted a caption or fell
    back. A measurement of 2.00 is written "2.00"; "2 metres" and "two metres" are rejected.
-3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. This
-   covers a distance written in words as well as one written in digits: scanning only for digits
-   left "roughly five metres" unchecked against a measured 1.74 m, which is the failure mode the
-   property exists to exclude. An unquantified phrase such as "a few metres" is a qualitative
-   assertion rather than a number, and falls under the open decision recorded in
-   HDSG_VERIFIED_GENERATION_POLICY.md section 7.2.
-4. No detector class absent from the Fact Packet can be named, in any of its written forms, which
-   prevents the object hallucination Chapter 2 section 2.7.1 documents rather than reducing its
-   rate. Plural forms are enumerated rather than guessed by suffix, since a suffix misses "people"
-   and person is the class a walker is most often wrong about.
+3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. Two
+   checks hold this between them. Every numeral must be a declared measurement written as
+   displayed, and every unit of length must carry a numeral immediately in front of it. The second
+   is what covers a distance written without digits, and it screens the unit rather than the
+   number because enumerating the ways English states a quantity does not terminate: a list of
+   twenty number words and six unit spellings let "two m", "a metre", "a two-metre gap", "two feet"
+   and "half of a metre" through undeclared. A hedged quantity such as "a few metres" is refused by
+   the same rule, which settles part of the qualitative-assertion question recorded in
+   HDSG_VERIFIED_GENERATION_POLICY.md section 7.2: a hedge attached to a unit is refused, while a
+   qualitative claim carrying no unit, "the left is the wider side", is untouched.
+4. No detector class absent from the Fact Packet can be named in its singular or its plural form,
+   which prevents the object hallucination Chapter 2 section 2.7.1 documents rather than reducing
+   its rate. Plurals are enumerated rather than guessed by suffix, since a suffix misses "people"
+   and person is the class a walker is most often wrong about. Those two forms are the whole of the
+   screen: a compound such as "armchair" carries no word boundary before the class name and is not
+   caught, so the property covers naming a class and not every way of alluding to one.
 
 **The fifth property, which is a filter rather than a construction.** The four above each constrain
 a value or a name in isolation, and none of them constrains which fact a sentence attaches a value
 to. A caption declaring all three sector clearances correctly and then writing each one against the
 wrong sector satisfied every one of them: every number measured, every number declared, every
 declaration in agreement, and all three statements false. The fifth check therefore reads the prose,
-and a clause stating a number must name the fact that number was declared against.
+and a number must stand nearer to the fact it was declared against than to any other.
 
-The reading is mechanical and its result is used in one direction only. The caption is cut into
-clauses on punctuation and coordinating words, and each clause carrying a number must contain one of
-the words that denote the declared fact, which for a sector is a closed list of six and for an
-object is its detector label. Attribution is still taken from the declaration, so nothing is
-accepted on the strength of a linguistic reading; the reading can only refuse. Chapter 3 paragraph
-740 objects to attribution being inferred, and it is not: the inference here subtracts from what the
-declarations already permit.
+The reading is mechanical and its result is used in one direction only. Every place the caption
+names a fact is located, with overlapping names resolved in favour of the longer, so that "right in
+front of the walker" names the centre rather than the right. Each number is then attributed to the
+nearest of those names lying in the number's own sentence. Three cases are refused: the nearest name
+is not a fact the number was declared against, two different facts are equally near, or the sentence
+names no fact at all. The vocabulary is closed, eleven words and phrases across the three sectors,
+and for an object it is the detector's label for it.
 
-What the filter does not reach is recorded rather than hidden. A negated clause naming its fact
+Confining the search to one sentence is what allows a caption of more than one sentence. Without it
+"The left is open for 3.13 metres. The right is tighter at 1.16 metres." put 3.13 exactly as far
+from "left" as from "right" and was refused as ambiguous on account of a word in the sentence after
+it.
+
+Nearness rather than clause membership, and the difference is not cosmetic. The first form of this
+check cut the caption on punctuation and coordinating words and required the fact to be named inside
+the same piece. It refused four of ten naturally worded truthful captions, because a subordinator is
+exactly where a subject stops being repeated: "The centre, which is 1.74 metres" leaves the number
+in a fragment carrying no subject, and so does every appositive. Distance to the nearest name does
+not depend on where a clause was judged to begin.
+
+Attribution is still taken from the declaration, so nothing is accepted on the strength of a
+linguistic reading; the reading can only refuse. Chapter 3 paragraph 740 objects to attribution
+being inferred, and it is not: the inference here subtracts from what the declarations already
+permit.
+
+What the filter does not reach is recorded rather than hidden. A negated sentence naming its fact
 passes, a falsehood carrying no number is untouched, and the construction nobody anticipated is by
 definition not covered. The residual rate is measured by hand against a sample of accepted captions,
 because only a reader finds what the check does not model.
@@ -79,9 +107,21 @@ except ImportError:  # invoked as a plain script rather than as part of the pack
     import hdsg_runtime as hdsg  # type: ignore
 
 
-CAPTION_SCHEMA = "hdsg.vlm_caption.v1"
+# Taken from the runtime rather than repeated. Written out here as a second literal, the two were
+# free to disagree, and an identifier the frozen schema set pins is the last thing that should have
+# two definitions.
+CAPTION_SCHEMA = hdsg.CAPTION_SCHEMA
 
+# Used when the profile states no limit of its own, which at present is always: no profile sets
+# max_text_chars. Read with an explicit test for absence rather than through `or`, so that a profile
+# setting a limit of zero is honoured instead of being silently replaced by this default.
 MAX_CAPTION_CHARS = 400
+
+
+def caption_char_limit(prompt_packet: Mapping[str, Any]) -> int:
+    """Returns the character limit a caption is held to."""
+    limit = prompt_packet["response_constraints"].get("max_text_chars")
+    return MAX_CAPTION_CHARS if limit is None else int(limit)
 
 
 def _display_string(value: Any) -> str:
@@ -125,35 +165,46 @@ _IDENTIFIER_RE = re.compile(
     r"\b(?:m:)?(?:visual|object|sector):[A-Za-z0-9_]+(?::[a-z_]+)?\b", re.IGNORECASE
 )
 
-_DISTANCE_UNIT = r"(?:metres?|meters?|centimetres?|centimeters?|cm|mm)"
-
-# A distance can be stated in words as readily as in digits, and "roughly five metres" is a claim
-# about the world in exactly the way "5.00 metres" is. Scanning only for digits left the whole class
-# unchecked, so a spelled-out distance reached the display without ever meeting a measurement.
-#
-# No word is the displayed form of a measurement, so finding one of these is finding a violation.
-# The vocabulary exists to detect the phrase and to name it in the record, not to value it, which is
-# why the words carry no numeric values. The range runs to twenty because that spans the distances a
-# walker's depth camera reports; a compound above it, "one hundred metres", is outside the range and
-# outside what the sensor can produce.
-_WORD_NUMBERS = (
-    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
-    "nineteen", "twenty",
-)
-
-# A word number counts as a stated distance only when a unit follows it, which is what separates
-# "two metres" from "no one ahead" and "one of the chairs". A bare digit needs no such test, because
-# a digit in a navigation caption is a measurement and an ordinary English word is not. A trailing
-# half is taken into the phrase so that the token reported is the whole of what was written.
-_WORD_NUMBER_RE = re.compile(
-    r"\b(?:" + "|".join(_WORD_NUMBERS) + r")\b(?:\s+and\s+a\s+half)?"
-    r"(?=\s+" + _DISTANCE_UNIT + r"\b)",
+# Every way of writing a unit of length. The abbreviations are admitted only where a digit or a
+# space precedes them, which is what keeps the "m" of "warm" and the "in" of "into" out.
+_DISTANCE_UNIT_RE = re.compile(
+    r"\b(?:metres?|meters?|centimetres?|centimeters?|millimetres?|millimeters?|kilometres?"
+    r"|kilometers?|feet|foot|inches|inch|yards?)\b"
+    r"|(?<=[0-9\s])(?:cm|mm|km|m)\b",
     re.IGNORECASE,
 )
 
-# "half a metre" states a distance without any number word before it.
-_BARE_HALF_RE = re.compile(r"\bhalf\s+(?:a|an)\s+(?=" + _DISTANCE_UNIT + r"\b)", re.IGNORECASE)
+# A numeral written immediately before a unit, allowing for the space or hyphen between them.
+_VALUE_BEFORE_UNIT_RE = re.compile(r"(?:\d+(?:\.\d+)?|\.\d+)[\s\-]*$")
+
+
+def unquantified_units(caption: str) -> list[str]:
+    """Returns each place the caption names a unit of length without a numeral before it.
+
+    **The units are screened, not the numbers.** An earlier design hunted for the numbers instead,
+    matching digits and a list of twenty number words followed by a list of unit spellings. A list
+    of spellings is always shorter than English, and five ways of stating a distance went through
+    the gate undetected and undeclared: "two m", because "m" was not in the unit list; "a metre",
+    because "a" was not in the number list; "a two-metre gap", because the pattern demanded a space;
+    "two feet", because the units were metric only; and "half of a metre", because the phrase did
+    not match the one spelling of a bare half that was anticipated. Extending the lists does not
+    close the class, since the next phrasing is not in them either.
+
+    Screening the unit inverts the problem. A distance is stated by naming a unit, so every unit in
+    the caption must carry a numeral immediately in front of it, and that numeral is then held to
+    the same exactness as any other. Anything else, a word, an article, a hedge or nothing at all,
+    is refused without needing to have been foreseen.
+
+    The offending text is returned rather than a count, so an analysis of an archived run can quote
+    what the model wrote.
+    """
+    masked = _mask_identifiers(caption)
+    found: list[str] = []
+    for match in _DISTANCE_UNIT_RE.finditer(masked):
+        if _VALUE_BEFORE_UNIT_RE.search(masked[:match.start()]):
+            continue
+        found.append(caption[max(0, match.start() - 20):match.end()].strip())
+    return found
 
 
 def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
@@ -173,18 +224,18 @@ def _mask_identifiers(caption: str) -> str:
 
 
 def _caption_number_spans(caption: str) -> list[tuple[int, int, str]]:
-    """Returns the position and text of every number a caption states.
+    """Returns the position and text of every numeral a caption states.
 
     Positions are offsets into the caption as given, which the attribution check needs in order to
     measure how far a number sits from the fact it names. Identifiers are masked before the scan,
     with the mask the same length as what it replaces, so the digit inside "visual:1" is not read as
     a measurement and every remaining offset is still an offset into the original string.
+
+    Numerals only. A distance written in words carries no numeral and is caught by
+    `unquantified_units`, which screens the unit rather than the number.
     """
     masked = _mask_identifiers(caption)
-    spans = [(m.start(), m.end(), m.group(0)) for m in CAPTION_NUMBER_RE.finditer(masked)]
-    spans += [(m.start(), m.end(), m.group(0)) for m in _WORD_NUMBER_RE.finditer(masked)]
-    spans += [(m.start(), m.end(), m.group(0).strip()) for m in _BARE_HALF_RE.finditer(masked)]
-    return sorted(spans)
+    return [(m.start(), m.end(), m.group(0)) for m in CAPTION_NUMBER_RE.finditer(masked)]
 
 
 def _caption_numbers(caption: str) -> list[str]:
@@ -518,7 +569,7 @@ def validate_caption_candidate(
         return hdsg._reason_sort(errors + ["RG_SCHEMA_FAILURE"]), scored
 
     constraints = prompt_packet["response_constraints"]
-    if len(caption) > (constraints.get("max_text_chars") or MAX_CAPTION_CHARS):
+    if len(caption) > caption_char_limit(prompt_packet):
         errors.append("RG_PROFILE_LIMIT_EXCEEDED")
     if len(visuals) > constraints["max_visual_observations"]:
         errors.append("RG_PROFILE_LIMIT_EXCEEDED")
@@ -611,6 +662,13 @@ def validate_caption_candidate(
     # a run would have recorded the code while the helper listing the offending tokens disagreed
     # about which they were.
     if undeclared_numbers(caption, assertions, fact_packet):
+        errors.append("RG_DIRECT_NUMBER_DETECTED")
+
+    # And every unit of length must carry a numeral in front of it. The check above sees numerals
+    # only, so a distance written without one, "two m", "a metre", "a two-metre gap", passed it
+    # untouched and reached the display undeclared. Screening the unit catches the class rather than
+    # the spellings of it. Same code: a distance with no provenance is what both checks find.
+    if unquantified_units(caption):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     # A number must sit in a clause that names the fact it was declared against. Without this a
@@ -729,7 +787,7 @@ def build_composed_prompt(prompt_packet: Mapping[str, Any], fact_packet: Mapping
         else "The visual_observations array must be empty."
     )
     return _COMPOSED_INSTRUCTION.format(
-        max_chars=constraints.get("max_text_chars") or MAX_CAPTION_CHARS,
+        max_chars=caption_char_limit(prompt_packet),
         visual_instruction=visual_instruction,
         facts=describe_permitted_facts(prompt_packet, fact_packet),
         fixed_instruction=fixed_instruction,

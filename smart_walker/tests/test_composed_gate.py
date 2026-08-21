@@ -91,6 +91,67 @@ class ExactValueTests(unittest.TestCase):
                                         [declares("centre", CENTRE)]))
 
 
+class UnitScreenTests(unittest.TestCase):
+    """Every unit of length must carry a numeral in front of it.
+
+    The numeral scan sees numerals only, so a distance written without one went through the gate
+    undeclared and unrecorded. Detection had been a list of twenty number words followed by a list
+    of unit spellings, and a list of spellings is always shorter than English: five phrasings passed
+    untouched. Screening the unit catches the class instead of enumerating its members, so a
+    phrasing nobody anticipated is refused rather than admitted.
+    """
+
+    def setUp(self):
+        self.packet, self.prompt = event()
+
+    def codes(self, text):
+        return gate(caption(text, [declares("centre", CENTRE)]), self.packet, self.prompt)[0]
+
+    def assertRefused(self, text):
+        self.assertEqual(["RG_DIRECT_NUMBER_DETECTED"], self.codes(text), msg=text)
+
+    def test_an_abbreviated_unit_without_a_numeral(self):
+        """"m" was not in the unit list, so "two m" was not a distance as far as the gate knew."""
+        self.assertRefused("The centre is clear for two m.")
+
+    def test_an_article_standing_in_for_one(self):
+        """"a" was not in the number word list."""
+        self.assertRefused("The centre is clear for a metre.")
+
+    def test_a_hyphenated_compound(self):
+        """The lookahead demanded a space between the number and its unit."""
+        self.assertRefused("There is a two-metre gap in the centre.")
+
+    def test_an_imperial_unit(self):
+        """The unit list was metric only, so an imperial distance was invisible to it."""
+        self.assertRefused("The centre is clear for two feet.")
+
+    def test_a_bare_half_phrased_differently(self):
+        """One spelling of a bare half was anticipated and this was not it."""
+        self.assertRefused("The centre is clear for half of a metre.")
+
+    def test_a_quantity_word_carrying_no_number(self):
+        self.assertRefused("The centre is clear for several centimetres.")
+
+    def test_a_hedged_word_number(self):
+        self.assertRefused("It is roughly five metres ahead.")
+
+    def test_a_second_unit_without_its_own_numeral(self):
+        """One correctly written distance does not license a second written without one."""
+        self.assertRefused("The centre is clear for 1.74 m and a bit more metres.")
+
+    def test_an_abbreviation_joined_to_its_numeral_is_accepted(self):
+        self.assertEqual([], self.codes("The centre is clear for 1.74m."))
+
+    def test_an_ordinary_word_containing_a_unit_is_not_a_unit(self):
+        """"warm" ends in m and "into" contains in. Admitting the abbreviations only after a digit
+        or a space is what keeps them out."""
+        self.assertEqual([], composed.unquantified_units("A warm room, walking into the centre."))
+
+    def test_prose_with_no_unit_at_all_is_accepted(self):
+        self.assertEqual([], self.codes("The floor is level and the space ahead is quiet."))
+
+
 class UndeclaredNumberTests(unittest.TestCase):
     """A number the declarations do not account for cannot reach the display."""
 
