@@ -7,8 +7,12 @@ one refers to. This module parses that reply, checks it, and renders the release
 **Why declarations rather than parsing the prose.** Recovering "about 1.7 metres" from a sentence
 and deciding which of three sectors it refers to is linguistic inference, and Chapter 3 rejects
 inference inside the safety boundary for that reason. The model states the attribution, so the
-comparison against the Fact Packet is exact. The gate performs no inference; it compares declared
-numbers with measured ones and searches the caption for tokens that must not appear.
+comparison against the Fact Packet is exact.
+
+The prose is nonetheless read, once, by the attribution check described below, and the distinction
+matters. What the gate accepts rests on the declarations alone. Reading the prose can only add a
+refusal to a candidate the declarations had already permitted, never admit one they had not, so no
+released caption owes its release to a linguistic judgement.
 
 **What is categorical here and what is measured.** Four properties hold by construction, because a
 candidate violating any of them is rejected and the deterministic fallback is released instead:
@@ -163,18 +167,33 @@ def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
     return value, []
 
 
+def _mask_identifiers(caption: str) -> str:
+    """Blanks out every identifier, preserving length so offsets into the original still hold."""
+    return _IDENTIFIER_RE.sub(lambda match: "#" * len(match.group(0)), caption)
+
+
+def _caption_number_spans(caption: str) -> list[tuple[int, int, str]]:
+    """Returns the position and text of every number a caption states.
+
+    Positions are offsets into the caption as given, which the attribution check needs in order to
+    measure how far a number sits from the fact it names. Identifiers are masked before the scan,
+    with the mask the same length as what it replaces, so the digit inside "visual:1" is not read as
+    a measurement and every remaining offset is still an offset into the original string.
+    """
+    masked = _mask_identifiers(caption)
+    spans = [(m.start(), m.end(), m.group(0)) for m in CAPTION_NUMBER_RE.finditer(masked)]
+    spans += [(m.start(), m.end(), m.group(0)) for m in _WORD_NUMBER_RE.finditer(masked)]
+    spans += [(m.start(), m.end(), m.group(0).strip()) for m in _BARE_HALF_RE.finditer(masked)]
+    return sorted(spans)
+
+
 def _caption_numbers(caption: str) -> list[str]:
     """Returns every number a caption states, as written.
 
-    Identifiers are masked before the scan, so the digit inside "visual:1" is not read as a
-    measurement. A number written in words is returned as the phrase that was written, because the
-    token is what the check compares and reporting the phrase names what the caption actually said.
+    A number written in words is returned as the phrase that was written, because the token is what
+    the check compares and reporting the phrase names what the caption actually said.
     """
-    masked = _IDENTIFIER_RE.sub(lambda match: "#" * len(match.group(0)), caption)
-    found = [match.group(0) for match in CAPTION_NUMBER_RE.finditer(masked)]
-    found.extend(match.group(0) for match in _WORD_NUMBER_RE.finditer(masked))
-    found.extend(match.group(0).strip() for match in _BARE_HALF_RE.finditer(masked))
-    return found
+    return [token for _, _, token in _caption_number_spans(caption)]
 
 
 def grounding_values(assertions: Sequence[Mapping[str, Any]],
@@ -240,29 +259,21 @@ def measured_value(fact_packet: Mapping[str, Any], measurement_id: str) -> Optio
     return None
 
 
-# The words that denote each sector, as a closed list rather than as a similarity test. "ahead" and
-# its variants are included because a caption describing the space in front of the walker is more
-# likely to say "ahead" than "centre", and omitting them would refuse ordinary phrasing.
+# The words that denote each sector, as a closed list rather than as a similarity test. A caption
+# describing the space in front of the walker says "ahead" far more often than "centre", so the
+# variants are enumerated; omitting them refuses ordinary phrasing. "right in front" and "right
+# ahead" are listed against the centre because the longest match wins, which is what stops the
+# "right" inside them from being read as the right-hand sector.
 SECTOR_TERMS = {
     "sector:left": ("left",),
-    "sector:centre": ("centre", "center", "ahead", "in front", "straight ahead", "forward"),
+    "sector:centre": ("centre", "center", "ahead", "forward", "in front", "straight ahead",
+                      "directly ahead", "right in front", "right ahead"),
     "sector:right": ("right",),
 }
 
-# The caption is cut here before each clause is checked for the fact it names. The boundaries are
-# punctuation and coordinating words, which is tokenisation rather than parsing.
-#
-# A full stop or comma between two digits is not a boundary. Splitting on every full stop cut "1.74"
-# into "1" and "74", which left no clause carrying a recognisable number and silently passed every
-# caption through the check.
-_CLAUSE_SPLIT_RE = re.compile(
-    r"(?<!\d)[,;:.](?!\d)|\band\b|\bbut\b|\bwhile\b|\bwhereas\b|\bwhich\b|\bthan\b",
-    re.IGNORECASE,
-)
-
 
 def _fact_terms(fact_id: str, fact_packet: Mapping[str, Any]) -> tuple[str, ...]:
-    """Returns the words a clause may use to name one fact."""
+    """Returns the words a caption may use to name one fact."""
     if fact_id in SECTOR_TERMS:
         return SECTOR_TERMS[fact_id]
     for item in fact_packet.get("objects", []):
@@ -272,17 +283,77 @@ def _fact_terms(fact_id: str, fact_packet: Mapping[str, Any]) -> tuple[str, ...]
     return ()
 
 
+def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[tuple[int, int, str]]:
+    """Returns where the caption names each fact, as (start, end, fact_id).
+
+    Overlapping matches are resolved in favour of the longer term, which is how "right in front of
+    the walker" is read as one mention of the centre rather than as a mention of the right.
+
+    Identifiers are masked first, so a model quoting "sector:centre" into the prose does not thereby
+    name the centre. Quoting an identifier is not describing a place.
+    """
+    masked = _mask_identifiers(caption).lower()
+    fact_ids = list(SECTOR_TERMS) + [
+        str(item["fact_id"]) for item in fact_packet.get("objects", []) if item.get("fact_id")
+    ]
+    found: list[tuple[int, int, str]] = []
+    for fact_id in fact_ids:
+        for term in _fact_terms(fact_id, fact_packet):
+            if not term:
+                continue
+            found.extend((m.start(), m.end(), fact_id)
+                         for m in re.finditer(rf"\b{re.escape(term)}\b", masked))
+    found.sort(key=lambda span: (span[0], span[0] - span[1]))
+    kept: list[tuple[int, int, str]] = []
+    for span in found:
+        if any(span[0] < other[1] and other[0] < span[1] for other in kept):
+            continue
+        kept.append(span)
+    return kept
+
+
+# Sentence boundaries, used to stop a fact named in one sentence from competing for a number stated
+# in another. A full stop between two digits is not a boundary, since it is a decimal point.
+_SENTENCE_END_RE = re.compile(r"(?<!\d)[.;!?](?!\d)")
+
+
+def _sentence_bounds(caption: str, position: int) -> tuple[int, int]:
+    """Returns the span of the sentence containing a position."""
+    start = 0
+    for match in _SENTENCE_END_RE.finditer(caption):
+        if match.end() > position:
+            return start, match.start()
+        start = match.end()
+    return start, len(caption)
+
+
+def _distance(number: tuple[int, int, str], mention: tuple[int, int, str]) -> int:
+    if mention[1] <= number[0]:
+        return number[0] - mention[1]
+    if number[1] <= mention[0]:
+        return mention[0] - number[1]
+    return 0
+
+
 def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
                          fact_packet: Mapping[str, Any]) -> list[dict]:
-    """Returns the clauses that state a number without naming the fact it was declared against.
+    """Returns the numbers a caption states away from the fact they were declared against.
 
-    A number is traced to its fact through the declarations, not through the prose: the clause is
-    searched only for the words that denote the fact the model itself said the number came from. A
-    clause naming no candidate fact cannot be attributed and is reported, and so is a clause naming
-    a second sector alongside the one declared, because the reader cannot tell which of the two the
-    number belongs to.
+    Each number is attributed to the nearest fact the caption names, measured in characters, and
+    that fact must be one the number was declared against. A number naming no fact at all cannot be
+    attributed, and a number equidistant between two different facts is ambiguous; both are
+    reported.
 
-    Reported rather than raised, so an analysis of an archived run can quote the clause that failed.
+    **Nearest mention rather than clause membership.** The first implementation cut the caption into
+    clauses on punctuation and coordinating words and required the fact to be named inside the same
+    clause. That refused four of ten naturally worded truthful captions, because a subordinator is
+    exactly where the subject stops being repeated: "The centre, which is 1.74 metres" leaves the
+    number in a fragment carrying no subject at all, and so do "The left, at 3.13 metres" and every
+    other appositive. Distance to the nearest mention does not depend on where a clause was judged
+    to begin, and it still refuses the swap the check exists for, because in "the left side measures
+    1.16 metres" the nearest fact named is the left and 1.16 belongs to the right.
+
+    Reported rather than raised, so an analysis of an archived run can quote what failed.
     """
     owners: dict[str, list[str]] = {}
     for entry in scored:
@@ -290,32 +361,34 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
         if measured is None or not entry.get("fact_id"):
             continue
         owners.setdefault(_display_string(measured), []).append(str(entry["fact_id"]))
+    if not owners:
+        return []
 
+    mentions = _fact_mentions(caption, fact_packet)
     failures: list[dict] = []
-    for clause in _CLAUSE_SPLIT_RE.split(caption):
-        lowered = clause.lower()
-        for token in _caption_numbers(clause):
-            candidates = owners.get(token, [])
-            if not candidates:
-                continue  # an undeclared number, already refused by the check above
-            named = [
-                fact_id for fact_id in candidates
-                if any(term and re.search(rf"\b{re.escape(term)}\b", lowered)
-                       for term in _fact_terms(fact_id, fact_packet))
-            ]
-            if not named:
-                failures.append({"clause": clause.strip(), "number": token,
-                                 "declared_for": candidates, "reason": "FACT_NOT_NAMED"})
-                continue
-            competing = sorted(
-                other for other, terms in SECTOR_TERMS.items()
-                if other not in named
-                and any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in terms)
-            )
-            if named[0] in SECTOR_TERMS and competing:
-                failures.append({"clause": clause.strip(), "number": token,
-                                 "declared_for": named, "reason": "AMBIGUOUS",
-                                 "competing": competing})
+    for number in _caption_number_spans(caption):
+        token = number[2]
+        candidates = owners.get(token, [])
+        if not candidates:
+            continue  # an undeclared number, refused by the check above and not attributable here
+        # Only the sentence the number sits in is searched. Without this, "The left is open for
+        # 3.13 metres. The right is tighter at 1.16 metres." put 3.13 exactly as far from "left" as
+        # from "right", and a truthful caption was refused as ambiguous because of a fact named in
+        # the sentence after it.
+        low, high = _sentence_bounds(caption, number[0])
+        local = [m for m in mentions if m[0] >= low and m[1] <= high]
+        if not local:
+            failures.append({"number": token, "declared_for": candidates,
+                             "reason": "FACT_NOT_NAMED"})
+            continue
+        shortest = min(_distance(number, mention) for mention in local)
+        nearest = {mention[2] for mention in local if _distance(number, mention) == shortest}
+        if len(nearest) > 1:
+            failures.append({"number": token, "declared_for": candidates,
+                             "reason": "AMBIGUOUS", "nearest": sorted(nearest)})
+        elif not nearest & set(candidates):
+            failures.append({"number": token, "declared_for": candidates,
+                             "reason": "MISATTRIBUTED", "nearest": sorted(nearest)})
     return failures
 
 
@@ -472,8 +545,6 @@ def validate_caption_candidate(
     }
     permitted_fact_ids = {item["fact_id"] for item in prompt_packet["permitted_facts"]}
 
-    # Scanned once, then used both to score each declaration and to find prose numbers that no
-    # declaration accounts for.
     caption_tokens = set(_caption_numbers(caption))
 
     for index, item in enumerate(assertions):
@@ -534,7 +605,12 @@ def validate_caption_candidate(
     # RG_DIRECT_NUMBER_DETECTED already means a number reached the text without provenance, which
     # is exactly what an undeclared number is under this design, so reusing it keeps the
     # reason-code enumeration unchanged.
-    if caption_tokens - declared_display_strings(assertions, fact_packet):
+    #
+    # The shared helper is called rather than the same set difference written out again. The two
+    # had been written twice, which is how a check and the analysis that reports on it drift apart:
+    # a run would have recorded the code while the helper listing the offending tokens disagreed
+    # about which they were.
+    if undeclared_numbers(caption, assertions, fact_packet):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     # A number must sit in a clause that names the fact it was declared against. Without this a
@@ -666,7 +742,7 @@ def build_composed_release(
     *,
     release_id: str,
     candidate: Optional[Mapping[str, Any]],
-    scored_assertions: Sequence[Mapping[str, Any]] = (),
+    scored_assertions: Sequence[Mapping[str, Any]],
     failure_codes: Iterable[str] = (),
     no_intent: bool = False,
     pending: bool = False,
@@ -680,6 +756,10 @@ def build_composed_release(
     The release is built by delegating to the unchanged builder for every case except an accepted
     caption, so that fallback behaviour, identity, staleness and the authority block have one
     implementation rather than two.
+
+    `scored_assertions` carries no default. The accepted release's evidence is built from it, so a
+    caller omitting it produced a release recording no scene binding and no measurement
+    substitutions for a caption that rested on both, and nothing failed.
     """
     codes = list(failure_codes)
     accepted = candidate is not None and not codes
@@ -769,6 +849,12 @@ def assertion_summary(scored: Sequence[Mapping[str, Any]]) -> dict:
         "comparable": len(comparable),
         "agreeing": len(agreeing),
         "disagreeing": len(comparable) - len(agreeing),
+        # A declaration the caption never states widens the set of numbers the prose is allowed to
+        # contain without the model having written anything. The flag was recorded on each entry
+        # and then left out of the aggregate, so the one place Chapter 5 reads could not see it.
+        "not_stated_in_caption": sum(
+            1 for item in comparable if item.get("stated_in_caption") is False
+        ),
         "agreement_rate": (
             round(len(agreeing) / len(comparable), 3) if comparable else None
         ),

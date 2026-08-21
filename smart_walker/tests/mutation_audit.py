@@ -23,12 +23,29 @@ that guard is removed, and prove it here.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Compiled bytecode must never be reused between mutations. CPython treats a cached .pyc as current
+# when the source's modification time and size both match, and a mutation harness violates both
+# assumptions at once: it rewrites one line many times a second, and two mutations of equal-length
+# lines produce files of identical size. Two guards on this module differ only in which line the
+# same statement sits on, so mutating either produced a byte-identical file size within the same
+# clock second, and the second run executed the bytecode compiled for the first.
+#
+# That reported a guard as unconstrained when a test did constrain it. The reverse is the dangerous
+# direction and the reason this is not merely untidy: a stale cache can equally report a mutation as
+# caught when nothing caught it, which is a harness certifying protection that does not exist.
+#
+# Caching is therefore switched off in the child and every existing cache directory is removed
+# before the run, so each mutation is compiled from the source on disk.
+_CHILD_ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 
 GUARD_RE = re.compile(r"^\s*errors\.append\(\"RG_[A-Z_]+\"\)\s*$")
 
@@ -64,7 +81,13 @@ def _mutations(lines: list[str]) -> list[tuple[int, str, str]]:
     return found
 
 
+def _clear_caches() -> None:
+    for cache in ROOT.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def audit(relative: str) -> list[str]:
+    _clear_caches()
     path = ROOT / relative
     original = path.read_text(encoding="utf-8")
     lines = original.splitlines(keepends=True)
@@ -77,8 +100,8 @@ def audit(relative: str) -> list[str]:
             patched[index] = replacement
             path.write_text("".join(patched), encoding="utf-8")
             passed = subprocess.run(
-                [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-                cwd=ROOT, capture_output=True,
+                [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests"],
+                cwd=ROOT, capture_output=True, env=_CHILD_ENV,
             ).returncode == 0
             if passed:
                 survivors.append(f"{relative}:{index + 1}  {description}")
