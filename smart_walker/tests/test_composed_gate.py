@@ -418,50 +418,54 @@ class AttributionTests(unittest.TestCase):
                         packet, prompt)
         self.assertEqual([], codes)
 
-    # A bearing phrase says where a thing is. It is not the subject of the sentence, and it sits
-    # between an object and its distance in the most natural way of describing one, so treating it
-    # as an equal competitor refused two of five object captions.
+    # The required form is the prompt's: name the thing, then give its distance, with no other place
+    # or object named in between. A caption that puts a bearing between an object and its distance
+    # does not follow it, and is refused and recorded as such rather than rescued. Two rules were
+    # written to admit those captions and both were wrong, which is why there are none now.
 
-    def test_a_bearing_between_an_object_and_its_distance(self):
+    def test_the_required_form_for_an_object_is_accepted(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("The chair on the left is 1.62 metres away.",
+        codes, _ = gate(caption("A chair is 1.62 metres away on the left.",
                                 [declares_object(3, 1.62)]), packet, prompt)
         self.assertEqual([], codes)
 
-    def test_a_bearing_in_an_appositive(self):
+    def test_a_bearing_between_an_object_and_its_distance_is_refused(self):
+        """True, and not in the form the prompt asks for. Recorded as FORM_NOT_FOLLOWED so the rate
+        at which the model ignores the instruction can be reported apart from the rate at which it
+        states something false."""
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("There is a chair to the left, 1.62 metres away.",
-                                [declares_object(3, 1.62)]), packet, prompt)
-        self.assertEqual([], codes)
+        text = "The chair on the left is 1.62 metres away."
+        codes, scored = gate(caption(text, [declares_object(3, 1.62)]), packet, prompt)
+        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertEqual(["FORM_NOT_FOLLOWED"],
+                         [f["reason"] for f in composed.attribution_failures(text, scored, packet)])
 
-    def test_a_sector_stated_only_through_a_bearing_phrase(self):
-        """Dropping bearing phrases outright would refuse this, which is the ordinary way to state
-        a sector clearance. They yield to another subject rather than being discarded."""
+    def test_a_fact_never_named_is_misattribution_rather_than_form(self):
+        """The two findings are kept apart. This sentence never mentions the chair, so the caption
+        states a measured value of something it does not name."""
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       bearing="LEFT", distance_m=1.62))
+        text = "There is 1.62 metres to the left."
+        codes, scored = gate(caption(text, [declares_object(3, 1.62)]), packet, prompt)
+        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertEqual(["MISATTRIBUTED"],
+                         [f["reason"] for f in composed.attribution_failures(text, scored, packet)])
+
+    def test_a_sector_named_through_a_bearing_phrase_is_accepted(self):
+        """A bearing phrase is a perfectly good way to name a sector, and the nearest name here is
+        the right one."""
         self.assertAccepted("There is 3.13 metres on the left.", [declares("left", LEFT)])
 
-    def test_a_bearing_phrase_far_from_another_subject_still_wins(self):
-        """The frozen fixture's caption. An earlier form of the bearing rule made a bearing phrase
-        yield to any other mention in the sentence however distant, so 3.13 was attributed to an
-        "ahead" 58 characters away rather than to the "to the left" beside it. No test caught that;
-        the fixture generator refused to run. This is that caption, pinned."""
+    def test_the_frozen_fixture_caption_is_accepted(self):
+        """A bearing phrase is the nearest and correct name for 3.13 here, while "ahead" is 58
+        characters away. A rule that demoted bearing phrases refused this, and no test caught it."""
         self.assertAccepted(
             "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left.",
             [declares("centre", CENTRE), declares("left", LEFT)])
 
-    def test_a_bearing_phrase_with_no_subject_beside_it_is_refused(self):
-        """The rule removes a bearing phrase from competition; it does not supply a subject. "There
-        is 1.62 metres to the left" never says what is 1.62 metres away."""
-        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
-                                                       bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("There is 1.62 metres to the left.", [declares_object(3, 1.62)]),
-                        packet, prompt)
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
-
-    def test_a_bare_sector_still_competes_against_an_object(self):
-        """The yielding applies to a sector inside a bearing phrase, not to one named plainly. "The
-        left is 1.62 metres wide" attributes a chair's distance to the sector and must be refused."""
+    def test_a_sector_taking_an_object_distance_is_refused(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
         codes, _ = gate(caption("The left is 1.62 metres wide.", [declares_object(3, 1.62)]),

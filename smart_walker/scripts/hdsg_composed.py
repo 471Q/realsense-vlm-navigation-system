@@ -54,17 +54,25 @@ and a number must stand nearer to the fact it was declared against than to any o
 The reading is mechanical and its result is used in one direction only. Every place the caption
 names a fact is located, with overlapping names resolved in favour of the longer, so that "right in
 front of the walker" names the centre rather than the right. Each number is then attributed to the
-nearest of those names lying in the number's own sentence. Three cases are refused: the nearest name
-is not a fact the number was declared against, two different facts are equally near, or the sentence
-names no fact at all. The vocabulary is closed, eleven words and phrases across the three sectors,
-and for an object it is the detector's label for it.
+nearest of those names lying in the number's own sentence. The vocabulary is closed, eleven words
+and phrases across the three sectors, and for an object it is the detector's label for it. One span
+may name several facts, because two objects of a class share a label, and "the chair" in a room with
+two chairs is one phrase referring to whichever the declaration names rather than an ambiguity
+between them.
 
-Two refinements, both grounded in the Fact Packet rather than in sentence structure. One span may
-name several facts, because two objects of a class share a label, and "the chair" in a room with two
-chairs is one phrase referring to whichever the declaration names rather than an ambiguity between
-them. And a sector named inside a bearing phrase, "on the left", stops competing for a number whose
-fact is an object the packet already places in that sector, because there the phrase repeats the
-object's own bearing instead of naming a second thing.
+**This enforces the form the prompt asks for, and non-compliance is a result rather than a defect.**
+The prompt instructs the model to name a thing and then give its distance with no other place or
+object named in between, which is exactly what nearest-name attribution measures. A caption reading
+"The chair on the left is 1.62 metres away" is true and does not follow that instruction, so it is
+refused and recorded as `FORM_NOT_FOLLOWED`, kept apart from `MISATTRIBUTED`, where the fact a
+number belongs to is never named in its sentence at all. The first is a model ignoring an
+instruction and the second is a model stating a measured value of something it does not mention;
+Chapter 5 reports them separately.
+
+Two rules were written to admit the first case rather than record it, one keyed on a preposition
+before the sector word and one on the presence of any other subject in the sentence. Both were
+wrong, the second refused the frozen fixture, and neither should have existed: a gate whose rule and
+whose prompt disagree is a gate measuring its own inconsistency.
 
 Confining the search to one sentence is what allows a caption of more than one sentence. Without it
 "The left is open for 3.13 metres. The right is tighter at 1.16 metres." put 3.13 exactly as far
@@ -328,19 +336,12 @@ def _fact_terms(fact_id: str, fact_packet: Mapping[str, Any]) -> tuple[str, ...]
     return ()
 
 
-# A sector named after one of these is saying where something is, not naming the sector as the
-# subject of the sentence. "The chair on the left is 1.62 metres away" is about the chair.
-_BEARING_LEAD_RE = re.compile(
-    r"\b(?:on|to|towards?|at|along)\s+(?:the|your|its)?\s*$", re.IGNORECASE)
-
-
 class Mention(NamedTuple):
     """One place the caption names one or more facts."""
 
     start: int
     end: int
     facts: frozenset
-    bearing_phrase: bool
 
 
 def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[Mention]:
@@ -354,9 +355,12 @@ def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[Mention
     was found first and silently discarded the other, so a caption describing the second chair was
     refused for naming the first.
 
-    **A sector inside a bearing phrase is marked, not dropped.** "on the left" says where something
-    is. Whether it is also the subject of the sentence cannot be settled here, because it depends on
-    which fact the number belongs to, so the mention is flagged and `attribution_failures` decides.
+    A sector word is a mention wherever it appears, whether it names the sector or says where
+    something else is. No attempt is made to tell the two apart. Two attempts were made and both
+    were wrong, and the second refused the frozen fixture; the reason they were being made at all
+    was to admit captions that put a second place-name between a thing and its distance, which the
+    prompt instructs the model not to write. Such a caption is refused and recorded as not following
+    the required form, which is a result to report rather than a phrasing to rescue.
 
     Identifiers are masked first, so a model quoting "sector:centre" into the prose does not thereby
     name the centre. Quoting an identifier is not describing a place.
@@ -377,8 +381,7 @@ def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[Mention
     for (start, end) in sorted(found, key=lambda span: (span[0], span[0] - span[1])):
         if any(start < other.end and other.start < end for other in kept):
             continue
-        kept.append(Mention(start, end, frozenset(found[(start, end)]),
-                            bool(_BEARING_LEAD_RE.search(masked[:start]))))
+        kept.append(Mention(start, end, frozenset(found[(start, end)])))
     return kept
 
 
@@ -402,15 +405,6 @@ def _sentence_bounds(caption: str, position: int) -> tuple[int, int]:
     return start, len(caption)
 
 
-def _bearing_sector(fact_id: str, fact_packet: Mapping[str, Any]) -> Optional[str]:
-    """Returns the sector an object lies in, as a fact identifier, or None if it is not an object."""
-    for item in fact_packet.get("objects", []):
-        if item.get("fact_id") == fact_id:
-            sector = f"sector:{str(item.get('bearing') or '').lower()}"
-            return sector if sector in SECTOR_TERMS else None
-    return None
-
-
 def _distance(number: tuple[int, int, str], mention: Mention) -> int:
     if mention.end <= number[0]:
         return number[0] - mention.end
@@ -423,19 +417,36 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
                          fact_packet: Mapping[str, Any]) -> list[dict]:
     """Returns the numbers a caption states away from the fact they were declared against.
 
-    Each number is attributed to the nearest fact the caption names, measured in characters, and
-    that fact must be one the number was declared against. A number naming no fact at all cannot be
-    attributed, and a number equidistant between two different facts is ambiguous; both are
-    reported.
+    The required form is the one the prompt asks for: name the thing, then give its distance, with
+    no other place or object named in between. Each number is attributed to the nearest fact the
+    caption names within its own sentence, and that fact must be one the number was declared
+    against.
 
-    **Nearest mention rather than clause membership.** The first implementation cut the caption into
-    clauses on punctuation and coordinating words and required the fact to be named inside the same
-    clause. That refused four of ten naturally worded truthful captions, because a subordinator is
-    exactly where the subject stops being repeated: "The centre, which is 1.74 metres" leaves the
-    number in a fragment carrying no subject at all, and so do "The left, at 3.13 metres" and every
-    other appositive. Distance to the nearest mention does not depend on where a clause was judged
-    to begin, and it still refuses the swap the check exists for, because in "the left side measures
-    1.16 metres" the nearest fact named is the left and 1.16 belongs to the right.
+    **Four outcomes, and the last two are different findings.** A number naming no fact in its
+    sentence cannot be attributed. A number equally near two different facts is ambiguous. Beyond
+    those, the nearest fact being wrong means one of two things, and they are recorded apart because
+    Chapter 5 should not add them together:
+
+        MISATTRIBUTED     the fact the number belongs to is not named in the sentence at all, so
+                          the caption states a measured value of something it never mentions
+        FORM_NOT_FOLLOWED the fact is named, but something else stands nearer, so the caption has
+                          the right facts in the wrong shape
+
+    **No attempt is made to rescue the second.** "The chair on the left is 1.62 metres away" puts a
+    second place-name between the chair and its distance, and the prompt instructs the model not to.
+    Two rules were written to admit such captions anyway, one keyed on a preposition before the
+    sector word and one on any subject in the sentence, and both were wrong: the first missed "the
+    chair ahead" and "the chair in front", and the second refused the frozen fixture. The rate at
+    which a model ignores the instruction is a result worth reporting, not a defect in the gate.
+
+    **Nearest mention rather than clause membership.** An earlier implementation cut the caption
+    into clauses on punctuation and coordinating words and required the fact to be named inside the
+    same clause. That refused four of ten naturally worded truthful captions, because a subordinator
+    is exactly where the subject stops being repeated: "The centre, which is 1.74 metres" leaves the
+    number in a fragment carrying no subject at all, and so does every appositive. Distance to the
+    nearest mention does not depend on where a clause was judged to begin, and it still refuses the
+    swap the check exists for, because in "the left side measures 1.16 metres" the nearest fact
+    named is the left and 1.16 belongs to the right.
 
     Reported rather than raised, so an analysis of an archived run can quote what failed.
     """
@@ -461,28 +472,12 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
         # the sentence after it.
         low, high = _sentence_bounds(caption, number[0])
         local = [m for m in mentions if m.start >= low and m.end <= high]
-        # "The chair on the left is 1.62 metres away" is about the chair, but the bearing sits
-        # between the object and its distance and so wins on nearness every time, which refused two
-        # of five naturally worded object captions. A bearing phrase therefore stops competing when
-        # it names the sector the packet already records the candidate object as lying in: there it
-        # is repeating the object's own bearing rather than naming a second thing.
-        #
-        # The test is against the packet, not against the sentence. An earlier attempt made bearing
-        # phrases yield to any other mention in the sentence, however distant, and that refused the
-        # frozen fixture: in "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the
-        # left" the bearing phrase is the nearer and correct subject for 3.13, while "ahead" is 58
-        # characters away. No test caught it; the fixture generator did.
-        redundant = {
-            sector for sector in (_bearing_sector(f, fact_packet) for f in candidates) if sector
-        }
-        subjects = [m for m in local
-                    if not (m.bearing_phrase and m.facts and set(m.facts) <= redundant)]
-        if not subjects:
+        if not local:
             failures.append({"number": token, "declared_for": candidates,
                              "reason": "FACT_NOT_NAMED"})
             continue
-        shortest = min(_distance(number, mention) for mention in subjects)
-        nearest = [m for m in subjects if _distance(number, m) == shortest]
+        shortest = min(_distance(number, mention) for mention in local)
+        nearest = [m for m in local if _distance(number, m) == shortest]
         # Several spans equally near is an ambiguity only when they name different things. One span
         # naming two facts is not: two chairs share a label, so "the chair" is one phrase referring
         # to one of them, and the declaration says which.
@@ -491,9 +486,16 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
                              "nearest": sorted(set().union(*(m.facts for m in nearest)))})
             continue
         named = set().union(*(m.facts for m in nearest))
-        if not named & set(candidates):
-            failures.append({"number": token, "declared_for": candidates,
-                             "reason": "MISATTRIBUTED", "nearest": sorted(named)})
+        if named & set(candidates):
+            continue
+        # The fact is named in the sentence but something stands nearer to the number. The caption
+        # has the right facts in the wrong shape, which the prompt asks it not to produce and which
+        # is reported as such rather than merged with a caption that never mentions the fact at all.
+        elsewhere = any(m.facts & set(candidates) for m in local)
+        failures.append({
+            "number": token, "declared_for": candidates, "nearest": sorted(named),
+            "reason": "FORM_NOT_FOLLOWED" if elsewhere else "MISATTRIBUTED",
+        })
     return failures
 
 
@@ -795,7 +797,14 @@ _COMPOSED_INSTRUCTION = """Write one short caption describing the space around t
 
 Use the measurements below. Write the distances into your sentences in metres, exactly as they are given, digit for digit. Do not round them, do not approximate them, do not drop a trailing zero, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres. A measurement given as 2.00 metres is written as 2.00 metres, not as 2 metres and not as two metres.
 
-Keep each distance in the same clause as the thing it belongs to, and name that thing in words: write "the centre is clear for 1.74 metres", not "the centre is the widest, at 1.74 metres". A distance in a clause that does not name what it measures causes the caption to be discarded.
+Name the thing a distance belongs to, then give the distance, and do not name any other place or object in between. The name must be closer to the number than any other name in that sentence.
+
+  Write: the centre is clear for 1.74 metres
+  Write: a chair is 1.62 metres away on the left
+  Not:   the chair on the left is 1.62 metres away
+  Not:   the centre is the widest, at 1.74 metres
+
+A distance whose nearest name is not the thing it was measured from causes the caption to be discarded, whether or not the number itself is correct.
 
 Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id looks like sector:centre, measurement_id looks like m:sector:centre:clearance. For a clearance of 1.74 metres at the centre, the declaration is:
 
