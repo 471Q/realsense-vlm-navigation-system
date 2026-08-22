@@ -64,6 +64,23 @@ LABELS = (
 DISTANCES_M = (1.0, 2.0, 3.0, 4.0)
 
 
+def next_sequence(directory: Path) -> int:
+    """Returns the number to continue from, so a second session cannot overwrite the first.
+
+    The counter began at zero on every run. Restarting the script therefore reissued
+    `<label>_0001`, and `ObservationRecorder` writes by identifier, so the earlier session's colour
+    and depth frames were replaced in place while its manifest lines stayed behind. A recording made
+    in two sittings silently lost the first, and the only trace was a manifest with more lines than
+    distinct identifiers. Two frames of a staircase were destroyed this way on 22 August 2026.
+    """
+    highest = 0
+    for path in directory.glob("*.color.png"):
+        tail = path.name[:-len(".color.png")].rsplit("_", 1)
+        if len(tail) == 2 and tail[1].isdigit():
+            highest = max(highest, int(tail[1]))
+    return highest
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Capture labelled RGB-D scenes for perception work")
@@ -109,10 +126,12 @@ def main() -> int:
     labels_path = args.out / "labels.jsonl"
     captured: dict[str, int] = {}
     index = 0
-    sequence = 0
+    sequence = next_sequence(args.out)
 
     print(f"[capture] depth scale {depth_scale} m per unit")
     print(f"[capture] writing to {args.out}")
+    if sequence:
+        print(f"[capture] {sequence} frames already here, continuing from {sequence + 1}")
     print(f"[capture] suggested distances per hazard label: "
           f"{', '.join(f'{d:.0f} m' for d in DISTANCES_M)}")
     try:
