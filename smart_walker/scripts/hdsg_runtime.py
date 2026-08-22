@@ -880,17 +880,14 @@ def build_prompt_packet(
     constraint_hash: str,
     prompt_profile_id: Optional[str] = None,
     system_prompt_id: str = "hdsg.reason_only.v1",
-    question_requirements: Optional[list[dict]] = None,
     expected_response_schema: str = CAPTION_SCHEMA,
 ) -> dict:
     """Builds the restricted facts and response profile supplied to the VLM.
 
-    `question_requirements` replaces the automatic requirement construction with a set chosen by
-    the question router, per HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4. It replaces rather
-    than extends, because an answer to a question about the left sector should describe the left
-    sector, not the fact that happens to be binding the current action. The requirements are
-    supplied by the caller rather than derived from a route here, so this module holds no knowledge
-    of the question taxonomy.
+    A caller-supplied requirement set was accepted here until 23 August 2026, so that a routed
+    question could narrow the permitted facts to its topic. The topic routing was withdrawn, and
+    an answered question now uses the same More detail construction as any other expansion: a
+    clause per sector and per detected object.
     """
     interaction = fact_packet["interaction"]
     deterministic = fact_packet["deterministic"]
@@ -898,21 +895,6 @@ def build_prompt_packet(
     max_reasons, max_visuals, allow_visuals = PROFILE_LIMITS[response_mode]
     requirements: list[dict] = []
     fact_ids: list[str] = []
-
-    if question_requirements is not None:
-        requirements = [dict(item) for item in question_requirements]
-        for item in requirements:
-            fact_ids.extend(item["fact_ids"])
-        return _finish_prompt_packet(
-            fact_packet, requirements, fact_ids,
-            prompt_id=prompt_id, response_mode=response_mode,
-            prompt_profile_id=prompt_profile_id, model_id=model_id, model_hash=model_hash,
-            quantisation=quantisation, temperature=temperature, top_p=top_p,
-            max_tokens=max_tokens, system_prompt=system_prompt, constraint_hash=constraint_hash,
-            system_prompt_id=system_prompt_id, max_reasons=max_reasons,
-            max_visuals=max_visuals, allow_visuals=allow_visuals,
-            expected_response_schema=expected_response_schema,
-        )
 
     action_ids = list(deterministic["action_binding"]["accepted_fact_ids"])
     if action_ids:

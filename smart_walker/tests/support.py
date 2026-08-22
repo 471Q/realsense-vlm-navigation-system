@@ -88,10 +88,8 @@ def fact_packet(intent="FORWARD", object_advisory="CAUTION", lane=None, objects=
     )
 
 
-def prompt_packet(packet, question_requirements=None, prompt_profile_id=None):
+def prompt_packet(packet, prompt_profile_id=None):
     extra = {}
-    if question_requirements is not None:
-        extra["question_requirements"] = question_requirements
     if prompt_profile_id is not None:
         extra["prompt_profile_id"] = prompt_profile_id
     return hdsg.build_prompt_packet(

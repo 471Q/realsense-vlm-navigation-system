@@ -1,12 +1,16 @@
-# Tier 1 routing classifier constraint. HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4.
+# Admission classifier constraint.
 #
-# The grammar admits exactly one of the eight approved route tokens and nothing else. This is what
-# makes the classifier safe to point at the user's raw text: the model reads free text, but the
-# decoder cannot emit anything outside the closed set, so a crafted question can at worst select
-# the wrong topic. It cannot cause the classifier to produce content.
+# The grammar admits exactly one of three tokens and nothing else. This is what makes the
+# classifier safe to point at the user's raw text: the model reads free text, but the decoder
+# cannot emit anything outside the closed set, so a crafted message can at worst be admitted when
+# it should have been declined. It cannot cause the classifier to produce content.
 #
-# This artifact is not part of hdsg.schemas.v2. Section 7 of the policy records that it belongs in
-# the next schema set together with hdsg.question_route.v1 and its fixtures.
+# The eight topic tokens this grammar carried until 23 August 2026 were withdrawn with the topic
+# routing itself. Only IN_SCOPE reaches the answer pipeline, and it reaches it with the whole Fact
+# Packet, so no token here selects which facts may be described.
+#
+# This artifact is not part of hdsg.schemas.v2. It belongs in the next schema set together with
+# hdsg.question_route.v1 and its fixtures.
 
 root ::= ws "{" ws schema-field "," ws route-field ws "}" ws
 
@@ -16,6 +20,6 @@ route-field ::= "\"route\"" ws ":" ws route
 # The alternation is kept on one line. This llama.cpp build's GBNF parser ends a rule at the
 # newline, so a continuation line beginning with "|" is read as a new rule and the whole grammar is
 # rejected with "Failed to parse grammar".
-route ::= "\"LEFT\"" | "\"CENTRE\"" | "\"RIGHT\"" | "\"HAZARDS\"" | "\"EXPLAIN_DECISION\"" | "\"SCENE_OVERVIEW\"" | "\"REASSESS\"" | "\"OUT_OF_SCOPE\""
+route ::= "\"IN_SCOPE\"" | "\"REASSESS\"" | "\"OUT_OF_SCOPE\""
 
 ws ::= [ \t\n\r]*

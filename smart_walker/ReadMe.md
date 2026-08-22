@@ -206,30 +206,38 @@ mean typing a question also steered the walker.
 
 ### Asking questions
 
-The panel on the right accepts typed questions, following
-`HDSG_OPEN_QUESTION_ROUTING_POLICY.md`. Free text selects which measured facts may
-be described; it never becomes the answer. A question passes through four stages:
+The panel on the right accepts typed questions. A question passes through four
+stages:
 
 1. **Measurement pre-check.** If no sector carries a valid clearance, or the most
    recent observation is older than `--more_detail_freshness_s`, the reply is fixed
    and no model is called.
-2. **Keyword pre-filter.** A hand-written match settles the common phrasings and
-   skips the classifier call. It is advisory: a miss falls through, and a wrong
-   match degrades to the same outcome as a wrong classification.
-3. **Routing classifier.** A text-only call constrained by
-   `config/hdsg.question_route.v1.gbnf`, which admits exactly eight route tokens.
-   No image is attached. The grammar is what bounds a crafted question: the worst
-   outcome is the wrong topic, correctly described, never ungrounded content.
-4. **Answer.** The route scopes the permitted facts, and the answer goes through
-   the unchanged entailment gate and release builder. A rejected candidate falls
-   back to a deterministic description of the facts the question was scoped to.
+2. **Keyword filter.** A hand-written match recognises a request for a fresh look
+   and hands it to the reassessment control without a model call. It is advisory: a
+   miss falls through to the classifier, which has the same outcome available.
+3. **Admission classifier.** A text-only call constrained by
+   `config/hdsg.question_route.v1.gbnf`, which admits exactly three tokens:
+   `IN_SCOPE`, `REASSESS`, `OUT_OF_SCOPE`. No image is attached. The classifier
+   decides only whether the message is about the space around the walker. It cannot
+   produce content.
+4. **Answer.** An admitted question receives the whole Fact Packet, the person's own
+   wording, and the unchanged entailment gate and release builder. A rejected
+   candidate falls back to a deterministic description of the permitted facts.
 
-Requests for direction ("which side to go", "what should I do", "can I keep going")
-route to `EXPLAIN_DECISION`, whose answer is prefixed with the authoritative action
-sentence and carries the interaction prompt when one is set, so it reads
-*"Change direction and continue towards the right. The centre sector is blocked at
-0.60 metres."* That prefix comes from the deterministic template table by way of the
-release, not from the model.
+Until 23 August 2026 the classifier sorted questions into eight navigation topics and
+handed the model only the facts belonging to the chosen topic. That was withdrawn.
+The topic had to be guessed before generation and a wrong guess could not be
+recovered from, because the withheld facts were absent from the call; the gate
+already checks the same property afterwards, against the measurements, without
+guessing. Answers are now written freely from the full scene and assessed rather than
+pre-scoped.
+
+Every answer is prefixed with the authoritative action sentence, and carries the
+interaction prompt when one is set, so it reads *"Change direction and continue
+towards the right. The centre sector is blocked at 0.60 metres."* That prefix comes
+from the deterministic template table by way of the release, never from the model. It
+is the one piece of text that tells the person what to do, and it is the reason a
+crafted question cannot turn an answer into a movement instruction.
 
 Answers appear in the panel, not on the caption line: the caption keeps showing the
 deterministic action and its reason throughout. Questions run on their own worker,
@@ -238,8 +246,13 @@ the session's questions, but no history is ever supplied to the model, which
 continues to answer each request statelessly.
 
 `--answer_questions false` disables the channel; a question then receives the
-out-of-scope reply and no model is called. `--route_grammar` moves the classifier
+out-of-scope reply and no model is called. `--route_grammar` moves the admission
 constraint.
+
+During an evaluation run the `question_route` record stores the question text in the
+clear alongside its hash. Whether an admission decision or an answer was correct
+cannot be judged without reading what was asked. The release record, which is the
+path that reaches the user, carries only the hash.
 
 #### `--unconstrained`, a diagnostic mode
 

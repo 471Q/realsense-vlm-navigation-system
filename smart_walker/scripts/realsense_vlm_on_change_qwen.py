@@ -110,9 +110,9 @@ def build_text_chat_payload(model: str, system: str, text: str, grammar: str,
                             temperature: float, top_p: float, max_tokens: int) -> dict:
     """Builds a text-only grammar-constrained request.
 
-    Used by the Tier 1 question classifier. No image is attached: routing a question to a topic
-    does not require the frame, and omitting it removes the scene as a channel into the
-    classification. HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 4.
+    Used by the question admission classifier. No image is attached: deciding whether a message is
+    about the surroundings does not require the frame, and omitting it removes the scene as a
+    channel into the decision.
     """
     return {
         "model": model,
@@ -663,7 +663,7 @@ def main():
     default_route_grammar = Path(__file__).resolve().parents[1] / "config" / "hdsg.question_route.v1.gbnf"
     ap.add_argument("--request_catalogue", type=Path, default=default_catalogue)
     ap.add_argument("--route_grammar", type=Path, default=default_route_grammar,
-                    help="the Tier 1 question classifier constraint")
+                    help="the question admission classifier constraint")
     default_caption_grammar = (
         Path(__file__).resolve().parents[1] / "config" / "hdsg.vlm_caption.v1.gbnf"
     )
@@ -703,7 +703,7 @@ def main():
     if args.unconstrained:
         print("[hdsg] " + "=" * 68)
         print("[hdsg] UNCONSTRAINED DIAGNOSTIC MODE")
-        print("[hdsg] Typed questions bypass routing, the permitted-fact packet, the grammar")
+        print("[hdsg] Typed questions bypass admission, the permitted-fact packet, the grammar")
         print("[hdsg] and the entailment gate. Answers are ungrounded by construction.")
         print("[hdsg] This run is not evaluation evidence. The caption stays deterministic.")
         print("[hdsg] " + "=" * 68)
@@ -725,7 +725,7 @@ def main():
             route_grammar_text = args.route_grammar.read_text(encoding="utf-8")
         except OSError as error:
             raise RuntimeError(
-                f"The question routing constraint could not be loaded: {args.route_grammar}"
+                f"The question admission constraint could not be loaded: {args.route_grammar}"
             ) from error
     try:
         request_catalogue = json.loads(args.request_catalogue.read_text(encoding="utf-8"))
@@ -1038,11 +1038,10 @@ def main():
     threading.Thread(target=generation_worker, daemon=True).start()
 
     def answer_question(request: dict) -> tuple[str, Optional[str], str, bool, str]:
-        """Classifies one question and produces its answer.
+        """Admits one question and produces its answer.
 
-        Returns the answer text, the resolved route, the stage that resolved it, whether the answer
-        reached generation, and the release mode behind it.
-        HDSG_OPEN_QUESTION_ROUTING_POLICY.md sections 2 to 6.
+        Returns the answer text, the admission outcome, the stage that settled it, whether the
+        answer reached generation, and the release mode behind it.
 
         The release mode is reported because the approved templates and the deterministic fallback
         are word for word identical for several sector states, so the answer alone does not reveal
@@ -1083,10 +1082,10 @@ def main():
             })
             return str(raw).strip(), "UNCONSTRAINED", "UNCONSTRAINED", True, "UNGATED"
 
-        # Tier 1. Reached only when the keyword pre-filter found nothing, so the classifier call is
-        # skipped for the common phrasings. The grammar admits eight tokens and nothing else, which
-        # is what bounds the consequence of a crafted question: the worst outcome is the wrong
-        # topic, correctly and safely described.
+        # The admission classifier. Reached unless the keyword filter already recognised a request
+        # for a fresh look. The grammar admits three tokens and nothing else, so a crafted question
+        # can at worst be admitted when it should have been declined, and an admitted question is
+        # still answered through the unchanged gate.
         if route is None:
             payload = build_text_chat_payload(
                 model=args.model,
@@ -1102,41 +1101,29 @@ def main():
                                      timeout=float(getattr(args, "vlm_timeout_s", 20.0)))
             except Exception as error:
                 print(f"[hdsg] question classification failed: {error}")
-                return questions.OUT_OF_SCOPE_TEXT, None, "TIER_1_CLASSIFIER", False, "CATALOGUE_REPLY"
+                return questions.OUT_OF_SCOPE_TEXT, None, "ADMISSION_CLASSIFIER", False, "CATALOGUE_REPLY"
             route, parse_error = questions.parse_route(raw_route)
-            resolved_by = "TIER_1_CLASSIFIER"
+            resolved_by = "ADMISSION_CLASSIFIER"
             if route is None:
                 # A reply the grammar should have made impossible. Declining is the conservative
-                # outcome: no route means no permitted-fact scope, and answering without one would
-                # be the ungrounded case the whole policy exists to prevent.
-                print(f"[hdsg] question route unreadable: {parse_error}")
+                # outcome, since an unreadable admission decision is no decision at all.
+                print(f"[hdsg] admission reply unreadable: {parse_error}")
                 return questions.OUT_OF_SCOPE_TEXT, None, resolved_by, False, "CATALOGUE_REPLY"
 
         if route == "OUT_OF_SCOPE":
             return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
         if route == "REASSESS":
-            # Routed to the existing control rather than answered. The main loop owns the
+            # Handed to the existing control rather than answered. The main loop owns the
             # reassessment state machine, so the worker only reports the redirection.
-            return ("Select Reassess for a fresh look at the scene.", route, resolved_by, False,
-                    "CATALOGUE_REPLY")
+            return questions.REASSESS_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
 
         fact_packet = request["fact_packet"]
-        route_entry = request_catalogue.get("question_routes", {}).get(route)
-        if not route_entry:
-            return questions.OUT_OF_SCOPE_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
+        answer_entry = request_catalogue["question_answer"]
 
-        # SCENE_OVERVIEW is an alias for the existing More detail profile, unscoped, per the
-        # policy's section 4. Passing no requirement set leaves build_prompt_packet to run its own
-        # More detail construction, which already covers every sector and every detected object.
-        # The scoped routes supply their own, and an empty set from one of those means there is
-        # nothing measured to describe.
-        if questions.uses_default_profile(route):
-            requirement_set = None
-        else:
-            requirement_set = questions.route_requirements(route, fact_packet)
-            if not requirement_set:
-                return questions.NO_MEASUREMENT_TEXT, route, resolved_by, False, "CATALOGUE_REPLY"
-
+        # No requirement set is supplied, so build_prompt_packet runs its own More detail
+        # construction: a clause per sector and per detected object, which is the whole measured
+        # scene. Selecting a subset in advance is what the withdrawn topic routing did, and the
+        # entailment gate checks the same property afterwards without having to guess first.
         prompt_id = allocate("prompt", "prompt")
         prompt_packet = hdsg.build_prompt_packet(
             fact_packet,
@@ -1149,9 +1136,8 @@ def main():
             max_tokens=args.caption_max_tokens,
             system_prompt=composed_system,
             constraint_hash=constraint_hash,
-            prompt_profile_id=str(route_entry["prompt_profile_id"]),
+            prompt_profile_id=str(answer_entry["prompt_profile_id"]),
             system_prompt_id=composed_system_id,
-            question_requirements=requirement_set,
             expected_response_schema=hdsg.CAPTION_SCHEMA,
         )
         prompt_packet["image"]["transform"].update({
@@ -1162,7 +1148,10 @@ def main():
         record("restricted_prompt_packet", prompt_packet)
 
         candidate, failure_codes, raw_response, scored_assertions = generate_candidate(
-            fact_packet, prompt_packet, request["image"], str(route_entry["fixed_instruction"])
+            fact_packet, prompt_packet, request["image"],
+            questions.build_answer_instruction(
+                question, str(answer_entry["fixed_instruction"])
+            ),
         )
         if scored_assertions:
             record("declared_assertions", {
@@ -1182,16 +1171,11 @@ def main():
         if release["verification"]["gate_outcome"] == "ACCEPTED":
             answer = questions.answer_text_from_release(release)
         else:
-            # A rejected candidate falls back to the routed facts rather than to the release
-            # builder's own fallback, which describes the action binding and would answer a
-            # different question.
-            # The packet's own requirements are used rather than the scoped set, so the fallback
-            # covers the unscoped construction too.
-            answer = questions.deterministic_answer(
-                route, fact_packet, prompt_packet["requirements"]
-            )
-        if route == "EXPLAIN_DECISION":
-            answer = questions.with_action_prefix(release, answer)
+            # A rejected candidate falls back to the permitted facts rather than to the release
+            # builder's own fallback, which describes only the action binding and would answer a
+            # narrower question than the one asked.
+            answer = questions.deterministic_answer(fact_packet, prompt_packet["requirements"])
+        answer = questions.with_action_prefix(release, answer)
         # The primary reason code accompanies the mode, because "fell back" without saying why is
         # not enough to tell a rejected caption from an unavailable model while testing.
         verification = release["verification"]
@@ -1618,10 +1602,9 @@ def main():
                         stable_statuses = None
                         stable_depths = None
 
-            # Question routing, HDSG_OPEN_QUESTION_ROUTING_POLICY.md section 2. The measurement
-            # pre-check and the Tier 0 keyword filter run here, on the main loop, because both are
-            # deterministic and both can settle a question without a model call. Only what remains
-            # is handed to the worker.
+            # Question admission. The measurement pre-check and the keyword filter run here, on the
+            # main loop, because both are deterministic and both can settle a question without a
+            # model call. Only what remains is handed to the worker.
             for question in browser_questions:
                 question = questions.normalise_question(question)
                 if not question:
@@ -1657,6 +1640,7 @@ def main():
                     continue
 
                 keyword_route = questions.classify_keywords(question)
+                resolved_by = "KEYWORD_FILTER" if keyword_route else "ADMISSION_CLASSIFIER"
                 packet = create_fact_packet(
                     "MORE_DETAIL", "MORE_DETAIL", "USER_REQUESTED", latest_observation_id,
                     time.monotonic() * 1000.0, latest_objects, latest_sector_facts,
@@ -1670,7 +1654,7 @@ def main():
                     question_q.put_nowait({
                         "question": question,
                         "route": keyword_route,
-                        "resolved_by": "TIER_0_KEYWORD" if keyword_route else "TIER_1_CLASSIFIER",
+                        "resolved_by": resolved_by,
                         "fact_packet": packet,
                         "image": observation_images[latest_observation_id].copy(),
                     })
