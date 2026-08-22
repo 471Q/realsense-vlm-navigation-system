@@ -502,11 +502,28 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
 # Plurals that appending "s" does not produce. "person" is the one that matters: it is the class a
 # walker is most often wrong about, and a caption saying "two people" when the detector reported
 # nobody went unchecked while the same caption saying "a person" was rejected.
+# The suffix rules below cover most of the vocabulary. Every class name they get wrong is listed
+# here, because a missed plural is a word the caption may use for an object the detector did not
+# report. The table was sized for COCO's eighty names; the entries from "man" downwards were added
+# on 22 August 2026 with the swap to the Open Images vocabulary of 601 names, where the suffix rules
+# would otherwise produce "mans", "shelfs", "scarfs", "gooses", "deers", "potatos" and "tomatos" and
+# leave the real plurals unguarded. Only names the rules get wrong belong here.
 _IRREGULAR_PLURALS = {
     "person": "people",
     "knife": "knives",
     "mouse": "mice",
     "sheep": "sheep",
+    "man": "men",
+    "woman": "women",
+    "shelf": "shelves",
+    "scarf": "scarves",
+    "goose": "geese",
+    "deer": "deer",
+    "cattle": "cattle",
+    "stairs": "stairs",
+    "potato": "potatoes",
+    "tomato": "tomatoes",
+    "human foot": "human feet",
 }
 
 # A class ending in a sibilant takes "es", so "bus" pluralises to "buses" and not to "buss".

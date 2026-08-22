@@ -544,6 +544,28 @@ class ProhibitedContentTests(unittest.TestCase):
     def test_a_sibilant_plural_is_refused(self):
         self.assertIn("RG_OBJECT_REFERENCE_INVALID", self.codes("Several buses are parked here."))
 
+    def test_an_f_stem_plural_is_refused(self):
+        """The suffix rules produce "shelfs" and leave "shelves" unguarded. The Open Images
+        vocabulary adopted on 22 August 2026 contains Shelf, Scarf, Man, Woman, Goose, Deer, Potato
+        and Tomato, none of which the rules pluralise correctly, so each is tabled explicitly."""
+        packet, prompt = event()
+        codes, _ = gate(caption("Shelves line the wall."), packet, prompt,
+                        classes=("Shelf", "Chair"))
+        self.assertIn("RG_OBJECT_REFERENCE_INVALID", codes)
+
+    def test_the_plural_of_man_is_refused(self):
+        packet, prompt = event()
+        codes, _ = gate(caption("Two men are waiting."), packet, prompt, classes=("Man", "Chair"))
+        self.assertIn("RG_OBJECT_REFERENCE_INVALID", codes)
+
+    def test_the_hazard_class_may_not_be_named_when_absent(self):
+        """Stairs is the class the whole hazard argument rests on, and it became nameable only when
+        the detector vocabulary changed to Open Images. COCO had no word for it."""
+        packet, prompt = event()
+        codes, _ = gate(caption("Stairs lead down ahead."), packet, prompt,
+                        classes=("Stairs", "Chair"))
+        self.assertIn("RG_OBJECT_REFERENCE_INVALID", codes)
+
     def test_a_reported_class_may_be_named(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
