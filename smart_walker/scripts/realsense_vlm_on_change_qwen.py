@@ -1411,6 +1411,9 @@ def main():
     latest_objects: list[dict] = []
     latest_sector_facts: Optional[dict] = None
     latest_authority: Optional[dict] = None
+    # None until the first depth frame arrives, and recorded as None in any packet built before it,
+    # which is the honest value: no frame was measured, rather than a coverage of zero.
+    latest_depth_valid_fraction: Optional[float] = None
     latest_observation_id: Optional[str] = None
     observation_images: dict[str, np.ndarray] = {}
     previous_selected_sector: Optional[str] = None
@@ -1528,6 +1531,7 @@ def main():
             motion_tracker=motion_tracker,
             object_caution_below_m=object_caution_below_m,
             hazard_stop_at_or_below_m=hazard_stop_at_or_below_m,
+            depth_valid_fraction=latest_depth_valid_fraction,
             configuration_hash=runtime_configuration_hash,
             post_reorientation_stable_observations=args.post_reorientation_stable_observations,
             post_reorientation_max_variation_m=args.post_reorientation_max_variation_m,
@@ -1823,11 +1827,15 @@ def main():
                     right_min=sector_right_min,
                 )
                 latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
+                # Recorded on every observation, whether or not it crosses the caution threshold.
+                # The threshold is provisional and set from seven frames; only the distribution the
+                # archive accumulates can settle it.
+                latest_depth_valid_fraction = sw.valid_depth_fraction(inference.depth_m)
                 baseline_facts = {
                     "objects": inference.objects,
                     "free_space": {"corridor_min_width_m": None},
                     "hazards": inference.hazards,
-                    "uncertainty": {"low_light": False},
+                    "uncertainty": {"valid_depth_fraction": latest_depth_valid_fraction},
                     "explain": {},
                 }
                 object_result = sw.compute_baseline_risk(baseline_facts, cfg)

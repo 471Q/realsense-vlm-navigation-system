@@ -100,7 +100,21 @@ risk_rules_baseline:
   caution:
     nearest_obstacle_m_lt: 1.50
     multi_near_objects_count_gte: 2
-    high_uncertainty: true
+    # Caution when less than half the reasoning band carries a usable depth reading.
+    #
+    # This replaced `high_uncertainty` on 23 August 2026, which tested a low-light flag written as
+    # False on every frame beside a `low_light_gray_mean_lt: 40` nothing computed. Measuring the
+    # backlit staircase captures showed that threshold also pointed the wrong way: those frames
+    # average 101 grey and are brighter than the ordinary room at 73 to 94. The adverse condition
+    # is high contrast, not darkness.
+    #
+    # 0.50 is not fitted to the sample. Below half, the sector medians that drive the decision are
+    # computed from a minority of the region, which is a statement about the measurement rather
+    # than about seven frames. It sits well inside the observed gap: the backlit captures return
+    # 17.6 to 36.8 per cent valid depth in this band, the ordinary room 71.7 to 72.0. Provisional
+    # until the laboratory captures give a distribution, and deliberately CAUTION rather than STOP,
+    # because a false caution costs an unnecessary explanation and a false stop costs a journey.
+    min_valid_depth_fraction: 0.50
 
 sector:
   # The three sector clearances, computed from the depth image rather than from detected objects.

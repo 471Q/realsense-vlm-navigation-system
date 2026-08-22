@@ -250,6 +250,39 @@ def bearing_from_bbox(box, img_w, bearing_cfg):
     return "centre"
 
 
+def valid_depth_fraction(depth_m, top_fraction=0.55, bottom_fraction=0.95):
+    """Returns the share of the reasoning region that carries a usable depth reading, 0.0 to 1.0.
+
+    The measurement that replaced the low-light rule on 23 August 2026. That rule compared the mean
+    grey level of the colour frame against 40 and could never fire, because nothing computed the
+    mean and the flag was written as False on every frame. Measuring the three backlit staircase
+    captures showed the threshold also pointed the wrong way: those frames average 101 and are
+    brighter than the ordinary room frames at 73 to 94. The adverse condition is not darkness but
+    high contrast, a window blown out at 250 with the staircase in shadow beneath it, and a mean
+    cannot see that.
+
+    What did separate them is how much depth came back. Over the same nine frames the backlit
+    captures returned 34 to 54 per cent valid depth against a steady 67 to 68 per cent in the
+    ordinary room. That measures the consequence rather than guessing at the cause, and it covers
+    causes unrelated to light: a glossy floor, a dark absorbing surface, a wall closer than the
+    stereo baseline resolves.
+
+    The region is the same band `compute_lane_state` reasons over, rows 55 to 95 per cent of the
+    frame, so the figure describes the depth the decision was actually made from rather than the
+    whole image.
+
+    A zero in a RealSense depth frame means no reading, not a surface at zero distance.
+    """
+    if depth_m is None or not isinstance(depth_m, np.ndarray) or depth_m.size == 0:
+        return None
+    height = depth_m.shape[0]
+    band = depth_m[int(top_fraction * height):int(bottom_fraction * height), :]
+    if band.size == 0:
+        return None
+    usable = np.isfinite(band) & (band > 0)
+    return float(np.count_nonzero(usable)) / float(band.size)
+
+
 def distance_bin_from_m(d_m, bins_cfg):
     """Labels a distance with the band it falls in, or "unknown" where no band contains it.
 
@@ -401,8 +434,14 @@ def compute_baseline_risk(facts: dict, cfg: dict) -> dict:
         rf.append("caution:nearest_obstacle")
     if _multi_near_count(objs) >= caut["multi_near_objects_count_gte"]:
         rf.append("caution:multi_near")
-    if caut.get("high_uncertainty") and facts.get("uncertainty", {}).get("low_light"):
-        rf.append("caution:uncertainty")
+    # Depth coverage. `min_valid_depth_fraction` is absent from an older configuration, in which
+    # case the rule is skipped rather than defaulted, so replaying an archived run does not apply a
+    # rule that run was never subject to.
+    min_valid = caut.get("min_valid_depth_fraction")
+    valid_fraction = facts.get("uncertainty", {}).get("valid_depth_fraction")
+    if min_valid is not None and valid_fraction is not None \
+            and float(valid_fraction) < float(min_valid):
+        rf.append("caution:depth_coverage")
     if rf:
         return {"risk": "caution", "rules_fired": rf}
     return {"risk": "safe", "rules_fired": []}

@@ -727,6 +727,7 @@ def build_fact_packet(
     motion_tracker: MotionTracker,
     object_caution_below_m: float = OBJECT_CAUTION_BELOW_M,
     hazard_stop_at_or_below_m: float = HAZARD_STOP_AT_OR_BELOW_M,
+    depth_valid_fraction: Optional[float] = None,
     configuration_hash: Optional[str] = None,
     post_reorientation_stable_observations: int = 4,
     post_reorientation_max_variation_m: float = 0.10,
@@ -778,6 +779,14 @@ def build_fact_packet(
             "depth_aligned_to_rgb": True,
             "rgb_valid": True,
             "depth_valid": depth_valid,
+            # How much of the reasoning band carried a usable reading, recorded on every
+            # observation whether or not it crosses any threshold. The point is the distribution:
+            # the caution threshold is provisional and set from seven frames, and it can only be
+            # settled from the spread the archive accumulates. None where no depth frame reached
+            # the packet.
+            "depth_valid_fraction": (
+                None if depth_valid_fraction is None else round(float(depth_valid_fraction), 4)
+            ),
             "measurement_state": measurement_state,
             "validity_reason_codes": [] if depth_valid else ["DEPTH_PARTIAL_OR_INVALID"],
             "rear_state": "UNOBSERVED",

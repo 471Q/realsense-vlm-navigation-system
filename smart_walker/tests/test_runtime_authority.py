@@ -275,6 +275,93 @@ class MotionTrackerTests(unittest.TestCase):
         self.assertIn("MOTION_WITHIN_STATIONARY_TOLERANCE", state["motion_reason_codes"])
 
 
+class DepthCoverageTests(unittest.TestCase):
+    """How much of the reasoning band carried a reading, and the caution rule built on it.
+
+    This replaced the low-light rule on 23 August 2026. That rule tested a flag written as False on
+    every frame, beside a `low_light_gray_mean_lt: 40` nothing computed, and measurement showed the
+    threshold pointed the wrong way as well: the backlit staircase captures average 101 grey and are
+    brighter than the ordinary room at 73 to 94. Depth coverage separated the same frames cleanly,
+    17.6 to 36.8 per cent against 71.7 to 72.0.
+    """
+
+    def setUp(self):
+        import scripts.realsense_shared_control as sw
+
+        self.sw = sw
+        import yaml
+
+        self.cfg = yaml.safe_load(
+            (support.CONFIG / "pipeline.yaml").read_text(encoding="utf-8")
+        )
+
+    def depth(self, valid_fraction):
+        """A depth frame whose reasoning band is `valid_fraction` readable.
+
+        Only rows 55 to 95 per cent count, so the frame is built to that band rather than overall.
+        """
+        frame = np.zeros((100, 100), dtype=np.float32)
+        band = frame[55:95, :]
+        readable = int(round(valid_fraction * band.size))
+        band.reshape(-1)[:readable] = 1.5
+        frame[55:95, :] = band
+        return frame
+
+    def test_it_measures_the_band_the_decision_is_made_from(self):
+        """A frame readable only outside rows 55 to 95 per cent has no usable coverage.
+
+        Measuring the whole image would report depth the sector medians never saw.
+        """
+        frame = np.zeros((100, 100), dtype=np.float32)
+        frame[0:50, :] = 2.0
+        self.assertEqual(0.0, self.sw.valid_depth_fraction(frame))
+
+    def test_a_zero_is_no_reading_rather_than_a_surface_at_zero_metres(self):
+        self.assertEqual(0.0, self.sw.valid_depth_fraction(np.zeros((100, 100), dtype=np.float32)))
+
+    def test_a_missing_frame_reports_nothing_rather_than_zero(self):
+        """None and 0.0 mean different things, and only one of them should raise a caution."""
+        self.assertIsNone(self.sw.valid_depth_fraction(None))
+        self.assertIsNone(self.sw.valid_depth_fraction(np.zeros((0, 0), dtype=np.float32)))
+
+    def facts(self, valid_fraction):
+        return {"objects": [], "free_space": {"corridor_min_width_m": None}, "hazards": [],
+                "uncertainty": {"valid_depth_fraction": valid_fraction}, "explain": {}}
+
+    def test_coverage_below_the_threshold_raises_caution(self):
+        result = self.sw.compute_baseline_risk(self.facts(0.35), self.cfg)
+        self.assertEqual("caution", result["risk"])
+        self.assertIn("caution:depth_coverage", result["rules_fired"])
+
+    def test_coverage_at_the_threshold_does_not(self):
+        threshold = self.cfg["risk_rules_baseline"]["caution"]["min_valid_depth_fraction"]
+        result = self.sw.compute_baseline_risk(self.facts(threshold), self.cfg)
+        self.assertNotIn("caution:depth_coverage", result["rules_fired"])
+
+    def test_an_unmeasured_frame_does_not_raise_caution(self):
+        """None is the absence of a measurement, and the absence of a measurement is not a reading
+        of zero. A packet built before the first depth frame must not be called cautious for it."""
+        result = self.sw.compute_baseline_risk(self.facts(None), self.cfg)
+        self.assertNotIn("caution:depth_coverage", result["rules_fired"])
+
+    def test_a_configuration_without_the_rule_skips_it(self):
+        """Replaying an archived run must not apply a rule that run was never subject to."""
+        cfg = {"risk_rules_baseline": {
+            "stop": {"nearest_obstacle_m_lt": 0.7, "corridor_min_width_m_lt": 0.6,
+                     "hazard_within_m_lte": 2.0},
+            "caution": {"nearest_obstacle_m_lt": 1.5, "multi_near_objects_count_gte": 2},
+        }}
+        result = self.sw.compute_baseline_risk(self.facts(0.05), cfg)
+        self.assertEqual("safe", result["risk"])
+
+    def test_the_fraction_reaches_the_fact_packet(self):
+        """Recorded on every observation whether or not it crosses the threshold, because the
+        threshold is provisional and only the accumulated distribution can settle it."""
+        packet = support.fact_packet()
+        self.assertIn("depth_valid_fraction", packet["observation"])
+        self.assertIsNone(packet["observation"]["depth_valid_fraction"])
+
+
 class ThresholdConsistencyTests(unittest.TestCase):
     """Every threshold has one value, wherever it is read from.
 

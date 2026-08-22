@@ -16,13 +16,14 @@
     "The visual-observation label screen moved into the composed validator. The templated validator checked labels against the action, commentary and prohibited-instruction expressions and the composed one did not, so removing the templated gate would have dropped the check. A label is rendered into the release as prose and is screened as prose.",
     "The prompt packet recorded max_tokens from the templated budget while the composed call sent the caption budget, so the recorded value was 220 where 400 was sent. This is the third defect of that class, after the system prompt digest and the constraint digest, and all three came of a field being populated with the wrong value rather than left absent.",
     "build_release no longer takes a candidate. It renders the deterministic account for the idle state, the pending state and every rejection, and hdsg_composed.build_composed_release calls it for the authority block before substituting an accepted caption's content.",
-    "hdsg.question_record.v1 added 23 August 2026. The telemetry record written for each typed question previously stamped itself hdsg.question_route.v1, the schema of the classifier's two-field reply, and failed validation against it. The reply schema is unchanged in shape; its enumeration went from eight topic tokens to three admission tokens when topic routing was withdrawn the same day, which is why its digest and the grammar's have moved."
+    "hdsg.question_record.v1 added 23 August 2026. The telemetry record written for each typed question previously stamped itself hdsg.question_route.v1, the schema of the classifier's two-field reply, and failed validation against it. The reply schema is unchanged in shape; its enumeration went from eight topic tokens to three admission tokens when topic routing was withdrawn the same day, which is why its digest and the grammar's have moved.",
+    "observation.depth_valid_fraction added 23 August 2026, optional so archives recorded before that date still validate. It replaces a low-light flag that was written as False on every frame; the share of the reasoning band carrying a usable depth reading separated the backlit staircase captures from ordinary room frames where mean brightness did not, the backlit frames being the brighter of the two."
   ],
   "files": [
     {
       "record_schema": "hdsg.fact_packet.v2",
       "path": "hdsg.fact_packet.v2.schema.json",
-      "sha256": "7515b1fe03fcc0a9830942b53121d723f98a4caddd6bac176d5066ed98aacfad"
+      "sha256": "011fdbb6fda5d6d5833e912907dbafb2e8832e25cc78cf1c0280a07c9367a8a3"
     },
     {
       "record_schema": "hdsg.prompt_packet.v2",

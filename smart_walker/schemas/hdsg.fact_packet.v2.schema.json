@@ -201,6 +201,19 @@
         },
         "rear_state": {
           "const": "UNOBSERVED"
+        },
+        "depth_valid_fraction": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The share of the reasoning band, rows 55 to 95 per cent of the frame, that carried a usable depth reading. Null where no depth frame was available. Added 23 August 2026 in place of a low-light flag that was written as False on every frame. Optional, so archives recorded before that date still validate."
         }
       }
     },
