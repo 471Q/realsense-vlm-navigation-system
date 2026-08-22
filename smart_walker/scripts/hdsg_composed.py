@@ -759,7 +759,12 @@ def validate_caption_candidate(
 
     # The caption must not instruct. This is the check that keeps the action categorical: the
     # deterministic tuple is the guidance, and generated prose may describe but never direct.
-    if hdsg.ACTION_RE.search(caption):
+    #
+    # Two expressions, under one reason code. ACTION_RE lists instruction verbs and is therefore
+    # partial. SECOND_PERSON_RE refuses any address to the person, which is complete for what it
+    # names and is the check that carries the guarantee: a description of a room has no occasion to
+    # say "you", so an accepted caption cannot be read as directed at the walker's user.
+    if hdsg.ACTION_RE.search(caption) or hdsg.SECOND_PERSON_RE.search(caption):
         errors.append("RG_ACTION_LANGUAGE_DETECTED")
     if hdsg.COMMENTARY_RE.search(caption):
         errors.append("RG_MODEL_COMMENTARY_DETECTED")

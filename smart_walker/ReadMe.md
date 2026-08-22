@@ -235,9 +235,17 @@ pre-scoped.
 Every answer is prefixed with the authoritative action sentence, and carries the
 interaction prompt when one is set, so it reads *"Change direction and continue
 towards the right. The centre sector is blocked at 0.60 metres."* That prefix comes
-from the deterministic template table by way of the release, never from the model. It
-is the one piece of text that tells the person what to do, and it is the reason a
-crafted question cannot turn an answer into a movement instruction.
+from the deterministic template table by way of the release, never from the model.
+
+The prefix is not on its own enough, because it sits beside the model's text rather
+than replacing it: without a further check an answer could read *"Stop. Keep
+walking."* The gate therefore refuses a caption that addresses the person at all. Any
+second-person pronoun is refused whatever verb accompanies it, and a list of
+instruction verbs is refused alongside it. The pronoun half is complete for what it
+names: a description of a room has no occasion to say "you". The verb half is a list
+and is partial, so the residue is an imperative built from an unlisted verb of motion.
+Both are reported under `RG_ACTION_LANGUAGE_DETECTED`, and a refused caption falls
+back to the deterministic rendering.
 
 Answers appear in the panel, not on the caption line: the caption keeps showing the
 deterministic action and its reason throughout. Questions run on their own worker,

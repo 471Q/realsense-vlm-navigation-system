@@ -569,6 +569,73 @@ class ProhibitedContentTests(unittest.TestCase):
         """The deterministic tuple is the guidance. Generated prose may describe but never direct."""
         self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes("Turn towards the wider side."))
 
+    def test_addressing_the_person_is_refused(self):
+        """Any second-person pronoun, whatever verb accompanies it.
+
+        This half of the check is complete for what it names. A caption describes the space and has
+        no occasion to address anyone, so the pronoun decides the case on its own and no list of
+        verbs has to be kept current for it to hold.
+        """
+        for text in ("You can advance safely.",
+                     "Nothing is in your way.",
+                     "The room ahead of you is open.",
+                     "Help yourself to the wider side."):
+            with self.subTest(text=text):
+                self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes(text))
+
+    def test_an_impersonal_instruction_to_walk_is_refused(self):
+        """The verb half, extended 23 August 2026.
+
+        The original list was written against templated captions, which could not contain an
+        instruction at all. Once the question channel carried the person's own wording into the
+        answer call, every phrasing below passed it, so an answer could read "Stop. Keep walking."
+        with the first sentence from the rule engine and the second from the model.
+        """
+        for text in ("Keep walking, the way is open.",
+                     "Step forward now.",
+                     "Push on ahead.",
+                     "It is fine to carry on.",
+                     "Just walk straight.",
+                     "Head towards the doorway.",
+                     "Feel free to keep moving."):
+            with self.subTest(text=text):
+                self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes(text))
+
+    def test_a_description_that_addresses_nobody_is_accepted(self):
+        """The check must not refuse ordinary description, which is what the answer path produces."""
+        self.assertEqual([], self.codes("The centre sector is clear for 1.74 metres.",
+                                        [declares("centre", CENTRE)]))
+
+    def test_a_moving_object_is_described_rather_than_refused(self):
+        """"Moving" is what render_fact itself writes for a tracked object.
+
+        Present participles were briefly added to the verb list and refused the deterministic
+        renderer's own sentence. The list carries bare verb forms only, and "keep walking" is caught
+        by a phrase rule instead.
+        """
+        self.assertNotIn("RG_ACTION_LANGUAGE_DETECTED",
+                         self.codes("A person is moving in the centre."))
+
+    def test_a_staircase_step_is_not_read_as_an_instruction(self):
+        """"Step" is not a listed bare word, because a staircase description names one.
+
+        Refusing "the first step is 0.80 metres away" would refuse a true measurement of the hazard
+        the system exists to report. Only "step" followed by a direction is an instruction.
+        """
+        self.assertNotIn("RG_ACTION_LANGUAGE_DETECTED",
+                         self.codes("The first step is 0.80 metres away."))
+
+    def test_the_residue_is_recorded(self):
+        """A qualitative claim with no verb and no pronoun still passes both expressions.
+
+        "The path ahead is entirely clear and safe" states no number to check against measurement
+        and names nobody, so nothing here refuses it whatever the centre sector measures. That is
+        the open decision on qualitative assertions without units, not a defect in this check, and
+        it is stated rather than left for a reader to discover.
+        """
+        self.assertNotIn("RG_ACTION_LANGUAGE_DETECTED",
+                         self.codes("The path ahead is entirely clear and safe."))
+
     def test_commentary_about_the_system_is_refused(self):
         self.assertIn("RG_MODEL_COMMENTARY_DETECTED", self.codes("The image shows an open room."))
 
