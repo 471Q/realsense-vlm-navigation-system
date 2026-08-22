@@ -35,7 +35,7 @@
 #
 # A home. The previous version was written for a hospital and grouped a bed as something that rolls,
 # which is true of a hospital bed on castors and false of a bed in a bedroom. Rewritten for a home
-# on 22 August 2026 at Atiq's instruction. Section 10.8 of `HDSG_VERIFIED_GENERATION_POLICY.md`
+# on 22 August 2026, confirmed that date. Section 10.8 of `HDSG_VERIFIED_GENERATION_POLICY.md`
 # records the change.
 
 ontology:

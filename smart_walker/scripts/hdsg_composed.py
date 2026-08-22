@@ -770,7 +770,7 @@ def validate_caption_candidate(
     forbidden = forbidden_entity_terms(fact_packet, detector_classes)
     named_absent = forbidden_terms_named(caption, forbidden)
     if named_absent:
-        # Recorded, not refused. Atiq's decision on 23 August 2026.
+        # Recorded, not refused. Confirmed 23 August 2026.
         #
         # The check sees the detector's own 601 words and their inflections. A synonym is not one of
         # them, so a caption naming an absent chair is refused if it writes "chair" and released if

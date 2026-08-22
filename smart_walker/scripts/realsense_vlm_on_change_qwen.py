@@ -753,8 +753,8 @@ def main():
     # started for earlier work was still listening on port 8080, and the run recorded
     # "qwen3-vl-4b-instruct" because that is what was typed. A log must state which weights produced
     # it, not which name someone passed, or a result cannot be attributed after the fact. The four
-    # runs recorded on 22 August 2026 all used Qwen2.5-VL-3B, which is known from Atiq rather than
-    # from any log.
+    # runs recorded on 22 August 2026 all used Qwen2.5-VL-3B, confirmed 23 August 2026 from
+    # recollection rather than from any log.
     endpoint_model_path = None
     endpoint_model_hash = None
     try:
