@@ -1,56 +1,72 @@
 # =========================
 # Per-frame Pipeline Parameters
 # =========================
-
-open_vocab:
-  # Text prompts sent to an open-vocabulary detector (can be expanded anytime).
-  prompts:
-    - person
-    - wheelchair
-    - walker
-    - pram
-    - trolley
-    - stretcher
-    - bed
-    - chair
-    - table
-    - bin
-    - cabinet
-    - rack
-    - iv pole
-    - door
-    - stairs
-    - ramp
-    - wet floor sign
-    - drop-off
+#
+# Thresholds the perception path reads at startup. No logic lives here. A value in this file is
+# a choice someone made, not a fact about the world, and it is kept out of the code so that
+# retuning it is an edit rather than a search.
+#
+# The file's digest is folded into `runtime_configuration_hash` and recorded with every run, so two
+# runs carrying the same hash were configured identically.
+#
+# **Every block below is read by the live pipeline.** Four blocks that nothing read were removed on
+# 23 August 2026: `open_vocab`, eighteen prompts for an open-vocabulary detector the system does not
+# use; `depth.monocular_bins_norm` and `depth.mode`, for a camera with no depth sensor, where the
+# D455f has one and `source_depth` is hardcoded to rgbd; `uncertainty_thresholds`, whose two values
+# were never computed and whose `low_light` is hardcoded false; and `output_schema_fields`, a
+# description of a record shape written in prose beside four JSON Schema files that describe the
+# same thing and are enforced. Each read as an active part of the specification and was not one.
+#
+# Read by `realsense_shared_control.py` and `realsense_vlm_on_change_qwen.py` on the live path, and
+# by five older standalone scripts that are not part of the current system.
 
 depth:
-  mode: auto            # "rgbd" | "monocular" | "auto"
+  # Distance bands. Every detected object is labelled with the band its measured distance falls in,
+  # so a caption can say "near" without reciting a number, and so `_multi_near_count` can ask how
+  # many objects are close without a second threshold.
+  #
+  # These are presentation bands. They are not safety thresholds, and nothing that decides motion
+  # should read them. `blocked_threshold_m` was taken from `very_close[1]` until 23 August 2026,
+  # which meant retuning a display band for readability moved the distance at which a sector is
+  # declared impassable. It now reads `risk_rules_baseline.stop.nearest_obstacle_m_lt`, which holds
+  # the same number in the place that means it.
   metric_bins_m:
     very_close: [0.0, 0.7]
     near:       [0.7, 1.5]
     mid:        [1.5, 3.0]
     far:        [3.0, 99.0]
-  monocular_bins_norm:   # 0..1 (smaller = nearer), used if no metric depth
-    very_close: [0.00, 0.20]
-    near:       [0.20, 0.40]
-    mid:        [0.40, 0.70]
-    far:        [0.70, 1.01]
 
 bearing:
-  left_max:  0.33       # bbox centre / image width
+  # Where the image is divided into left, centre and right. The fraction is the horizontal centre of
+  # a detection's bounding box over the image width, so a box centred in the leftmost third is left
+  # and one past two thirds is right.
+  left_max:  0.33
   right_min: 0.66
 
 free_space:
-  central_wedge_deg: 20  # +/- degrees around centreline
-  sample_rows: 12
-  min_gap_width_m: 0.60  # treat qualitatively if only monocular depth
-
-uncertainty_thresholds:
-  depth_std_norm_gt: 0.25
-  low_light_gray_mean_lt: 40
+  # Whether the walker fits through the gap ahead, which is a different question from how far away
+  # the nearest object is. A corridor can be clear for four metres and still too narrow to enter.
+  #
+  # NOT YET IMPLEMENTED. `corridor_min_width_m` is set to None at every site that builds a scene, so
+  # the `stop:corridor_narrow` rule below has never fired. The parameters here are retained rather
+  # than removed because the measurement is wanted; see the open questions recorded with them.
+  central_wedge_deg: 20  # +/- degrees around the centreline searched for the gap
+  sample_rows: 12        # how many rows of the depth image the width is measured across
+  min_gap_width_m: 0.60  # used only where depth is qualitative rather than metric
 
 risk_rules_baseline:
+  # The object advisory: SAFE, CAUTION or STOP, computed by `compute_baseline_risk` and passed to
+  # `determine_authority` as the object side of the decision. The sector side is computed
+  # separately from the depth image.
+  #
+  # Three of the six rules below cannot fire as the system stands, and are kept because the
+  # measurements they need are wanted rather than abandoned:
+  #   `corridor_min_width_m_lt`  needs free_space above, which is not implemented.
+  #   `hazard_within_m_lte`      needs an object mapped to ontology_class hazard. No COCO class
+  #                              reaches it, so the hazard list is always empty. This is the cost of
+  #                              the deferred decision on how stairs are detected.
+  #   `high_uncertainty`         needs uncertainty.low_light, which is hardcoded false.
+  # What runs today is: stop under 0.70 m, caution under 1.50 m or two or more objects nearby.
   stop:
     nearest_obstacle_m_lt: 0.70
     corridor_min_width_m_lt: 0.60
@@ -59,15 +75,3 @@ risk_rules_baseline:
     nearest_obstacle_m_lt: 1.50
     multi_near_objects_count_gte: 2
     high_uncertainty: true
-
-output_schema_fields:
-  - frame_id
-  - timestamp_ms
-  - caption
-  - risk
-  - objects[].{id,raw_label,canonical_class,ontology_class,conf,bbox_xyxy,distance_m,distance_bin,bearing}
-  - free_space.{corridor_min_width_m,nearest_obstacle_m}
-  - hazards[]
-  - uncertainty.{depth_std,low_light}
-  - source_depth
-  - explain.{rules_fired,min_distance_m,class_counts}

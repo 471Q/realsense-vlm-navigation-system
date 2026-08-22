@@ -369,7 +369,7 @@ def identify_binding_fact(objects: Optional[list], lane_state: Optional[dict],
 
 
 def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
-                       clear_t: float, near_hi: float) -> Optional[dict]:
+                       clear_t: float, blocked_t: float) -> Optional[dict]:
     """Partition the lower field of view into three depth bands and classify each.
 
     This is the single place lane clearance is computed. The risk override, the
@@ -412,7 +412,7 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
             """
             if not isinstance(d, (int, float)) or not np.isfinite(d):
                 return 'unknown'
-            if d < near_hi:
+            if d < blocked_t:
                 return 'blocked'
             if d < clear_t:
                 return 'constrained'
@@ -464,7 +464,7 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
             'auto_suggest': auto_suggest,
             'finite_depths_m': finite,
             'clear_threshold_m': float(clear_t),
-            'near_threshold_m': float(near_hi),
+            'blocked_threshold_m': float(blocked_t),
         }
     except Exception:
         return None
@@ -783,10 +783,18 @@ def main():
 
     cfg = sw.load_yaml(sw.PIPELINE_CFG)
     mapper = sw.OntologyMapper(sw.ONTOLOGY_CFG)
+    # The distance at which a sector is declared BLOCKED, read from the named safety threshold.
+    #
+    # It was read from `depth.metric_bins_m.very_close[1]` until 23 August 2026. That band holds the
+    # same number, 0.70, but it is a presentation band: it decides whether a caption says
+    # "very close", and retuning it for readability silently moved the distance at which the walker
+    # stops. The two are now separate, and the name here says what the number is for.
     try:
-        near_hi = float(cfg["depth"]["metric_bins_m"]["very_close"][1])
+        blocked_threshold_m = float(
+            cfg["risk_rules_baseline"]["stop"]["nearest_obstacle_m_lt"]
+        )
     except Exception:
-        near_hi = 0.7
+        blocked_threshold_m = 0.7
     runtime_configuration_hash = hdsg.sha256_text(json.dumps({
         "pipeline_hash": hdsg.sha256_file(sw.PIPELINE_CFG),
         "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
@@ -1467,7 +1475,7 @@ def main():
             pipeline_config_path=sw.PIPELINE_CFG,
             ontology_path=sw.ONTOLOGY_CFG,
             clear_threshold_m=args.clear_threshold_m,
-            blocked_threshold_m=near_hi,
+            blocked_threshold_m=blocked_threshold_m,
             sector_choice_tolerance_m=args.sector_choice_tolerance_m,
             motion_tracker=motion_tracker,
             configuration_hash=runtime_configuration_hash,
@@ -1760,7 +1768,7 @@ def main():
                     inference.depth_m,
                     mirror_view=args.mirror_view,
                     clear_t=args.clear_threshold_m,
-                    near_hi=near_hi,
+                    blocked_t=blocked_threshold_m,
                 )
                 latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
                 baseline_facts = {
