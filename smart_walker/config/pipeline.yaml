@@ -70,6 +70,8 @@ free_space:
   #      below is 0.60, narrower than most walkers, so it was never a considered value.
   #   3. Whether to report the narrowest gap anywhere within stopping range, or the gap at a fixed
   #      lookahead. The first is the safer reading and costs nothing extra.
+  # Collected with everything else blocked on the laboratory in
+  # `thesis/Claude Session/LAB_SESSION_CHECKLIST.md`, sections A and B2.
   #   4. The camera's height above the floor and its tilt. Without these, image rows cannot be
   #      converted to physical heights, and the measurement can only be taken across a band of rows
   #      as `compute_lane_state` already does, which makes the height approximate rather than
