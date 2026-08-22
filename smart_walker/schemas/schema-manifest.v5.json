@@ -15,7 +15,8 @@
     "Seven reason codes became unreachable and are retained on the same grounds: RG_CLAUSE_FORMAT_INVALID, RG_REQUIRED_FACT_MISSING, RG_PLACEHOLDER_INVALID, RG_MOVEMENT_FACT_REQUIRED, RG_SUBJECT_MISMATCH, RG_STATE_EXPRESSION_MISMATCH and RG_NEGATION_DETECTED. Each screened a sentence the runtime had written. RG_REQUIRED_FACT_MISSING has no composed equivalent by design, because establishing that free prose covered a required fact would need the linguistic inference the architecture excludes from the safety boundary.",
     "The visual-observation label screen moved into the composed validator. The templated validator checked labels against the action, commentary and prohibited-instruction expressions and the composed one did not, so removing the templated gate would have dropped the check. A label is rendered into the release as prose and is screened as prose.",
     "The prompt packet recorded max_tokens from the templated budget while the composed call sent the caption budget, so the recorded value was 220 where 400 was sent. This is the third defect of that class, after the system prompt digest and the constraint digest, and all three came of a field being populated with the wrong value rather than left absent.",
-    "build_release no longer takes a candidate. It renders the deterministic account for the idle state, the pending state and every rejection, and hdsg_composed.build_composed_release calls it for the authority block before substituting an accepted caption's content."
+    "build_release no longer takes a candidate. It renders the deterministic account for the idle state, the pending state and every rejection, and hdsg_composed.build_composed_release calls it for the authority block before substituting an accepted caption's content.",
+    "hdsg.question_record.v1 added 23 August 2026. The telemetry record written for each typed question previously stamped itself hdsg.question_route.v1, the schema of the classifier's two-field reply, and failed validation against it. The reply schema is unchanged in shape; its enumeration went from eight topic tokens to three admission tokens when topic routing was withdrawn the same day, which is why its digest and the grammar's have moved."
   ],
   "files": [
     {
@@ -36,12 +37,17 @@
     {
       "record_schema": "hdsg.question_route.v1",
       "path": "hdsg.question_route.v1.schema.json",
-      "sha256": "9d5d6d6fd4fedaa1639c3f75f6148e4a6e852d3806361272cc9d83641c44c0d2"
+      "sha256": "3eb005c8fe8e319e38ba441de9f62a4a80692c0682eef31f3163f895dae1ffd0"
+    },
+    {
+      "record_schema": "hdsg.question_record.v1",
+      "path": "hdsg.question_record.v1.schema.json",
+      "sha256": "d2ce5e122007049368d36933f41b498971eb25d8fc81cb00ed3e35f3b152aa4f"
     },
     {
       "record_schema": "hdsg.release.v2",
       "path": "hdsg.release.v2.schema.json",
-      "sha256": "82b68e066fe64d24461d147fb267d7e9f5de9819ef002a358913ea6d057d049a"
+      "sha256": "2d4961823d9869a0311f5ee6ea91048786e8ae0a7490e845762b315422123828"
     },
     {
       "record_schema": "hdsg.vlm_caption.v1",
@@ -51,12 +57,12 @@
     {
       "record_schema": "hdsg.question_route.v1",
       "path": "../config/hdsg.question_route.v1.gbnf",
-      "sha256": "b704adc54179731f89b93da9cb50504d1ab4a771e34bb79b3c9da3f137f24396"
+      "sha256": "58f75907c13f84e5ed0de6dfcd77689edb7b0d0b4fbd702491eea397ca9e6a35"
     },
     {
       "record_schema": "hdsg.request_catalogue.v1",
       "path": "../config/hdsg_request_catalogue.v1.json",
-      "sha256": "6b943ce7348ea77fd77b8d9c9913f44fe3b9c529998a9c237fe151e9f1709f85"
+      "sha256": "02f99625c5592d02b36d01338bc25d2f84b1297be0bbd891fdf86f7370489296"
     }
   ]
 }

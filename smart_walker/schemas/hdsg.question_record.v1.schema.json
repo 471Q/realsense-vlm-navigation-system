@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hdsg.local/schemas/hdsg.question_record.v1.schema.json",
+  "title": "HDSG Question Record v1",
+  "description": "One telemetry record per typed question, written only during an evaluation run. Separated from hdsg.question_route.v1 on 23 August 2026: that schema describes the classifier's two-field reply and admits nothing else, so this record failed validation against the name it was stamping on itself. Every question a run is asked produces one of these, whatever settled it, so the log accounts for the questions it declined as well as those it answered.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "question_text",
+    "question_text_sha256",
+    "question_chars",
+    "resolved_by",
+    "route",
+    "reached_generation"
+  ],
+  "properties": {
+    "schema_version": {"const": "hdsg.question_record.v1"},
+    "question_text": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "The question as asked, normalised and truncated. Stored in the clear because whether an admission decision or an answer was correct cannot be judged without reading it. The release record, which is the path that reaches the user, carries only the hash."
+    },
+    "question_text_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "question_chars": {"type": "integer", "minimum": 0, "maximum": 200},
+    "resolved_by": {
+      "enum": [
+        "MEASUREMENT_PRECHECK",
+        "KEYWORD_FILTER",
+        "ADMISSION_CLASSIFIER",
+        "CHANNEL_DISABLED",
+        "QUEUE_FULL"
+      ]
+    },
+    "route": {
+      "oneOf": [
+        {"enum": ["IN_SCOPE", "REASSESS", "OUT_OF_SCOPE"]},
+        {"type": "null"}
+      ],
+      "description": "The classifier's outcome, or null where no classification was reached. A null route with resolved_by ADMISSION_CLASSIFIER is a reply that could not be read."
+    },
+    "reached_generation": {"type": "boolean"}
+  }
+}

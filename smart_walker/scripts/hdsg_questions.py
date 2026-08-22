@@ -26,10 +26,22 @@ The pipeline now has four stages:
 
 **What the person's text can and cannot do.** It reaches two model calls: the classifier, whose
 decoder can emit only three tokens, and the answer call, where it is presented as the person's
-question and not as an instruction. The answer call can therefore be steered in wording. It cannot
-state a measurement the packet does not contain, because the gate rejects that, and it cannot tell
-the person what to do, because the action sentence comes from the deterministic template table and
-is prefixed to the answer after generation.
+question. The answer call can therefore be steered in wording. Two conditions bound the
+consequence, both applied after generation and both in `hdsg_composed`:
+
+- A stated measurement that departs from what was measured is refused, checked value against value.
+- A caption stating none of the measurements it was given is refused. That is what removes the
+  answer carrying an instruction in place of a description, and it decided all three failures
+  observed in `Experiment_Question_Compliance_Probe.md` without reading a word.
+
+The action sentence is prefixed to every answer and comes from the deterministic template table, so
+the instruction the person is given is always the rule engine's. Note that it is prefixed rather
+than substituted: on its own it would not prevent a contradicting sentence beside it, which is why
+the second condition above exists.
+
+**What is not bounded.** A caption stating one true measurement and an instruction beside it
+satisfies both conditions. Deciding that case needs the same test per sentence, which is left
+unbuilt until the looser form has been measured.
 """
 
 from __future__ import annotations
@@ -44,7 +56,15 @@ except ImportError:  # invoked as a plain script rather than as part of the pack
     import hdsg_runtime as hdsg  # type: ignore
 
 
+# The classifier's reply. Two fields, and the schema of this name admits nothing else.
 ROUTE_SCHEMA = "hdsg.question_route.v1"
+
+# The telemetry record written for every question. A separate name because it is a separate object:
+# it carries the question text, the stage that settled the outcome and whether generation was
+# reached, none of which the reply schema admits. Both once shared ROUTE_SCHEMA, so the record
+# failed validation against the schema whose name it stamped on itself, and any conformance test
+# checking records by their declared schema would have found it.
+QUESTION_RECORD_SCHEMA = "hdsg.question_record.v1"
 
 # Three outcomes, and only one of them answers from measurement. REASSESS and OUT_OF_SCOPE are not
 # answers at all: the first hands the message to the reassessment control, and the second declines.
@@ -53,10 +73,9 @@ ROUTES = ("IN_SCOPE", "REASSESS", "OUT_OF_SCOPE")
 
 MAX_QUESTION_CHARS = 200
 
-# The identifier recorded for every answered question. The prompt packet schema constrains
-# prompt_profile_id by pattern rather than by enumeration, so this is valid under the frozen v1 set
-# and makes an answered question distinguishable from a More detail expansion in telemetry alone.
-QUESTION_PROFILE_ID = "question_open.v1"
+# The prompt profile identifier for an answered question lives in the request catalogue, under
+# `question_answer`, and is read from there. It was also declared here and never read, which is two
+# homes for one string and the way the two come to disagree.
 
 OUT_OF_SCOPE_TEXT = (
     "I can only answer questions about the space around me right now. Try asking what's on the "
@@ -224,7 +243,9 @@ def with_action_prefix(release: Mapping[str, Any], answer: str) -> str:
     # fully explained without saying what it is waiting for.
     if interaction and interaction not in parts:
         parts.append(interaction)
-    return " ".join(parts)
+    # A release with no action, no interaction and an empty answer would otherwise put a blank
+    # message in the chat panel, which reads as the walker having ignored the question.
+    return " ".join(parts) if parts else NO_MEASUREMENT_TEXT
 
 
 def deterministic_answer(fact_packet: Mapping[str, Any], requirements: list[dict]) -> str:
@@ -250,6 +271,12 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
     Public because the deterministic-only evaluation condition in hdsg_contribution.py renders
     the same facts through the same wording, so that a comparison between the two reflects the
     model's contribution rather than a difference between two renderers.
+
+    Distances go through `hdsg._format_measurement`, the same formatter the gate holds a caption to
+    and the guidance caption is built from. Two decimal places were written out here instead, so
+    changing `MEASUREMENT_DECIMALS` would have left this function printing the old precision while
+    everything else printed the new one. A comparison against a renderer that disagrees with the
+    gate measures the renderers, which is the failure this function's docstring exists to prevent.
     """
     if fact_id.startswith("sector:"):
         name = fact_id.split(":", 1)[1]
@@ -259,7 +286,7 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
         clearance = fact.get("clearance_m")
         if clearance is None:
             return f"The {name} sector has no reliable measurement."
-        distance = f"{float(clearance):.2f} metres"
+        distance = hdsg._format_measurement(clearance)
         return {
             "CLEAR": f"The {name} sector is clear for {distance}.",
             "CONSTRAINED": f"The {name} sector has limited clearance at {distance}.",
@@ -276,7 +303,7 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
         placing = "in the centre" if bearing == "centre" else f"on the {bearing}"
         verb = "is moving" if fact.get("motion_state") == "MOVING" else "is detected"
         if fact.get("distance_m") is not None:
-            return f"A {label} {verb} {placing} at {float(fact['distance_m']):.2f} metres."
+            return f"A {label} {verb} {placing} at {hdsg._format_measurement(fact['distance_m'])}."
         return f"A {label} {verb} {placing}."
 
     if fact_id.startswith("condition:"):
@@ -293,7 +320,8 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
             )
             if best is None:
                 return "No sector has a reliable measurement."
-            return f"No sector is clear. The greatest measured clearance is {float(best):.2f} metres."
+            return ("No sector is clear. The greatest measured clearance is "
+                    f"{hdsg._format_measurement(best)}.")
         if name == "rear_unobserved":
             return "The area behind the walker has not been observed."
         return f"The condition {name.replace('_', ' ')} is active."
@@ -306,7 +334,10 @@ def build_route_record(
     resolved_by: str,
     reached_generation: bool,
 ) -> dict:
-    """Builds the question_route telemetry record.
+    """Builds the question telemetry record.
+
+    One record per question, whatever settled it, so a run accounts for every question asked. A
+    question the run declined without a model call is as much a result as one it answered.
 
     The question text is stored in the clear. It is the input to the thing being evaluated: whether
     an admission decision or an answer was correct cannot be judged without reading what was asked,
@@ -315,14 +346,18 @@ def build_route_record(
     record, which is the path that reaches the user, still carries only the hash.
 
     `resolved_by` records which stage settled the outcome, so the keyword filter's hit rate against
-    the classifier can be measured directly.
+    the classifier can be measured directly. Its values are MEASUREMENT_PRECHECK, KEYWORD_FILTER,
+    ADMISSION_CLASSIFIER, CHANNEL_DISABLED and QUEUE_FULL.
+
+    `route` carries the classifier's outcome when one was reached and None otherwise, so a record
+    with a route of None and a resolved_by of ADMISSION_CLASSIFIER is a reply that could not be read.
 
     This record is not covered by hdsg.schemas.v2. Its schema and fixtures belong to the next
     schema set.
     """
     normalised = normalise_question(question)
     return {
-        "schema_version": ROUTE_SCHEMA,
+        "schema_version": QUESTION_RECORD_SCHEMA,
         "question_text": normalised,
         "question_text_sha256": hdsg.sha256_text(normalised),
         "question_chars": len(normalised),

@@ -264,10 +264,12 @@ continues to answer each request statelessly.
 out-of-scope reply and no model is called. `--route_grammar` moves the admission
 constraint.
 
-During an evaluation run the `question_route` record stores the question text in the
-clear alongside its hash. Whether an admission decision or an answer was correct
-cannot be judged without reading what was asked. The release record, which is the
-path that reaches the user, carries only the hash.
+During an evaluation run every question produces one `question_record`, whatever
+settled it, so the log accounts for the questions the run declined as well as those
+it answered. It stores the question text in the clear alongside its hash: whether an
+admission decision or an answer was correct cannot be judged without reading what was
+asked. The release record, which is the path that reaches the user, carries only the
+hash.
 
 #### `--unconstrained`, a diagnostic mode
 

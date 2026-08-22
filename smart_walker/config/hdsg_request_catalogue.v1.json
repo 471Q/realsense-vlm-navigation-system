@@ -23,7 +23,7 @@
     }
   },
   "question_answer": {
-    "_note": "One entry for every admitted question. The eight per-topic entries here until 23 August 2026 were withdrawn with the topic routing: an admitted question now receives the whole Fact Packet and the person's own wording, and the entailment gate checks the result. An answered question rides as request_id MORE_DETAIL, because request_id is a frozen enumeration in hdsg.prompt_packet.v1 and no open-question member exists in it. It is distinguishable in telemetry by prompt_profile_id, which the same schema constrains by pattern rather than by enumeration, and by the question_route record. Outcomes REASSESS and OUT_OF_SCOPE never reach generation and carry no instruction here.",
+    "_note": "One entry for every admitted question. The eight per-topic entries here until 23 August 2026 were withdrawn with the topic routing: an admitted question now receives the whole Fact Packet and the person's own wording, and the entailment gate checks the result. An answered question rides as request_id MORE_DETAIL, because request_id is a frozen enumeration in hdsg.prompt_packet.v1 and no open-question member exists in it. It is distinguishable in telemetry by prompt_profile_id, which the same schema constrains by pattern rather than by enumeration, and by the question_record telemetry record. Outcomes REASSESS and OUT_OF_SCOPE never reach generation and carry no instruction here.",
     "prompt_profile_id": "question_open.v1",
     "fixed_instruction": "Answer the person's question about the space around the walker, using only the permitted facts."
   },

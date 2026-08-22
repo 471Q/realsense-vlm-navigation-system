@@ -1265,7 +1265,7 @@ def main():
                     questions.OUT_OF_SCOPE_TEXT, request["route"], request["resolved_by"],
                     False, "DETERMINISTIC_FALLBACK",
                 )
-            record("question_route", questions.build_route_record(
+            record("question_record", questions.build_route_record(
                 request["question"], route, resolved_by, reached
             ))
             if web_ui is not None:
@@ -1671,6 +1671,12 @@ def main():
                     continue
                 if not args.answer_questions:
                     web_ui.publish_chat_turn(question, questions.OUT_OF_SCOPE_TEXT, route=None)
+                    # Recorded like any other outcome. A question the channel declined without a
+                    # model call is a result, and a log that omits it does not account for every
+                    # question the run was asked.
+                    record("question_record", questions.build_route_record(
+                        question, None, "CHANNEL_DISABLED", False
+                    ))
                     continue
 
                 # Checked before the classifier, so an unmeasurable scene costs zero model calls
@@ -1694,7 +1700,7 @@ def main():
                 )
                 if not answerable:
                     web_ui.publish_chat_turn(question, questions.NO_MEASUREMENT_TEXT, route=None)
-                    record("question_route", questions.build_route_record(
+                    record("question_record", questions.build_route_record(
                         question, None, "MEASUREMENT_PRECHECK", False
                     ))
                     continue
@@ -1724,6 +1730,9 @@ def main():
                         "I am still working through the previous questions. Ask again in a moment.",
                         route=None,
                     )
+                    record("question_record", questions.build_route_record(
+                        question, None, "QUEUE_FULL", False
+                    ))
 
             try:
                 inference = inf_out.get_nowait()

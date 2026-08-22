@@ -10,6 +10,7 @@ recording the SHA-256 of every one.
 | Restricted Prompt Packet | `hdsg.prompt_packet.v2` | — |
 | VLM Caption | `hdsg.vlm_caption.v1` | `hdsg.vlm_caption.v1.gbnf` |
 | Question Route | `hdsg.question_route.v1` | `hdsg.question_route.v1.gbnf` |
+| Question Record | `hdsg.question_record.v1` | — |
 | Authoritative Release Object | `hdsg.release.v2` | — |
 
 ## What v5 changed and why

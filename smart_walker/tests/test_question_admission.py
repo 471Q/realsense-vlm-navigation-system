@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import unittest
 
-from support import fact_packet, sectors  # noqa: E402
+from support import SCHEMAS, fact_packet, sectors  # noqa: E402
 from scripts import hdsg_questions as questions  # noqa: E402
+from scripts import hdsg_runtime as hdsg  # noqa: E402
 
 
 FRESHNESS_MS = 5000.0
@@ -128,6 +129,36 @@ class TelemetryRecord(unittest.TestCase):
         self.assertEqual(record["route"], "OUT_OF_SCOPE")
         self.assertFalse(record["reached_generation"])
 
+    def test_the_record_does_not_claim_the_reply_schema(self):
+        """Two objects shared one schema name until 23 August 2026.
+
+        `hdsg.question_route.v1` describes the classifier's two-field reply and admits nothing
+        else, so this seven-field record failed validation against the name it stamped on itself.
+        Any conformance test that checks a record against its declared schema would have caught it.
+        """
+        record = questions.build_route_record("what is ahead", "IN_SCOPE", "KEYWORD_FILTER", True)
+        self.assertEqual(record["schema_version"], questions.QUESTION_RECORD_SCHEMA)
+        self.assertNotEqual(record["schema_version"], questions.ROUTE_SCHEMA)
+
+    def test_every_stage_the_runtime_names_is_representable(self):
+        """The runtime settles a question at five places and each must produce a valid record.
+
+        Two of them, the disabled channel and the full queue, answered the person and wrote nothing
+        at all until 23 August 2026, so a run's records did not account for every question asked.
+        """
+        schema = json.loads(
+            (SCHEMAS / "hdsg.question_record.v1.schema.json").read_text(encoding="utf-8")
+        )
+        stages = schema["properties"]["resolved_by"]["enum"]
+        self.assertEqual(sorted(stages), sorted([
+            "ADMISSION_CLASSIFIER", "CHANNEL_DISABLED", "KEYWORD_FILTER",
+            "MEASUREMENT_PRECHECK", "QUEUE_FULL",
+        ]))
+        for stage in stages:
+            with self.subTest(stage=stage):
+                record = questions.build_route_record("anything ahead", None, stage, False)
+                self.assertIn(record["resolved_by"], stages)
+
 
 class DeterministicFallback(unittest.TestCase):
     """What a person receives when the model is unavailable or its answer was rejected."""
@@ -143,6 +174,39 @@ class DeterministicFallback(unittest.TestCase):
     def test_it_declines_rather_than_returning_nothing(self):
         answer = questions.deterministic_answer(fact_packet(), [])
         self.assertEqual(answer, questions.NO_MEASUREMENT_TEXT)
+
+    def test_it_prints_the_precision_the_gate_holds_a_caption_to(self):
+        """The renderer must not carry its own idea of how many decimals a distance has.
+
+        Two decimal places were written out in render_fact while everything else read
+        MEASUREMENT_DECIMALS, so changing that constant would have left this function printing the
+        old precision. hdsg_contribution.py compares a model's caption against this renderer, and a
+        renderer that disagrees with the gate turns that comparison into a measurement of the two
+        renderers.
+        """
+        packet = fact_packet()
+        original = hdsg.MEASUREMENT_DECIMALS
+        try:
+            hdsg.MEASUREMENT_DECIMALS = 1
+            rendered = questions.render_fact(packet, "sector:centre")
+            self.assertIn(hdsg._format_measurement(1.74), rendered)
+            self.assertNotIn("1.74", rendered)
+        finally:
+            hdsg.MEASUREMENT_DECIMALS = original
+
+
+class BlankAnswer(unittest.TestCase):
+    """Nothing reaches the chat panel as an empty message."""
+
+    def test_a_release_with_no_text_at_all_still_says_something(self):
+        empty = {"content": {"action_text": "", "interaction_text": "",
+                             "reason_text": "", "additional_detail_texts": []}}
+        self.assertEqual(questions.with_action_prefix(empty, ""), questions.NO_MEASUREMENT_TEXT)
+
+    def test_the_action_alone_is_enough(self):
+        stopped = {"content": {"action_text": "Stop.", "interaction_text": "",
+                               "reason_text": "", "additional_detail_texts": []}}
+        self.assertEqual(questions.with_action_prefix(stopped, ""), "Stop.")
 
 
 if __name__ == "__main__":
