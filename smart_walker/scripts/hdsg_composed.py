@@ -757,14 +757,10 @@ def validate_caption_candidate(
     if visuals and not constraints["visual_only_observations_allowed"]:
         errors.append("RG_PROFILE_LIMIT_EXCEEDED")
 
-    # The caption must not instruct. This is the check that keeps the action categorical: the
-    # deterministic tuple is the guidance, and generated prose may describe but never direct.
-    #
-    # Two expressions, under one reason code. ACTION_RE lists instruction verbs and is therefore
-    # partial. SECOND_PERSON_RE refuses any address to the person, which is complete for what it
-    # names and is the check that carries the guarantee: a description of a room has no occasion to
-    # say "you", so an accepted caption cannot be read as directed at the walker's user.
-    if hdsg.ACTION_RE.search(caption) or hdsg.SECOND_PERSON_RE.search(caption):
+    # The caption must not instruct. The deterministic tuple is the guidance, and generated prose
+    # may describe but never direct. The expression is a list of verbs and is therefore partial;
+    # `no_measurement_stated` below is what actually bounds the case.
+    if hdsg.ACTION_RE.search(caption):
         errors.append("RG_ACTION_LANGUAGE_DETECTED")
     if hdsg.COMMENTARY_RE.search(caption):
         errors.append("RG_MODEL_COMMENTARY_DETECTED")
@@ -942,6 +938,10 @@ def validate_caption_candidate(
     if attribution_failures(caption, scored, fact_packet):
         errors.append("RG_SUBJECT_MISMATCH")
 
+    # A caption offered measurements must state at least one of them.
+    if no_measurement_stated(caption, prompt_packet, fact_packet):
+        errors.append("RG_NO_MEASUREMENT_STATED")
+
     seen_visual_ids: set[str] = set()
     for visual in visuals:
         if not isinstance(visual, Mapping) \
@@ -1117,6 +1117,44 @@ def declaration_example(prompt_packet: Mapping[str, Any], fact_packet: Mapping[s
         "measurement_id": item["measurement"]["measurement_id"],
         "stated_value": hdsg.display_value(value),
     })
+
+
+def no_measurement_stated(caption: str, prompt_packet: Mapping[str, Any],
+                          fact_packet: Mapping[str, Any]) -> bool:
+    """Reports whether a caption offered measurements stated none of them.
+
+    The condition that replaced the instruction-word list on 23 August 2026, and the reasoning is
+    recorded in `Experiment_Question_Compliance_Probe.md`. Two models were given the same prompt,
+    the same frames and the same sixteen questions, eight of them written to provoke an instruction.
+    Qwen3-VL-4B produced 32 usable answers out of 32. Qwen2.5-VL-3B produced 29, and its three
+    failures were "walk forward now" twice and "the path is clear and you should go".
+
+    Those three state no measurement. All 61 usable answers across both models state between two and
+    eight. The distinction is therefore available without reading a single word, which is what makes
+    it a property of the architecture rather than of an English vocabulary that can never be
+    complete. A caption asked to describe measured space, which reports none of the measurements it
+    was given, has not described it.
+
+    The check is skipped when the scene offered nothing to state. A packet whose sectors are all
+    invalid has no measurement for a caption to carry, and refusing the caption then would refuse
+    the honest description of an unmeasurable scene.
+
+    The prose is what is examined, not the declaration list. An earlier version required an accepted
+    declaration whose value the caption also carried, which entangled this condition with the
+    separate question of whether the model declared its numbers properly and made it fire on
+    captions that had in fact stated a measurement. The condition is about what the person reads.
+
+    **What this does not cover.** A caption stating one true measurement and an instruction beside it
+    satisfies the condition. Deciding that case requires the same test per sentence rather than per
+    caption, which the sentence splitter and `_fact_mentions` already make possible. It is left
+    unbuilt until the looser form has been measured, on the same reasoning that produced this
+    function: a mechanism is added once the failure it addresses has been observed.
+    """
+    measured = _measured_facts(prompt_packet, fact_packet)
+    if not measured:
+        return False
+    written = set(_caption_numbers(caption))
+    return not any(_display_string(value) in written for _, value in measured)
 
 
 def build_composed_prompt(prompt_packet: Mapping[str, Any], fact_packet: Mapping[str, Any],

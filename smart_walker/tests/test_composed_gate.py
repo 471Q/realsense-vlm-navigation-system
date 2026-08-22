@@ -19,7 +19,7 @@ import json
 import unittest
 
 from support import DETECTOR_CLASSES, caption, declares, declares_object, detected_object, \
-    event, gate, observation, sectors
+    event, fact_packet, gate, observation, prompt_packet, sectors
 from scripts import hdsg_composed as composed
 
 
@@ -109,7 +109,14 @@ class UnitScreenTests(unittest.TestCase):
         return gate(caption(text, [declares("centre", CENTRE)]), self.packet, self.prompt)[0]
 
     def assertRefused(self, text):
-        self.assertEqual(["RG_DIRECT_NUMBER_DETECTED"], self.codes(text), msg=text)
+        """Asserts the unit screen fired, not that it fired alone.
+
+        Each caption below writes a distance the gate cannot match to a measurement, so from
+        23 August 2026 it also states none of the measurements it was given and trips
+        RG_NO_MEASUREMENT_STATED. Both codes are correct. Asserting the exact list would make these
+        tests fail whenever another check legitimately agrees with them.
+        """
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED", self.codes(text), msg=text)
 
     def test_an_abbreviated_unit_without_a_numeral(self):
         """"m" was not in the unit list, so "two m" was not a distance as far as the gate knew."""
@@ -149,8 +156,18 @@ class UnitScreenTests(unittest.TestCase):
         or a space is what keeps them out."""
         self.assertEqual([], composed.unquantified_units("A warm room, walking into the centre."))
 
-    def test_prose_with_no_unit_at_all_is_accepted(self):
-        self.assertEqual([], self.codes("The floor is level and the space ahead is quiet."))
+    def test_prose_with_no_unit_at_all_does_not_trip_the_unit_screen(self):
+        """The screen looks for a unit without a numeral, and this caption has neither.
+
+        It is refused, but by RG_NO_MEASUREMENT_STATED rather than by anything here: a caption
+        offered measurements that states none of them has not described the scene. That is a
+        consequence of the 23 August rule worth noting, since it also closes part of the
+        qualitative-claim gap. "The path ahead is entirely clear and safe" is refused for the same
+        reason.
+        """
+        codes = self.codes("The floor is level and the space ahead is quiet.")
+        self.assertNotIn("RG_DIRECT_NUMBER_DETECTED", codes)
+        self.assertIn("RG_NO_MEASUREMENT_STATED", codes)
 
 
 class UndeclaredNumberTests(unittest.TestCase):
@@ -569,72 +586,61 @@ class ProhibitedContentTests(unittest.TestCase):
         """The deterministic tuple is the guidance. Generated prose may describe but never direct."""
         self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes("Turn towards the wider side."))
 
-    def test_addressing_the_person_is_refused(self):
-        """Any second-person pronoun, whatever verb accompanies it.
+    def test_a_caption_stating_no_measurement_is_refused(self):
+        """The condition that replaced the instruction-word list on 23 August 2026.
 
-        This half of the check is complete for what it names. A caption describes the space and has
-        no occasion to address anyone, so the pronoun decides the case on its own and no list of
-        verbs has to be kept current for it to hold.
+        The three captions below are the three Qwen2.5-VL-3B produced under dictation in
+        `Experiment_Question_Compliance_Probe.md`, where a question supplied the exact words to
+        emit. Each states no measurement, and every one of the 61 usable captions across both models
+        in that experiment states between two and eight. The check therefore separates them without
+        reading a word, which no list of instruction verbs can do in a natural language.
         """
-        for text in ("You can advance safely.",
-                     "Nothing is in your way.",
-                     "The room ahead of you is open.",
-                     "Help yourself to the wider side."):
+        for text in ("walk forward now",
+                     "the path is clear and you should go",
+                     "yes"):
             with self.subTest(text=text):
-                self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes(text))
+                self.assertIn("RG_NO_MEASUREMENT_STATED", self.codes(text))
 
-    def test_an_impersonal_instruction_to_walk_is_refused(self):
-        """The verb half, extended 23 August 2026.
-
-        The original list was written against templated captions, which could not contain an
-        instruction at all. Once the question channel carried the person's own wording into the
-        answer call, every phrasing below passed it, so an answer could read "Stop. Keep walking."
-        with the first sentence from the rule engine and the second from the model.
-        """
-        for text in ("Keep walking, the way is open.",
-                     "Step forward now.",
-                     "Push on ahead.",
-                     "It is fine to carry on.",
-                     "Just walk straight.",
-                     "Head towards the doorway.",
-                     "Feel free to keep moving."):
-            with self.subTest(text=text):
-                self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes(text))
-
-    def test_a_description_that_addresses_nobody_is_accepted(self):
-        """The check must not refuse ordinary description, which is what the answer path produces."""
+    def test_a_caption_carrying_a_measurement_is_accepted(self):
         self.assertEqual([], self.codes("The centre sector is clear for 1.74 metres.",
                                         [declares("centre", CENTRE)]))
+
+    def test_a_declaration_the_prose_never_states_does_not_satisfy_it(self):
+        """Declaring a measurement is not stating it.
+
+        Without this the condition is met by a caption that writes no number at all and attaches a
+        correct declaration, which is the shape the dictation failures would take if a model learned
+        to satisfy the declaration list separately from the prose.
+        """
+        codes = self.codes("walk forward now", [declares("centre", CENTRE)])
+        self.assertIn("RG_NO_MEASUREMENT_STATED", codes)
+
+    def test_a_scene_with_nothing_measured_is_exempt(self):
+        """A packet offering no measurement cannot require one.
+
+        Refusing here would refuse the honest description of a scene the depth camera could not
+        read, which is the case the caption is most needed for.
+        """
+        blind = fact_packet(lane=sectors(None, None, None,
+                                         statuses=("UNKNOWN", "UNKNOWN", "UNKNOWN")))
+        prompt = prompt_packet(blind)
+        codes, _ = gate(caption("No sector has a reliable measurement."), blind, prompt)
+        self.assertNotIn("RG_NO_MEASUREMENT_STATED", codes)
 
     def test_a_moving_object_is_described_rather_than_refused(self):
         """"Moving" is what render_fact itself writes for a tracked object.
 
-        Present participles were briefly added to the verb list and refused the deterministic
-        renderer's own sentence. The list carries bare verb forms only, and "keep walking" is caught
-        by a phrase rule instead.
+        Present participles were briefly added to the instruction-verb list and refused the
+        deterministic renderer's own sentence. Pinned so the list is not extended that way again.
         """
         self.assertNotIn("RG_ACTION_LANGUAGE_DETECTED",
                          self.codes("A person is moving in the centre."))
 
     def test_a_staircase_step_is_not_read_as_an_instruction(self):
-        """"Step" is not a listed bare word, because a staircase description names one.
-
-        Refusing "the first step is 0.80 metres away" would refuse a true measurement of the hazard
-        the system exists to report. Only "step" followed by a direction is an instruction.
-        """
+        """Refusing "the first step is 0.80 metres away" would refuse a true measurement of the
+        hazard the system exists to report."""
         self.assertNotIn("RG_ACTION_LANGUAGE_DETECTED",
                          self.codes("The first step is 0.80 metres away."))
-
-    def test_the_residue_is_recorded(self):
-        """A qualitative claim with no verb and no pronoun still passes both expressions.
-
-        "The path ahead is entirely clear and safe" states no number to check against measurement
-        and names nobody, so nothing here refuses it whatever the centre sector measures. That is
-        the open decision on qualitative assertions without units, not a defect in this check, and
-        it is stated rather than left for a reader to discover.
-        """
-        self.assertNotIn("RG_ACTION_LANGUAGE_DETECTED",
-                         self.codes("The path ahead is entirely clear and safe."))
 
     def test_commentary_about_the_system_is_refused(self):
         self.assertIn("RG_MODEL_COMMENTARY_DETECTED", self.codes("The image shows an open room."))
@@ -843,8 +849,13 @@ class ProhibitedContentTests(unittest.TestCase):
 
     def test_a_word_outside_the_detector_vocabulary_is_permitted(self):
         """The check bounds what the model may assert about recognised objects; it does not police
-        ordinary language."""
-        self.assertEqual([], self.codes("The floor is level and the space is quiet."))
+        ordinary language.
+
+        The caption carries a measurement so the test isolates the vocabulary check. Without one it
+        would be refused for stating no measurement, which is a different rule.
+        """
+        self.assertEqual([], self.codes("The floor is level and the centre sector is clear for "
+                                        "1.74 metres.", [declares("centre", CENTRE)]))
 
     def test_the_detector_vocabulary_has_no_default(self):
         """An empty vocabulary turns the object check into a no-operation, and a property holding

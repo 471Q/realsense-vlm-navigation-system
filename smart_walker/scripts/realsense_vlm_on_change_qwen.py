@@ -746,6 +746,41 @@ def main():
         args.model_hash = hdsg.sha256_text(f"unverified-model:{args.model}")
         print("[hdsg] warning: --model_hash was not supplied; telemetry marks a deterministic unverified-model digest.")
 
+    # Which weights the endpoint has actually loaded, asked of the endpoint rather than taken from
+    # the command line.
+    #
+    # Added 23 August 2026, after a compliance probe was run against the wrong model: a server
+    # started for earlier work was still listening on port 8080, and the run recorded
+    # "qwen3-vl-4b-instruct" because that is what was typed. A log must state which weights produced
+    # it, not which name someone passed, or a result cannot be attributed after the fact. The four
+    # runs recorded on 22 August 2026 all used Qwen2.5-VL-3B, which is known from Atiq rather than
+    # from any log.
+    endpoint_model_path = None
+    endpoint_model_hash = None
+    try:
+        import requests as _requests
+
+        _reply = _requests.get(args.endpoint.rstrip("/") + "/v1/models", timeout=10.0)
+        _reply.raise_for_status()
+        _body = _reply.json()
+        _entries = _body.get("models") or _body.get("data") or []
+        if _entries:
+            _first = _entries[0]
+            endpoint_model_path = str(
+                _first.get("model") or _first.get("id") or _first.get("name") or ""
+            ) or None
+    except Exception as error:
+        print(f"[hdsg] warning: the endpoint did not report its model ({error}). "
+              "The run header cannot state which weights answered.")
+    if endpoint_model_path:
+        # Hashed when the path names a file this machine can read. A remote endpoint reports a path
+        # that does not resolve here, and the path alone is still worth recording.
+        _candidate = Path(endpoint_model_path)
+        if _candidate.is_file():
+            endpoint_model_hash = hdsg.sha256_file(_candidate)
+        print(f"[hdsg] endpoint model: {endpoint_model_path}")
+        print("[hdsg] confirm this is the intended model before treating the run as evidence.")
+
     cfg = sw.load_yaml(sw.PIPELINE_CFG)
     mapper = sw.OntologyMapper(sw.ONTOLOGY_CFG)
     try:
@@ -881,6 +916,31 @@ def main():
         with telemetry_lock:
             with telemetry_path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(envelope, separators=(",", ":"), ensure_ascii=True) + "\n")
+
+    # The first record in every evaluation log, so a result can be attributed to the software and
+    # the weights that produced it without asking anyone what was running at the time.
+    #
+    # `model_id` is the name passed on the command line and `endpoint_model_path` is what the server
+    # reported having loaded. Both are kept because they can disagree, and on 23 August 2026 they
+    # did: a probe was run against Qwen2.5-VL-3B while every record said qwen3-vl-4b-instruct. Only
+    # the second of the two is evidence.
+    record("run_header", {
+        "run_id": run_id,
+        "started_at_utc": hdsg.utc_now(),
+        "evaluation_name": args.eval_name,
+        "model_id": args.model,
+        "model_hash": args.model_hash,
+        "endpoint": args.endpoint,
+        "endpoint_model_path": endpoint_model_path,
+        "endpoint_model_sha256": endpoint_model_hash,
+        "detector_model": args.det_model,
+        "detector_confidence": args.conf,
+        "runtime_configuration_hash": runtime_configuration_hash,
+        "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
+        "caption_constraint_hash": constraint_hash,
+        "unconstrained_diagnostic_run": bool(args.unconstrained),
+        "recording_dir": recording_dir_ref,
+    })
 
     latest_release: Optional[dict] = None
     active_request_key: Optional[tuple[str, str, str]] = None

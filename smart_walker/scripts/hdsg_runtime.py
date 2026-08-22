@@ -74,6 +74,9 @@ REASON_CODE_ORDER = (
     # composed-caption design and the one code it adds beyond the frozen v1 enumeration, which
     # hdsg.schemas.v4 must therefore carry.
     "RG_STATED_VALUE_MISMATCH",
+    # The caption states none of the measurements it was given. The second code beyond the frozen v1
+    # enumeration, and hdsg.schemas.v4 must carry it alongside RG_STATED_VALUE_MISMATCH.
+    "RG_NO_MEASUREMENT_STATED",
     "RG_ACTION_LANGUAGE_DETECTED",
     "RG_DIRECT_NUMBER_DETECTED",
     "RG_VISIBLE_TEXT_CONTENT_DETECTED",
@@ -108,46 +111,26 @@ PENDING_PLACEHOLDER_TEXT = "Assessing the environment."
 
 # The remaining expressions screen a composed caption and the labels attached to its visual
 # observations. `hdsg_composed` applies them; nothing in this module does.
-# Instruction verbs. Extended 23 August 2026 with the verbs a caption would use to tell someone to
-# walk: the original list was written against templated captions, which could not contain an
-# instruction at all, and it passed "keep walking", "step forward now" and "feel free to keep
-# moving" once the model began composing prose freely.
+# Instruction verbs.
 #
-# This half of the check remains a list, and a list is partial by construction. What narrows it is
-# that the residue is now specifically an imperative built from an unlisted verb of motion, which
-# is a far smaller class than instructions in general.
+# This list was extended on 23 August 2026 and reverted the same day. The extension added the verbs
+# of walking, and a second expression refusing any second-person pronoun, on the reasoning that a
+# question carrying the person's own wording into the prompt might produce an instruction. The
+# reasoning was never tested before it was built.
+#
+# `Experiment_Question_Compliance_Probe.md` then tested it. Qwen3-VL-4B wrote no instruction in any
+# of 32 answers, including sixteen questions written to provoke one, so the extension searched for
+# something the shipped model does not produce. Qwen2.5-VL-3B did fail three times, and what its
+# three failures have in common is not a vocabulary: they state no measurement at all. That is the
+# condition `no_measurement_stated` now checks, and it decides the same three cases without reading
+# the words.
+#
+# The list is kept as it stood before the extension. It is partial by construction and no longer
+# carries the guarantee.
 ACTION_RE = re.compile(
-    # Bare verb forms, which in a caption are imperatives. Present participles are deliberately
-    # absent: "a person is moving in the centre" is a description the deterministic renderer itself
-    # produces, and matching "moving" would refuse it. "Keep walking" is caught by the phrase rule
-    # below instead of by the participle.
-    r"\b(?:go|move|turn|continue|proceed|stop|avoid|choose|reverse|reorient|walk|advance|approach)\b"
-    # Phrases. "Step" is not listed as a bare word because a staircase description names a step,
-    # and refusing "the first step is 0.80 metres away" would refuse a true measurement.
-    r"|slow\s+down|carry\s+on|keep\s+\w+ing|feel\s+free"
-    r"|step\s+(?:forward|back|backwards|towards|toward|over|onto|up|down|around)"
-    r"|(?:head|push)\s+(?:on|left|right|forward|towards|toward|for|straight)"
-    r"|take\s+the\s+(?:left|right)",
+    r"\b(?:go|move|turn|continue|proceed|stop|avoid|choose|reverse|reorient)\b|slow\s+down|take\s+the\s+(?:left|right)|head\s+(?:left|right)",
     re.IGNORECASE,
 )
-# Second-person address, refused under the same reason code as an instruction verb.
-#
-# Added 23 August 2026, after the question channel began carrying the person's own wording into the
-# answer call. ACTION_RE is a list of verbs, so it catches the phrasings on the list and permits the
-# rest: "keep walking", "step forward now", "you can advance safely" and "feel free to keep moving"
-# all passed it. Extending the list indefinitely is the approach the object-naming check was demoted
-# for, because what it refuses then depends on which words happen to be enumerated rather than on
-# any property of the sentence.
-#
-# This expression is complete for what it names. A caption describes the space around the walker and
-# has no reason to address the person at all, so any second-person pronoun is refused whatever verb
-# accompanies it. The set of second-person pronouns in English is closed and short, which is what
-# makes the check categorical where a verb list cannot be.
-#
-# It does not cover every instruction. A bare imperative built from an unlisted verb, such as "head
-# towards the doorway", carries no pronoun and still passes both expressions. Deciding that case
-# needs the grammatical subject of the sentence rather than a word match.
-SECOND_PERSON_RE = re.compile(r"\b(?:you|your|yours|yourself|yourselves)\b", re.IGNORECASE)
 NUMBER_RE = re.compile(
     r"\b(?:\d+(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten|metres?|meters?|centimetres?|centimeters?)\b",
     re.IGNORECASE,

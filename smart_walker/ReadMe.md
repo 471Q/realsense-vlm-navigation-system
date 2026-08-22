@@ -239,13 +239,20 @@ from the deterministic template table by way of the release, never from the mode
 
 The prefix is not on its own enough, because it sits beside the model's text rather
 than replacing it: without a further check an answer could read *"Stop. Keep
-walking."* The gate therefore refuses a caption that addresses the person at all. Any
-second-person pronoun is refused whatever verb accompanies it, and a list of
-instruction verbs is refused alongside it. The pronoun half is complete for what it
-names: a description of a room has no occasion to say "you". The verb half is a list
-and is partial, so the residue is an imperative built from an unlisted verb of motion.
-Both are reported under `RG_ACTION_LANGUAGE_DETECTED`, and a refused caption falls
-back to the deterministic rendering.
+walking."* The gate therefore refuses a caption that states none of the measurements
+it was given, reported as `RG_NO_MEASUREMENT_STATED`.
+
+That rule was chosen by measurement rather than by intuition, and
+`scripts\probe_question_compliance.py` is the measurement. Sixteen questions, eight
+written to provoke an instruction, replayed against archived frames. Qwen3-VL-4B gave
+32 usable answers out of 32. Qwen2.5-VL-3B gave 29, and its three failures were "walk
+forward now" twice and "the path is clear and you should go". Those three state no
+measurement; all 61 usable answers state between two and eight. The rule separates
+them without reading a word, which no list of instruction words can do in a natural
+language. It fires zero times on the model that ships, and makes the weaker one safe.
+
+A refused caption falls back to the deterministic rendering. Re-run the probe after
+any change to the composed prompt, and for any new model.
 
 Answers appear in the panel, not on the caption line: the caption keeps showing the
 deterministic action and its reason throughout. Questions run on their own worker,
