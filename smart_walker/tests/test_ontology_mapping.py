@@ -5,37 +5,28 @@ which of them stop the walker at 2.00 m rather than 0.70 m. Nothing else in the 
 detector label, so an error here is invisible everywhere else and shows up only as a walker that
 stops for a shirt or fails to stop for a staircase.
 
-There were no tests over this file before 22 August 2026. On that date the approximate matching was
-removed, which exposed that four of COCO's eighty class names reached a bucket and none reached
-`hazard`, and the detector was changed to Open Images V7. Both changes are asserted here against the
-real weights' class list rather than against a copy of it, so a future change of weights fails these
-tests instead of silently emptying the buckets again.
+Rewritten 23 August 2026, when the file stopped being maintained by hand and became the output of
+`scripts/generate_ontology.py` reading `model.names`. The tests before that date asserted the
+contents of a hand-written mapping: that a chair was in `furniture`, that `Stairs` reached `hazard`,
+that a `Cart` rolled. None of those propositions survives, because there are no longer any groups
+beyond `hazard` and no entries for words the loaded weight cannot emit.
+
+What replaces them is narrower and stronger. A hand-written mapping needs tests that each entry is
+correct. A generated one needs tests that it agrees with the weight, which is a property of the
+whole file and cannot be satisfied by an entry that happens to be right.
 """
 
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stdout
 
 from support import CONFIG  # noqa: F401
 from scripts.realsense_shared_control import OntologyMapper
+from scripts import generate_ontology
 
 DETECTOR_WEIGHTS = "yolov8n.pt"
-
-# The ontology deliberately covers both vocabularies. `yolov8n-oiv7.pt` was adopted and reverted on
-# 22 August 2026, and its words are kept mapped so that trying it again does not silently empty the
-# buckets. A configuration entry is therefore live if either detector emits its word.
-ALTERNATE_WEIGHTS = "yolov8n-oiv7.pt"
-
-
-def _class_names(weights):
-    try:
-        from ultralytics import YOLO
-    except Exception as error:  # pragma: no cover, depends on the environment
-        raise unittest.SkipTest(f"ultralytics unavailable: {error}")
-    try:
-        return list(YOLO(weights).names.values())
-    except Exception as error:  # pragma: no cover, depends on the environment
-        raise unittest.SkipTest(f"{weights} unavailable: {error}")
 
 
 def detector_class_names():
@@ -45,35 +36,80 @@ def detector_class_names():
     visibly. Skipped where ultralytics or the weights file is unavailable, so the suite still runs
     on a machine with no model cache.
     """
-    return _class_names(DETECTOR_WEIGHTS)
+    try:
+        from ultralytics import YOLO
+    except Exception as error:  # pragma: no cover, depends on the environment
+        raise unittest.SkipTest(f"ultralytics unavailable: {error}")
+    try:
+        names = YOLO(DETECTOR_WEIGHTS).names
+    except Exception as error:  # pragma: no cover, depends on the environment
+        raise unittest.SkipTest(f"{DETECTOR_WEIGHTS} unavailable: {error}")
+    return [str(names[index]) for index in sorted(names)]
 
 
-def every_supported_class_name():
-    """Both vocabularies the ontology is written against."""
-    return _class_names(DETECTOR_WEIGHTS) + _class_names(ALTERNATE_WEIGHTS)
+class GeneratedFileTests(unittest.TestCase):
+    """The file on disk against the weight it claims to describe."""
+
+    def test_the_file_on_disk_is_what_the_generator_writes(self):
+        """The whole point of generating the file. An edit made by hand, or a weight changed without
+        regenerating, fails here rather than at the next capture session.
+
+        This is the test that could not exist while the file was maintained by hand, and its absence
+        is how three hundred Open Images entries survived the revert to COCO.
+        """
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            status = generate_ontology.main(
+                ["--model", DETECTOR_WEIGHTS, "--out", str(CONFIG / "ontology.yaml"), "--check"])
+        self.assertEqual(0, status,
+                         "config/ontology.yaml is out of step with the detector weight. "
+                         "Run: python scripts/generate_ontology.py")
+
+    def test_every_class_the_detector_can_emit_is_mapped(self):
+        """Four of COCO's eighty names reached a bucket under the hand-written file. Generation makes
+        full coverage structural rather than something to be checked against a threshold."""
+        mapper = OntologyMapper(CONFIG / "ontology.yaml")
+        unmapped = sorted(name for name in detector_class_names()
+                          if not mapper.is_not_obstacle(name)
+                          and mapper.map_label(name).ontology_class == "unknown_obstacle")
+        self.assertEqual([], unmapped)
+
+    def test_the_file_carries_nothing_the_detector_cannot_emit(self):
+        """The stale-entry rule, applied to the whole file rather than to `not_obstacles` alone.
+
+        Every bucket name, every canonical name and every synonym key must trace back to a word the
+        loaded weight can produce, allowing for the four renames. An entry that cannot fire is
+        indistinguishable in the file from one that can, which is what made the Open Images residue
+        invisible for a day.
+        """
+        emitted = {name.strip().lower() for name in detector_class_names()}
+        renamed = set(generate_ontology.RENAMES.values())
+        allowed = emitted | renamed | {"hazard"}
+        stray = sorted(set(mapper_names(CONFIG)) - allowed)
+        self.assertEqual([], stray)
+
+
+def mapper_names(config_dir):
+    """Every canonical and bucket name the ontology declares."""
+    mapper = OntologyMapper(config_dir / "ontology.yaml")
+    return set(mapper.ontology_buckets) | set(mapper.ontology_buckets.values())
 
 
 class MapperTests(unittest.TestCase):
-    """Label to bucket, without reference to any particular detector."""
+    """Label to bucket."""
 
     def setUp(self):
         self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
 
-    def test_a_canonical_name_reaches_its_bucket(self):
+    def test_a_canonical_name_reaches_its_own_bucket(self):
+        """Under generation every class is its own group, so `ontology_class` states the class
+        rather than a judgement about it."""
         mapped = self.mapper.map_label("chair")
-        self.assertEqual(("chair", "furniture"),
+        self.assertEqual(("chair", "chair"),
                          (mapped.canonical_class, mapped.ontology_class))
 
     def test_matching_ignores_case(self):
-        """Open Images capitalises its class names and COCO does not."""
-        self.assertEqual("furniture", self.mapper.map_label("Chair").ontology_class)
-
-    def test_a_synonym_is_folded_onto_its_canonical_name(self):
-        """The canonical name becomes the word the caption may use, so the detector's own phrasing
-        must not reach the user verbatim."""
-        mapped = self.mapper.map_label("Kitchen & dining room table")
-        self.assertEqual(("table", "furniture"),
-                         (mapped.canonical_class, mapped.ontology_class))
+        self.assertEqual("chair", self.mapper.map_label("Chair").ontology_class)
 
     def test_an_unlisted_label_is_an_unknown_obstacle_and_not_a_guess(self):
         """Approximate matching mapped `stop sign` to `stairs_up`, so the walker stopped for a road
@@ -85,228 +121,22 @@ class MapperTests(unittest.TestCase):
     def test_an_empty_label_is_an_unknown_obstacle(self):
         self.assertEqual("unknown_obstacle", self.mapper.map_label("").ontology_class)
 
-    def test_a_prompt_word_yields_a_bucket_without_renaming_the_object(self):
-        """A word in the open-vocabulary list is not a canonical name. Returning the bucket's first
-        canonical instead turned every bench and desk into a chair."""
-        mapped = self.mapper.map_label("mobility scooter")
-        self.assertEqual((None, "mobility_aid"),
-                         (mapped.canonical_class, mapped.ontology_class))
-
-
-class HomeEnvironmentTests(unittest.TestCase):
-    """The rewrite of 22 August 2026, from a hospital vocabulary to a domestic one."""
-
-    def setUp(self):
-        self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
-
-    def test_a_pet_is_named_rather_than_called_an_obstacle(self):
-        """A pet is the thing most likely to be underfoot in a house. Under the hospital ontology a
-        dog reached no group, so the walker stopped for it but could only call it an obstacle, and
-        "a dog is ahead" tells somebody something that "an obstacle is ahead" does not."""
-        for name, expected in (("Dog", "dog"), ("Cat", "cat"), ("Rabbit", "rabbit")):
-            with self.subTest(name):
-                mapped = self.mapper.map_label(name)
-                self.assertEqual((expected, "animal"),
-                                 (mapped.canonical_class, mapped.ontology_class))
-
-    def test_a_bed_does_not_roll_in_a_house(self):
-        """The hospital ontology filed a bed with the things that roll, which is true of a bed on
-        castors being pushed down a ward and false of a bed in a bedroom."""
-        self.assertEqual("furniture", self.mapper.map_label("Bed").ontology_class)
-
-    def test_a_trolley_still_rolls(self):
-        self.assertEqual(("trolley", "wheeled_object"),
-                         tuple(self.mapper.map_label("Cart").__dict__.values()))
-
-    def test_kitchen_machines_are_separated_from_furniture(self):
-        """Naming the fridge places somebody in the kitchen in a way that "furniture" does not."""
-        self.assertEqual(("fridge", "appliance"),
-                         tuple(self.mapper.map_label("Refrigerator").__dict__.values()))
-
-    def test_a_bag_left_out_is_not_filed_as_furniture(self):
-        """Furniture is where it was yesterday and a bag in a hallway is not, so they are separated.
-        The group is also the one a person can do something about.
-
-        `Backpack` keeps its own name rather than becoming "bag". It was a synonym onto `bag` until
-        23 August 2026, alongside `handbag`, so two different objects reached the description as one
-        word. The rename was written for Open Images, whose words need it; COCO's do not.
-        """
-        self.assertEqual(("backpack", "floor_object"),
-                         tuple(self.mapper.map_label("Backpack").__dict__.values()))
-
-    def test_a_plain_detector_word_is_not_made_vaguer(self):
-        """The renames written for Open Images degraded COCO's words, which are already plain.
-
-        `vase` became "plant", which is false of an empty vase; `laptop` and `keyboard` both became
-        "computer"; `stop sign` became "post"; seven animals became "animal", in a file that argues
-        elsewhere that "a dog is ahead" is worth saying. Each is now canonical in its own group, so
-        it keeps its word and its group.
-        """
-        for name, group in (("vase", "furniture"), ("laptop", "appliance"),
-                            ("keyboard", "appliance"), ("stop sign", "furniture"),
-                            ("horse", "animal"), ("teddy bear", "floor_object")):
-            with self.subTest(name):
-                mapped = self.mapper.map_label(name)
-                self.assertEqual(name, mapped.canonical_class)
-                self.assertEqual(group, mapped.ontology_class)
-
     def test_the_renames_that_earn_their_place_survive(self):
-        """Four COCO words genuinely read better renamed, and those are kept."""
+        """Four COCO words read better renamed, and only those four are renamed. The rest of COCO's
+        vocabulary is ordinary English, and the renames written for Open Images made it vaguer:
+        `vase` was presented as "plant", `laptop` and `keyboard` both as "computer"."""
         for name, canonical in (("dining table", "table"), ("tv", "television"),
                                 ("refrigerator", "fridge"), ("cell phone", "telephone")):
             with self.subTest(name):
-                self.assertEqual(canonical, self.mapper.map_label(name).canonical_class)
+                mapped = self.mapper.map_label(name)
+                self.assertEqual(canonical, mapped.canonical_class)
+                self.assertEqual(canonical, mapped.ontology_class)
 
-
-class HazardBucketTests(unittest.TestCase):
-    """The one bucket that changes what the walker does."""
-
-    def setUp(self):
-        self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
-
-    def test_stairs_reach_the_hazard_bucket(self):
-        """`hazard` is the only bucket that stops the walker at 2.00 m instead of 0.70 m. Under the
-        COCO vocabulary no label reached it, so the longer stopping distance had never fired."""
-        self.assertEqual("hazard", self.mapper.map_label("Stairs").ontology_class)
-
-    def test_a_ladder_is_not_a_hazard(self):
-        """The medium Open Images model labels the recorded staircase `Ladder` at 0.30, which is an
-        argument for putting it here and not a reason. Mapping a class to `hazard` because one model
-        confused it once is the error that put a stop sign there."""
-        self.assertEqual("furniture", self.mapper.map_label("Ladder").ontology_class)
-
-    def test_a_stop_sign_is_not_a_hazard(self):
-        """The specific failure that approximate matching produced."""
-        self.assertNotEqual("hazard", self.mapper.map_label("Stop sign").ontology_class)
-
-
-class NotObstacleTests(unittest.TestCase):
-    """Labels dropped before they become facts."""
-
-    def setUp(self):
-        self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
-
-    def test_a_window_is_an_obstacle(self):
-        """Reversed on 23 August 2026, by decision.
-
-        A window was dropped because every Open Images model tested reported `Window` in all three
-        recorded stair frames more confidently than it reported the staircase. But a window sits in
-        a wall, and there is no `wall` class for the wall to be reported as, so discarding the
-        window reports nothing at all for a surface the walker can hit. The same argument covers
-        posters, picture frames, light switches and every building name.
-        """
-        self.assertFalse(self.mapper.is_not_obstacle("Window"))
-
-    def test_the_list_holds_only_what_the_running_detector_can_say(self):
-        """The rule that would have caught the stale list.
-
-        84 entries were added on 22 August 2026 for Open Images V7, the detector was reverted to
-        COCO the same day, and 82 survived as rules against words the loaded detector cannot say.
-        Since this list is the only mechanism that can make the walker ignore something the camera
-        saw, an entry in it must be checkable against the vocabulary actually loaded.
-        """
-        vocabulary = {name.strip().lower() for name in detector_class_names()}
-        listed = {str(name).lower() for name in self.mapper.not_obstacles}
-        self.assertEqual(set(), listed - vocabulary,
-                         "every dropped label must be one the loaded detector can emit")
-
-    def test_a_part_of_a_person_is_not_a_separate_obstacle(self):
-        """COCO reports `person` and `tie` as two detections of the same body at the same distance,
-        so without this the description names one visitor twice. It is the only entry left."""
-        self.assertTrue(self.mapper.is_not_obstacle("tie"))
-
-    def test_a_chair_is_an_obstacle(self):
-        self.assertFalse(self.mapper.is_not_obstacle("Chair"))
-
-    def test_stairs_are_an_obstacle(self):
-        """The list is a way of dropping noise and must never drop the hazard class."""
-        self.assertFalse(self.mapper.is_not_obstacle("Stairs"))
-
-    def test_a_swimming_pool_is_a_hazard_and_is_not_dropped(self):
-        """The edge of a pool is an unguarded fall of over a metre, which is what this bucket is
-        for, and it is the only outdoor drop-off the detector can name. The first draft of the
-        ontology dropped it, having grouped it with building fabric."""
-        self.assertFalse(self.mapper.is_not_obstacle("Swimming pool"))
-        self.assertEqual("hazard", self.mapper.map_label("Swimming pool").ontology_class)
-
-    def test_things_standing_on_the_floor_are_not_dropped(self):
-        """The list is for what a wheel cannot reach. A standard lamp stands on the floor, a curtain
-        hangs to it, a full length mirror leans against a wall, and a signpost or a hydrant is
-        planted in the pavement at the height that catches a walker frame. All twelve were in the
-        list on the first draft, grouped as building fabric, which they are not."""
-        for name in ("Lamp", "Mirror", "Curtain", "Fountain", "Billboard",
-                     "Stop sign", "Traffic sign", "Traffic light", "Street light",
-                     "Parking meter", "Fire hydrant", "Swimming pool"):
+    def test_a_plain_detector_word_is_not_made_vaguer(self):
+        """Everything outside those four keeps the detector's own word."""
+        for name in ("vase", "laptop", "keyboard", "stop sign", "horse", "teddy bear", "dog"):
             with self.subTest(name):
-                self.assertFalse(self.mapper.is_not_obstacle(name))
-
-    def test_an_empty_label_is_not_dropped_here(self):
-        """An empty label is handled by `map_label`, which returns `unknown_obstacle`. Dropping it
-        here instead would discard a detection that has a distance and a bearing."""
-        self.assertFalse(self.mapper.is_not_obstacle(""))
-
-
-class DetectorVocabularyTests(unittest.TestCase):
-    """The ontology against the class list the shipped weights carry."""
-
-    def setUp(self):
-        self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
-        self.names = detector_class_names()
-
-    def test_the_hazard_bucket_is_unreachable_with_the_shipped_detector(self):
-        """A known and accepted limitation, asserted so that it cannot change unnoticed.
-
-        COCO has no word for a staircase, a ramp or a drop, so no detection ever receives the 2.00 m
-        hazard stopping distance and every obstacle is treated alike at 0.70 m. Open Images does have
-        the words, and swapping to it on 22 August 2026 made the bucket reachable for the first time.
-        It also stopped finding furniture: over the same 1412 recorded frames COCO found bed 453
-        times, tv 294, laptop 243 and chair 69, and Open Images found none of them, returning nothing
-        at all on 926 frames against 349. The swap was reverted the same day.
-
-        This test therefore records a state, not an aspiration. If it fails, either the detector has
-        changed or the ontology has, and section 10.12 of `HDSG_VERIFIED_GENERATION_POLICY.md` is
-        where the decision behind it is written down.
-        """
-        reaching = [name for name in self.names
-                    if self.mapper.map_label(name).ontology_class == "hazard"]
-        self.assertEqual([], reaching)
-
-    def test_the_hazard_entries_are_not_dead_configuration(self):
-        """The other half of the test above. The hazard words stay in the ontology because a
-        detector that can emit them exists and may be adopted once the lab captures settle how the
-        hazard class should be found. They are unreachable today, not wrong."""
-        alternate = _class_names(ALTERNATE_WEIGHTS)
-        reaching = sorted(name for name in alternate
-                          if self.mapper.map_label(name).ontology_class == "hazard")
-        self.assertEqual(["Stairs", "Swimming pool"], reaching)
-
-    def test_the_buckets_are_not_nearly_empty(self):
-        """Four of COCO's eighty names reached a bucket. The threshold is deliberately low: it is
-        set to catch a vocabulary mismatch of that scale, not to fix a target."""
-        mapped = [name for name in self.names
-                  if self.mapper.map_label(name).ontology_class != "unknown_obstacle"]
-        self.assertGreater(len(mapped), 20, f"only {len(mapped)} of {len(self.names)} names mapped")
-
-    def test_a_person_is_an_agent(self):
-        self.assertEqual("person", self.mapper.map_label("Person").ontology_class)
-
-    def test_every_not_obstacle_entry_names_a_real_class(self):
-        """An entry matching nothing either detector emits is dead configuration, and the file gives
-        no sign of it. Both vocabularies count, because the ontology is written to survive a change
-        of weights: most of this list names things only Open Images reports, such as `Human face`
-        and `Jeans`, and COCO has no word for them. Comparison is lowercased because the entries are
-        written that way."""
-        emitted = {name.strip().lower() for name in every_supported_class_name()}
-        unmatched = sorted(self.mapper.not_obstacles - emitted)
-        self.assertEqual([], unmatched)
-
-    def test_every_synonym_names_a_real_class_or_a_canonical_name(self):
-        """A synonym key that neither detector emits, and that is not itself a canonical name, is a
-        mapping that can never fire under either set of weights."""
-        emitted = {name.strip().lower() for name in every_supported_class_name()}
-        known = emitted | set(self.mapper.ontology_buckets) | set(self.mapper.prompt_buckets)
-        unmatched = sorted(key for key in self.mapper.synonyms if key not in known)
-        self.assertEqual([], unmatched)
+                self.assertEqual(name, self.mapper.map_label(name).canonical_class)
 
     def test_every_synonym_resolves_to_a_canonical_name(self):
         """A synonym pointing at a word no bucket lists sends the label to `unknown_obstacle` by a
@@ -315,13 +145,120 @@ class DetectorVocabularyTests(unittest.TestCase):
                             if value not in self.mapper.ontology_buckets)
         self.assertEqual([], unresolved)
 
+
+class HazardBucketTests(unittest.TestCase):
+    """The one bucket that changes what the walker does."""
+
+    def setUp(self):
+        self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
+
+    def test_the_hazard_bucket_is_empty_and_unreachable(self):
+        """A known and accepted limitation, asserted so that it cannot change unnoticed.
+
+        COCO has no word for a staircase, a ramp or a drop, so no detection ever receives the 2.00 m
+        hazard stopping distance and every obstacle is treated alike at 0.70 m. The bucket is emitted
+        empty rather than filled with words from a vocabulary that is not loaded, which is what the
+        hand-written file did.
+
+        This records a state, not an aspiration. How a fall is detected is item 5 of the deferred
+        register and is settled from the laboratory captures.
+        """
+        reaching = [name for name in detector_class_names()
+                    if self.mapper.map_label(name).ontology_class == "hazard"]
+        self.assertEqual([], reaching)
+
+    def test_a_stop_sign_is_not_a_hazard(self):
+        """The specific failure that approximate matching produced."""
+        self.assertNotEqual("hazard", self.mapper.map_label("stop sign").ontology_class)
+
+
+class NotObstacleTests(unittest.TestCase):
+    """Labels dropped before they become facts. The only way for the walker to ignore something the
+    camera saw, so this list is held to a stricter standard than anything else in the file."""
+
+    def setUp(self):
+        self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
+
+    def test_a_part_of_a_person_is_not_a_separate_obstacle(self):
+        """COCO reports `person` and `tie` as two detections of the same body at the same distance,
+        so without this the description names one visitor twice. It is the only entry."""
+        self.assertTrue(self.mapper.is_not_obstacle("tie"))
+
+    def test_the_list_holds_only_what_the_running_detector_can_say(self):
+        """The rule that would have caught the stale list.
+
+        84 entries were added on 22 August 2026 for Open Images V7, the detector was reverted to
+        COCO the same day, and 82 survived as rules against words the loaded detector cannot say.
+        Generation now filters the list against `model.names`, so this asserts the filter rather
+        than the file.
+        """
+        vocabulary = {name.strip().lower() for name in detector_class_names()}
+        listed = {str(name).lower() for name in self.mapper.not_obstacles}
+        self.assertEqual(set(), listed - vocabulary,
+                         "every dropped label must be one the loaded detector can emit")
+
     def test_no_class_is_both_dropped_and_bucketed(self):
         """`is_not_obstacle` is consulted first, so a class in both places is silently dropped and
-        its bucket entry never fires."""
-        conflicting = sorted(name for name in self.names
+        its bucket entry never fires. The first generated file did exactly this to `tie`."""
+        conflicting = sorted(name for name in detector_class_names()
                              if self.mapper.is_not_obstacle(name)
                              and self.mapper.map_label(name).ontology_class != "unknown_obstacle")
         self.assertEqual([], conflicting)
+
+    def test_a_window_would_be_an_obstacle(self):
+        """Recorded by decision, 23 August 2026, against a vocabulary that has no word for it.
+
+        A window was dropped while Open Images was loaded, because every model tested reported
+        `Window` in all three recorded stair frames more confidently than the staircase. But a window
+        sits in a wall, there is no `wall` class for the wall to be reported as, and discarding the
+        window reports nothing for a surface the walker can hit. COCO cannot emit the word at all, so
+        this asserts only that the reversed decision was not carried into the generator.
+        """
+        self.assertNotIn("window", [w.lower() for w in generate_ontology.NOT_OBSTACLES])
+
+    def test_a_chair_is_an_obstacle(self):
+        self.assertFalse(self.mapper.is_not_obstacle("Chair"))
+
+    def test_an_empty_label_is_not_dropped_here(self):
+        """An empty label is handled by `map_label`, which returns `unknown_obstacle`. Dropping it
+        here instead would discard a detection that has a distance and a bearing."""
+        self.assertFalse(self.mapper.is_not_obstacle(""))
+
+
+class GeneratorTests(unittest.TestCase):
+    """The generator itself, against a class list it is handed rather than a weight."""
+
+    def build(self, names):
+        return generate_ontology.build_document("fake.pt", names, "2.00", "0.70")
+
+    def test_a_rename_for_an_absent_class_is_dropped(self):
+        """The self-pruning that stops the drift. `cell phone` is a COCO word; a weight without it
+        must not carry a rename for it, because a rule that cannot fire is indistinguishable in the
+        file from one that can."""
+        document = self.build(["chair", "door"])
+        self.assertNotIn("cell phone", document)
+
+    def test_a_rename_for_a_present_class_is_written(self):
+        document = self.build(["chair", "cell phone"])
+        self.assertIn("cell phone: telephone", document)
+        self.assertIn("name: telephone", document)
+
+    def test_a_dropped_class_gets_no_bucket(self):
+        document = self.build(["chair", "tie"])
+        self.assertIn("- tie", document)
+        self.assertNotIn("name: tie", document)
+
+    def test_the_weight_and_the_count_are_recorded_in_the_file(self):
+        """A generated file must say what it was generated from, or the check above is the only way
+        to find out and it needs the weight to hand."""
+        document = self.build(["chair", "door", "person"])
+        self.assertIn("fake.pt", document)
+        self.assertIn("Classes: 3", document)
+
+    def test_the_hazard_bucket_is_always_present(self):
+        """`OntologyMapper` builds `hazard_set` by looking for a bucket of that name. Emitting the
+        bucket unconditionally keeps the name defined whatever vocabulary is loaded."""
+        self.assertIn("name: hazard", self.build(["chair"]))
 
 
 if __name__ == "__main__":
