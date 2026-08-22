@@ -1,50 +1,568 @@
-# =========================
-# Open-world Safety Ontology
-# =========================
+# ============================================
+# Safety ontology for an indoor home environment
+# ============================================
+#
+# WHAT THIS FILE IS FOR
+#
+# The camera's object detector produces one word for each thing it finds, chosen from a fixed list
+# of 601 words. Those words are the detector's own, and they are not suitable to hand to a person
+# unchanged: it says "Kitchen & dining room table" and "Waste container". Nor do they say anything
+# about how dangerous the thing is.
+#
+# This file does two jobs. It gives each detector word a plain name that the spoken description is
+# allowed to use, and it puts each word into a group.
+#
+# WHAT THE GROUP CHANGES
+#
+# Only one group changes what the walker does. Anything in `hazard` makes the walker stop 2.00 m
+# away. Everything else, including the catch-all `unknown_obstacle`, makes it stop 0.70 m away. So a
+# mistake in `hazard` is a safety mistake, and a mistake anywhere else produces a badly worded
+# description rather than a dangerous one. The two names `hazard` and `unknown_obstacle` are read by
+# the code and must not be renamed here; the rest are free.
+#
+# HOW A WORD IS MATCHED
+#
+# The detector's word is lowercased and looked up in `synonyms_to_canonical` first, then in the
+# `canonical` lists. The match is exact. There is no approximate matching, because when there was, a
+# stop sign was matched to a staircase and treated as a fall hazard, and a necktie was matched to a
+# person. A word matching nothing becomes `unknown_obstacle`, which is still an obstacle.
+#
+# `prompts` is a separate list, offered to an open-vocabulary detector that accepts words at run
+# time rather than having them trained in. A word found only there gives the group but no name, so
+# the detector's own word survives into the description.
+#
+# WHO THIS IS WRITTEN FOR
+#
+# A home. The previous version was written for a hospital and grouped a bed as something that rolls,
+# which is true of a hospital bed on castors and false of a bed in a bedroom. Rewritten for a home
+# on 22 August 2026 at Atiq's instruction. Section 10.8 of `HDSG_VERIFIED_GENERATION_POLICY.md`
+# records the change.
 
 ontology:
-  # A small, stable set of safety-relevant buckets.
-  - name: agent
+
+  # ---- Things that move on their own and cannot be predicted ----
+
+  - name: person
     canonical: [person]
-    prompts: ["person", "human", "staff", "nurse", "doctor", "patient", "bystander"]
+    prompts: ["person", "human", "visitor", "carer", "child", "bystander"]
+
+  - name: animal
+    # A pet is the thing most likely to be underfoot in a house, and it is worth naming rather than
+    # calling an obstacle, because "a dog is ahead" tells somebody something they can act on.
+    # Wild animals are included because naming one costs nothing and the catch-all names nothing.
+    canonical: [dog, cat, bird, rabbit, hamster, fish, animal]
+    prompts: ["dog", "cat", "pet", "bird", "rabbit"]
+
   - name: mobility_aid
-    canonical: [wheelchair, walker, pram]
-    prompts: ["wheelchair", "mobility scooter", "walker", "walking frame", "rollator", "pram", "stroller", "buggy", "pushchair"]
-  - name: rolling_obstacle
-    canonical: [trolley, stretcher, bed]
-    prompts: ["trolley", "cart", "meal cart", "linen cart", "gurney", "stretcher", "hospital bed", "bed", "equipment cart", "oxygen cylinder trolley"]
-  - name: static_obstacle
-    canonical: [chair, table, bin, cabinet, rack, iv_pole, signage_stand]
-    prompts: ["chair", "table", "desk", "bench", "bin", "trash can", "cabinet", "shelf", "rack", "IV pole", "signage stand", "pillar", "post", "tripod"]
-  - name: portal
-    canonical: [door, doorway]
-    prompts: ["door", "doorway", "automatic door", "swing door", "sliding door"]
+    # Another person's walking equipment, or the user's own spare. Open Images has wheelchair and
+    # crutch and has no word for a walking frame or a rollator, so those names are reachable only
+    # through the prompt list or a detector trained later.
+    canonical: [wheelchair, crutch, walker, pram]
+    prompts: ["wheelchair", "mobility scooter", "walker", "walking frame", "rollator", "pram",
+              "stroller", "buggy", "pushchair", "crutch", "walking stick", "cane"]
+
+  # ---- The group that changes the stopping distance ----
+
   - name: hazard
-    canonical: [stairs_up, stairs_down, ramp, wet_floor_sign, drop_off]
-    prompts: ["stairs", "staircase", "steps", "ramp", "wet floor sign", "caution sign", "spill", "drop-off", "edge", "escalator"]
+    # A fall, not an obstruction. Everything here makes the walker stop 2.00 m away instead of
+    # 0.70 m, which is the only behavioural difference any group makes.
+    #
+    # `stairs` carries no direction because the detector's word carries none: Open Images says
+    # `Stairs` whether the walker is at the top or the bottom. `stairs_up` and `stairs_down` are
+    # kept because the wording code already handles them and a detector trained later could tell
+    # them apart, but nothing emits either today.
+    #
+    # `swimming pool` is here because a pool edge is an unguarded fall of over a metre. It is the
+    # only outdoor fall the detector can name.
+    #
+    # `ladder` is deliberately NOT here. The medium Open Images model labels the one staircase in
+    # the recordings `Ladder` at 0.30 confidence, which is a reason to look again and not a reason
+    # to move it. Putting a class in this group because one model confused it once is exactly the
+    # mistake that put a stop sign here. It sits in `furniture` until the lab recordings settle it.
+    canonical: [stairs, stairs_up, stairs_down, ramp, drop_off, escalator, wet_floor_sign,
+                swimming pool]
+    prompts: ["stairs", "staircase", "steps", "step down", "ramp", "kerb", "curb", "threshold",
+              "drop-off", "edge", "escalator", "wet floor sign", "spill", "loose rug"]
+
+  # ---- Things you pass through rather than around ----
+
+  - name: doorway
+    canonical: [door, doorway, gate]
+    prompts: ["door", "doorway", "gate", "sliding door", "french doors", "archway", "hallway"]
+
+  # ---- Things that stay where they are ----
+
+  - name: furniture
+    # Everything a room is furnished with, whether or not it is fixed down. A single group rather
+    # than separate ones for seating, tables and storage, because the walker treats them all the
+    # same and splitting them only creates more places to file something wrongly.
+    canonical: [chair, stool, couch, bench, table, desk, bed, cot, wardrobe, cabinet, cupboard,
+                drawers, bookcase, shelf, rack, mattress, mirror, curtain, lamp, rug, cushion,
+                ladder, pet bed,
+                fireplace, radiator, piano, sculpture, plant, picture, clothes rail, tripod,
+                exercise machine, ironing board, pillar, post, fountain,
+                # `whiteboard` was in this list before the rewrite and was lost by accident.
+                # A freestanding board on castors is a thing to steer around. A generic name
+                # is kept for `Furniture`, which the detector emits when it recognises a piece
+                # of furniture without deciding which.
+                whiteboard, furniture, musical instrument]
+    prompts: ["chair", "armchair", "sofa", "table", "coffee table", "desk", "bed", "wardrobe",
+              "chest of drawers", "bookcase", "shelf", "sideboard", "radiator", "floor lamp",
+              "rug", "houseplant", "pillar", "post"]
+
+  - name: appliance
+    # Kitchen and utility machines. Separate from furniture because they are the fixed points of a
+    # kitchen and naming one places a person in the room better than "furniture" does.
+    canonical: [fridge, oven, hob, microwave, dishwasher, washing machine, television, monitor,
+                computer, printer, kettle, toaster, coffee machine, heater, fan, vacuum cleaner, small appliance,
+                sewing machine, telephone]
+    prompts: ["fridge", "refrigerator", "oven", "cooker", "hob", "microwave", "dishwasher",
+              "washing machine", "tumble dryer", "television", "radiator", "heater"]
+
+  - name: bathroom_fixture
+    canonical: [toilet, sink, bath, shower, bathroom fitting]
+    prompts: ["toilet", "sink", "basin", "bath", "bathtub", "shower", "shower tray"]
+
+  # ---- Things left on the floor, which move between one day and the next ----
+
+  - name: floor_object
+    # The trip hazards of a house. Grouped apart from furniture because a bag in a hallway is there
+    # today and gone tomorrow, and because it is the group a person can do something about.
+    canonical: [bag, box, basket, bin, suitcase, luggage, toy, ball, shoes, book, bottle, bucket,
+                cable, laundry, container, barrel, tool, umbrella, tent,
+                # Bathroom scales sit on the floor and are the right height to catch a wheel.
+                # Sports equipment and a board leaning on a wall are in a hallway as often as
+                # they are in a cupboard.
+                scales, sports equipment, board, medical equipment]
+    prompts: ["bag", "box", "cardboard box", "basket", "bin", "suitcase", "toy", "shoes", "cable",
+              "laundry basket", "washing basket", "clutter"]
+
+  # ---- Things on wheels ----
+
+  - name: wheeled_object
+    # Anything that could roll if it were nudged, or that is being pushed by somebody. A separate
+    # group because a thing on wheels may not be where it was a moment ago.
+    canonical: [bicycle, motorcycle, car, van, bus, truck, trolley, skateboard, scooter,
+                roller skates, stretcher, wheelbarrow, lawn mower]
+    prompts: ["bicycle", "trolley", "cart", "shopping trolley", "pushchair", "wheelie bin",
+              "lawn mower", "car"]
+
   - name: unknown_obstacle
+    # The catch-all. A thing here is still an obstacle and still stops the walker at 0.70 m; it
+    # simply has no name the description may use, so it is described as an obstacle.
     canonical: [unknown]
     prompts: []
 
+# ---------------------------------------------------------------------------
+# Detector words folded onto a name.
+#
+# The left side is what the detector emits, lowercased. The right side must be a name that appears
+# in one of the `canonical` lists above, or the word ends up in the catch-all by a longer route
+# while this file reads as though it works. A test checks that.
+# ---------------------------------------------------------------------------
+
 synonyms_to_canonical:
+
+  # people
+  man: person
+  woman: person
+  boy: person
+  girl: person
+
+  # animals. The generic Open Images groupings are folded in so that an unusual animal is still
+  # called an animal rather than nothing at all.
+  mammal: animal
+  carnivore: animal
+  reptile: animal
+  insect: animal
+  invertebrate: animal
+  goldfish: fish
+  mouse: animal
+  squirrel: animal
+  hedgehog: animal
+  tortoise: animal
+  turtle: animal
+  snake: animal
+  lizard: animal
+  frog: animal
+  duck: bird
+  goose: bird
+  chicken: bird
+  turkey: bird
+  parrot: bird
+  owl: bird
+  sparrow: bird
+  magpie: bird
+  raven: bird
+  canary: bird
+  eagle: bird
+  falcon: bird
+  swan: bird
+  penguin: bird
+  ostrich: bird
+  woodpecker: bird
+  blue jay: bird
+  horse: animal
+  sheep: animal
+  goat: animal
+  pig: animal
+  cattle: animal
+  bull: animal
+  deer: animal
+  fox: animal
+  bear: animal
+  brown bear: animal
+  polar bear: animal
+  lion: animal
+  tiger: animal
+  leopard: animal
+  cheetah: animal
+  jaguar (animal): animal
+  lynx: animal
+  monkey: animal
+  koala: animal
+  panda: animal
+  red panda: animal
+  raccoon: animal
+  skunk: animal
+  otter: animal
+  kangaroo: animal
+  camel: animal
+  alpaca: animal
+  antelope: animal
+  armadillo: animal
+  porcupine: animal
+  mule: animal
+  elephant: animal
+  giraffe: animal
+  zebra: animal
+  rhinoceros: animal
+  hippopotamus: animal
+  crocodile: animal
+  spider: animal
+  worm: animal
+  snail: animal
+  butterfly: animal
+  moths and butterflies: animal
+  bee: animal
+  ant: animal
+  beetle: animal
+  ladybug: animal
+  caterpillar: animal
+  dragonfly: animal
+  centipede: animal
+  scorpion: animal
+  tick: animal
+  isopod: animal
+  bat (animal): animal
+
+  # seating and tables
+  loveseat: couch
+  studio couch: couch
+  sofa bed: couch
+  training bench: bench
+  kitchen & dining room table: table
+  coffee table: table
+  billiard table: table
+  countertop: table
+  cake stand: table
+  infant bed: cot
+  dog bed: pet bed
+  cat furniture: pet bed
+
+  # storage
+  cabinetry: cabinet
+  bathroom cabinet: cabinet
+  filing cabinet: cabinet
+  nightstand: cabinet
+  closet: wardrobe
+  chest of drawers: drawers
+  drawer: drawers
+  wine rack: rack
+  spice rack: rack
+  shelf: shelf
+
+  # soft furnishing and ornament
+  pillow: cushion
+  towel: laundry
+  bronze sculpture: sculpture
+  bust: sculpture
+  houseplant: plant
+  flowerpot: plant
+  christmas tree: plant
+  vase: plant
+  tree: plant
+  palm tree: plant
+  willow: plant
+  maple: plant
+  flower: plant
+  rose: plant
+  lily: plant
+  common sunflower: plant
+  lavender (plant): plant
+  snowman: sculpture
+
+  # appliances and machines
+  refrigerator: fridge
+  gas stove: hob
+  wood-burning stove: hob
+  microwave oven: microwave
+  pressure cooker: small appliance
+  slow cooker: small appliance
+  food processor: small appliance
+  coffeemaker: coffee machine
+  blender: small appliance
+  mixer: small appliance
+  grinder: small appliance
+  waffle iron: small appliance
+  humidifier: small appliance
+  home appliance: small appliance
+  kitchen appliance: small appliance
+  computer monitor: monitor
+  laptop: computer
+  tablet computer: computer
+  computer keyboard: computer
+  cassette deck: small appliance
+  corded phone: telephone
+  mobile phone: telephone
+  fax: printer
+  paper cutter: printer
+  mechanical fan: fan
+  ceiling fan: fan
+  treadmill: exercise machine
+  stationary bicycle: exercise machine
+  indoor rower: exercise machine
+  punching bag: exercise machine
+  dumbbell: exercise machine
+  horizontal bar: exercise machine
+  balance beam: exercise machine
+  organ (musical instrument): piano
+  harpsichord: piano
+  musical keyboard: piano
+
+  # bathroom
+  bathtub: bath
+  jacuzzi: bath
+  bidet: toilet
+  plumbing fixture: sink
+  tap: sink
+  soap dispenser: sink
+  facial tissue holder: sink
+  hand dryer: small appliance
+
+  # things left on the floor
+  luggage and bags: bag
+  handbag: bag
+  backpack: bag
+  briefcase: bag
+  plastic bag: bag
+  waste container: bin
+  picnic basket: basket
+  teddy bear: toy
+  doll: toy
+  dinosaur: toy
+  kite: toy
+  balloon: toy
+  flying disc: ball
+  football: ball
+  volleyball (ball): ball
+  rugby ball: ball
+  tennis ball: ball
+  cricket ball: ball
+  golf ball: ball
+  ring binder: book
+  pencil case: box
+  jug: container
+  bucket: bucket
+  serving tray: container
+  drill (tool): tool
+  hammer: tool
+  wrench: tool
+  screwdriver: tool
+  chainsaw: tool
+  axe: tool
+  chisel: tool
+  ratchet (device): tool
+
+  # instruments large enough to stand on a floor
+  guitar: musical instrument
+  cello: musical instrument
+  drum: musical instrument
+  harp: musical instrument
+  accordion: musical instrument
+  banjo: musical instrument
+  violin: musical instrument
+  saxophone: musical instrument
+  trombone: musical instrument
+  trumpet: musical instrument
+  french horn: musical instrument
+  flute: musical instrument
+  oboe: musical instrument
+  maracas: musical instrument
+
+  # equipment that is put down on a floor
+  scale: scales
+  racket: sports equipment
+  tennis racket: sports equipment
+  table tennis racket: sports equipment
+  baseball bat: sports equipment
+  bowling equipment: sports equipment
+  hiking equipment: sports equipment
+  ski: board
+  snowboard: board
+  surfboard: board
+  paddle: sports equipment
+  bathroom accessory: bathroom fitting
+
+  # doors
+  door handle: door
+
+  # street furniture, which a walker meets on the way out of the house. Folded onto `post` because
+  # "traffic sign at 1.2 m" claims more than a distance from a bounding box supports.
+  traffic sign: post
+  traffic light: post
+  stop sign: post
+  street light: post
+  parking meter: post
+  fire hydrant: post
+  billboard: post
+  scoreboard: post
+
+  # wheeled things
   cart: trolley
-  meal_cart: trolley
-  linen_cart: trolley
-  gurney: stretcher
-  hospital_bed: bed
+  golf cart: trolley
+  taxi: car
+  limousine: car
+  ambulance: van
+  land vehicle: car
+  vehicle: car
+  unicycle: bicycle
+  segway: scooter
+  snowmobile: scooter
+  snowplow: lawn mower
   buggy: pram
   pushchair: pram
-  iv pole: iv_pole
-  trash can: bin
 
-mapping:
-  # First try embedding similarity (no LLM), then optional LLM fallback.
-  embed_match:
-    model_hint: "clip"         # just a hint for later; we’ll pick an available model in code
-    threshold: 0.28            # cosine similarity threshold to accept a canonical match
-    top_k: 3
-  llm_fallback:
-    enabled: true
-    temperature: 0.0
-    max_tokens: 64
-    # The LLM will be constrained to return ONE of the ontology names above.
+  # hazards
+  staircase: stairs
+  steps: stairs
+
+# ---------------------------------------------------------------------------
+# Words the detector reports that are never a thing on the floor to steer around.
+#
+# These are thrown away before they become facts. The test is whether a wheel could reach it. A
+# curtain hangs to the floor and a standard lamp stands on it, so neither is here; both are
+# furniture. A window is in a wall, so it is.
+#
+# The reason the list exists at all: a word that reaches no group becomes `unknown_obstacle`, and
+# `unknown_obstacle` still stops the walker at 0.70 m. Without this list the walker would stop for a
+# shirt.
+#
+# The word that forced it is `window`. Every Open Images model tested reports `Window` in all three
+# recorded stair frames at 0.49 to 0.71 confidence, more confidently than it reports the staircase,
+# because the stairwell is lit from behind by a large window.
+#
+# Body parts and clothing are here for a second reason. Open Images labels them separately from
+# `Person`, so one visitor standing in a doorway produces `Person`, `Human face`, `Human hand`,
+# `Jeans` and `Footwear` as five detections at the same distance, and the description would name the
+# same person five times over.
+# ---------------------------------------------------------------------------
+
+not_obstacles:
+
+  # parts of a person, already covered by `Person`
+  - human body
+  - human head
+  - human face
+  - human hair
+  - human eye
+  - human ear
+  - human nose
+  - human mouth
+  - human beard
+  - human arm
+  - human hand
+  - human leg
+  - human foot
+  - skull
+
+  # worn items, already covered by `Person`
+  - clothing
+  - fashion accessory
+  - shirt
+  - trousers
+  - jeans
+  - shorts
+  - skirt
+  - miniskirt
+  - dress
+  - jacket
+  - coat
+  - suit
+  - sock
+  - footwear
+  - boot
+  - sandal
+  - high heels
+  - hat
+  - sun hat
+  - fedora
+  - cowboy hat
+  - sombrero
+  - helmet
+  - bicycle helmet
+  - football helmet
+  - glasses
+  - sunglasses
+  - goggles
+  - tie
+  - belt
+  - scarf
+  - glove
+  - watch
+  - necklace
+  - earrings
+  - brassiere
+  - swimwear
+  - swim cap
+  - sports uniform
+  - tiara
+  - crown
+  - seat belt
+
+  # parts of a vehicle, already covered by the vehicle
+  - wheel
+  - bicycle wheel
+  - tire
+  - auto part
+  - vehicle registration plate
+
+  # on a wall or a ceiling, or naming the room rather than a thing inside it
+  - window
+  - window blind
+  - poster
+  - picture frame
+  - building
+  - house
+  - office building
+  - skyscraper
+  - castle
+  - lighthouse
+  - tower
+  - tree house
+  - porch
+  - convenience store
+  - light bulb
+  - light switch
+  - power plugs and sockets
+  - clock
+  - wall clock
+  - digital clock
+  - alarm clock
+  - flag
+  - chime
+
+# A `mapping:` block configuring embedding similarity and a language model fallback was removed on
+# 22 August 2026. Nothing read it. It described the approximate matching that the mapper used to
+# perform, which sent a stop sign to the stairs group and a necktie to the person group, and which
+# was replaced by exact matching. Matching is now a lookup with no configuration.

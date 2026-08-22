@@ -74,20 +74,20 @@ python scripts/realsense_depth_test.py
 python scripts\rgbd_facts_with_mapping.py --rgb "outputs\bag_test\color.png" --depth "outputs\bag_test\depth_mm.png" --preset realsense_mm  
 
 # Run RealSense live stream estimation + mapping
-python scripts\realsense_per_frame_facts.py --model yolov8n.pt --imgsz 640 --conf 0.25
+python scripts\realsense_per_frame_facts.py --model yolov8n-oiv7.pt --imgsz 640 --conf 0.25
 
 # Run RealSense live stream risk estimation
 # Historical. Retired, moved to scripts\archive\ on 19 August 2026.
 python scripts\archive\realsense_per_frame_with_risk.py --model yolov8n.pt --imgsz 640 --conf 0.25
 
 # Run RealSense live stream risk estimation + direction input + simple caption
-python scripts/only_realsense.py --model yolov8n.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty
+python scripts/only_realsense.py --model yolov8n-oiv7.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty
 
 # Run RealSense live stream risk estimation + direction input + LLM
 # Start the LLM server first (separate terminal) qwen
 # Example: & .\scripts\start_llama_server.ps1 -NGL 28 -Ctx 2048 -Threads 8 -Port 8080
 
-python scripts\realsense_shared_control.py --model yolov8n.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty --imu --llm --llm_endpoint http://localhost:8080 --llm_hz 2
+python scripts\realsense_shared_control.py --model yolov8n-oiv7.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty --imu --llm --llm_endpoint http://localhost:8080 --llm_hz 2
 
 
 # llava-1.5-7b
@@ -101,7 +101,7 @@ python scripts\archive\realsense_vlm_on_change.py `
   --model llava-1.5-7b `
   --width 640 --height 480 --fps 15 `
   --image_size 256 --encode jpeg --jpeg_quality 60 `
-  --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
+  --det_model yolov8n-oiv7.pt --imgsz 448 --conf 0.25 --half `
   --process_hz 2 `
   --min_interval_s 0.6 `
   --max_tokens 160 `
@@ -148,7 +148,7 @@ python scripts\realsense_vlm_on_change_qwen.py `
   --model_hash sha256:66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a `
   --width 640 --height 480 --fps 15 `
   --image_size 448 --encode jpeg --jpeg_quality 70 `
-  --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
+  --det_model yolov8n-oiv7.pt --imgsz 448 --conf 0.25 --half `
   --process_hz 8 `
   --max_tokens 220 `
   --evaluate false `

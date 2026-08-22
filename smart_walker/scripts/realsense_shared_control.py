@@ -194,6 +194,10 @@ class OntologyMapper:
     A word appearing only in a bucket's `prompts` list yields the bucket and no canonical name, so
     the detector's own word survives into the caption. Mapping it to the bucket's first canonical,
     as the previous form did, turned every bench and desk into a chair.
+
+    The ontology's `not_obstacles` list is read here but not applied by `map_label`, which has no
+    way to say "no object". `is_not_obstacle` reports it separately and the detection loop drops the
+    detection before it becomes a fact.
     """
 
     def __init__(self, ontology_path: Path):
@@ -202,12 +206,23 @@ class OntologyMapper:
         self.prompt_buckets: dict[str, str] = {}
         self.synonyms = {k.lower(): v.lower()
                          for k, v in cfg.get("synonyms_to_canonical", {}).items()}
+        self.not_obstacles = {str(name).strip().lower()
+                              for name in cfg.get("not_obstacles", []) or ()}
         for bucket in cfg["ontology"]:
             ont = bucket["name"]
             for c in bucket.get("canonical", []):
                 self.ontology_buckets[c.lower()] = ont
             for p in bucket.get("prompts", []):
                 self.prompt_buckets.setdefault(p.lower(), ont)
+
+    def is_not_obstacle(self, raw_label: str) -> bool:
+        """True where the label names something that cannot be an obstacle on the floor plane.
+
+        A window, a shirt and a person's hand are all reported by the detector and none of them is a
+        thing to be steered around. Without this the walker would stop for them, because a label the
+        ontology does not name becomes `unknown_obstacle`, which still stops the walker at 0.70 m.
+        """
+        return bool(raw_label) and raw_label.strip().lower() in self.not_obstacles
 
     def map_label(self, raw_label: str) -> Mapped:
         if not raw_label:
@@ -818,6 +833,10 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                     x1, y1, x2, y2 = map(float, xyxy.tolist())
                     raw_label = names_cache[int(
                         cls_idx)] if names_cache is not None else str(int(cls_idx))
+                    if mapper.is_not_obstacle(raw_label):
+                        # A window, a shirt or a person's hand. Dropped here rather than mapped,
+                        # because every bucket including unknown_obstacle stops the walker.
+                        continue
                     mapped = mapper.map_label(raw_label)
                     bearing = bearing_from_bbox(
                         (x1, y1, x2, y2), W, cfg["bearing"])
@@ -872,7 +891,13 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="yolov8n.pt")
+    # Open Images V7 rather than COCO. COCO's eighty class names reached four of the ontology's
+    # buckets and never reached `hazard`, so the 2.00 m hazard stop could not fire. Open Images has
+    # 601 classes including Stairs, Door, Wheelchair and Crutch. Section 10.7 of
+    # `HDSG_VERIFIED_GENERATION_POLICY.md` records the measurement. The size suffix is n, s, m, l or
+    # x; peak allocation is 140 MiB for n and 243 MiB for m, against roughly 3.5 GiB held by the
+    # language model, so a larger model is a one-word change if the captures call for it.
+    ap.add_argument("--model", default="yolov8n-oiv7.pt")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--width", type=int, default=640)

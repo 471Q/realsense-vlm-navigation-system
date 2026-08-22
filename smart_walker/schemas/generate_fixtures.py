@@ -50,7 +50,7 @@ def build_event():
         ticket_id=None, timestamp_ms=1.0, intent="FORWARD", trigger_type="USER_REQUESTED",
         request_id="MORE_DETAIL", response_mode="MORE_DETAIL", previous_signature=None,
         objects=[], sectors=sectors, authority=authority, mirror_view=False,
-        detector_model="yolov8n.pt", detector_confidence=0.35,
+        detector_model="yolov8n-oiv7.pt", detector_confidence=0.35,
         pipeline_config_path=CONFIG / "pipeline.yaml",
         ontology_path=CONFIG / "ontology.yaml",
         clear_threshold_m=2.0, blocked_threshold_m=0.7, sector_choice_tolerance_m=0.10,
