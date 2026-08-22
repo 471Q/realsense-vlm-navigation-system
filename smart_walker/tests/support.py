@@ -83,7 +83,11 @@ def fact_packet(intent="FORWARD", object_advisory="CAUTION", lane=None, objects=
         detector_model="yolov8n.pt", detector_confidence=0.35,
         pipeline_config_path=CONFIG / "pipeline.yaml",
         ontology_path=CONFIG / "ontology.yaml",
-        clear_threshold_m=2.0, blocked_threshold_m=0.7, sector_choice_tolerance_m=0.10,
+        # Read from the runtime's constants rather than written out, so a test packet's record of
+        # how it was configured agrees with the shipped configuration. It said 2.0 while the live
+        # default was 1.8 until 23 August 2026.
+        clear_threshold_m=hdsg.SECTOR_CLEAR_AT_OR_ABOVE_M,
+        blocked_threshold_m=hdsg.OBJECT_STOP_BELOW_M, sector_choice_tolerance_m=0.10,
         motion_tracker=hdsg.MotionTracker(), **extra,
     )
 

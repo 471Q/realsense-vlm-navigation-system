@@ -649,7 +649,9 @@ def main():
     ap.add_argument("--debug_objects", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--mirror_view", action="store_true")
     ap.add_argument("--no_mirror_tag", action="store_true")
-    ap.add_argument("--clear_threshold_m", type=float, default=1.8)
+    ap.add_argument("--clear_threshold_m", type=float, default=None,
+                    help="override the sector clear distance; the default comes from "
+                         "sector.clear_at_or_above_m in pipeline.yaml")
     ap.add_argument("--sector_choice_tolerance_m", type=float, default=0.10)
     ap.add_argument("--movement_threshold_m", type=float, default=0.12)
     ap.add_argument("--stationary_threshold_m", type=float, default=0.05)
@@ -816,6 +818,31 @@ def main():
         sector_right_min = float(cfg["bearing"]["right_min"])
     except Exception:
         sector_left_max, sector_right_min = 1.0 / 3.0, 2.0 / 3.0
+    # The remaining motion thresholds, read from the configuration and passed to every consumer, so
+    # the numbers a run is judged by are the numbers the run was configured with. The command line
+    # can still override the sector clear distance for a one-off; nothing else takes an override,
+    # because a threshold that can be set two ways is a threshold that will be recorded wrongly.
+    try:
+        object_caution_below_m = float(
+            cfg["risk_rules_baseline"]["caution"]["nearest_obstacle_m_lt"]
+        )
+    except Exception:
+        object_caution_below_m = hdsg.OBJECT_CAUTION_BELOW_M
+    try:
+        hazard_stop_at_or_below_m = float(
+            cfg["risk_rules_baseline"]["stop"]["hazard_within_m_lte"]
+        )
+    except Exception:
+        hazard_stop_at_or_below_m = hdsg.HAZARD_STOP_AT_OR_BELOW_M
+    if args.clear_threshold_m is None:
+        try:
+            args.clear_threshold_m = float(cfg["sector"]["clear_at_or_above_m"])
+        except Exception:
+            args.clear_threshold_m = hdsg.SECTOR_CLEAR_AT_OR_ABOVE_M
+    print(f"[hdsg] thresholds: blocked below {blocked_threshold_m:.2f} m, "
+          f"clear at or above {args.clear_threshold_m:.2f} m, "
+          f"object caution below {object_caution_below_m:.2f} m, "
+          f"hazard stop at or below {hazard_stop_at_or_below_m:.2f} m")
     runtime_configuration_hash = hdsg.sha256_text(json.dumps({
         "pipeline_hash": hdsg.sha256_file(sw.PIPELINE_CFG),
         "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
@@ -1499,6 +1526,8 @@ def main():
             blocked_threshold_m=blocked_threshold_m,
             sector_choice_tolerance_m=args.sector_choice_tolerance_m,
             motion_tracker=motion_tracker,
+            object_caution_below_m=object_caution_below_m,
+            hazard_stop_at_or_below_m=hazard_stop_at_or_below_m,
             configuration_hash=runtime_configuration_hash,
             post_reorientation_stable_observations=args.post_reorientation_stable_observations,
             post_reorientation_max_variation_m=args.post_reorientation_max_variation_m,
@@ -1809,6 +1838,9 @@ def main():
                     objects=latest_objects,
                     previous_selected_sector=previous_selected_sector,
                     sector_choice_tolerance_m=args.sector_choice_tolerance_m,
+                    object_stop_below_m=blocked_threshold_m,
+                    object_caution_below_m=object_caution_below_m,
+                    hazard_stop_at_or_below_m=hazard_stop_at_or_below_m,
                 )
                 if latest_authority["selected_sector"] in hdsg.SECTORS:
                     previous_selected_sector = latest_authority["selected_sector"]
@@ -1858,6 +1890,9 @@ def main():
                             objects=latest_objects,
                             previous_selected_sector=None,
                             sector_choice_tolerance_m=args.sector_choice_tolerance_m,
+                            object_stop_below_m=blocked_threshold_m,
+                            object_caution_below_m=object_caution_below_m,
+                            hazard_stop_at_or_below_m=hazard_stop_at_or_below_m,
                         )
 
                 measurement_state = "VALID" if all(item["valid"] for item in latest_sector_facts.values()) else "PARTIAL"

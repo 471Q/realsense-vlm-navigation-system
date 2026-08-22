@@ -101,3 +101,19 @@ risk_rules_baseline:
     nearest_obstacle_m_lt: 1.50
     multi_near_objects_count_gte: 2
     high_uncertainty: true
+
+sector:
+  # The three sector clearances, computed from the depth image rather than from detected objects.
+  # A sector reading below `blocked_below_m` is BLOCKED, below `clear_at_or_above_m` is CONSTRAINED,
+  # and at or above it is CLEAR.
+  #
+  # `blocked_below_m` is not repeated here. It is the same distance as
+  # `risk_rules_baseline.stop.nearest_obstacle_m_lt` above and is read from there, so the distance
+  # at which the walker stops has one home whether the thing in the way was detected as an object
+  # or measured as depth.
+  #
+  # 1.8 rather than 2.0 because every run in the archive was recorded at 1.8, which was the command
+  # line's default while every test packet recorded 2.0 in the field that states how a run was
+  # configured. Made consistent 23 August 2026; the value itself awaits a measurement at the
+  # laboratory and is not settled.
+  clear_at_or_above_m: 1.8

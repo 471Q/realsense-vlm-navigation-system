@@ -275,5 +275,70 @@ class MotionTrackerTests(unittest.TestCase):
         self.assertIn("MOTION_WITHIN_STATIONARY_TOLERANCE", state["motion_reason_codes"])
 
 
+class ThresholdConsistencyTests(unittest.TestCase):
+    """Every threshold has one value, wherever it is read from.
+
+    Each of these numbers lived in two or three places until 23 August 2026. `determine_authority`
+    carried 1.50 and 2.00 as parameter defaults while `pipeline.yaml` carried the same two under
+    different names; `build_fact_packet` wrote both as literals into the record that states how a
+    run was configured, so that record would have kept reporting 1.50 after the configuration was
+    changed; and the sector clear distance was 1.8 on the command line while every test packet
+    recorded 2.0.
+
+    The last of those is the one that matters. The thresholds record exists so that a run in the
+    archive can be read back and understood. A number in it that the run did not use is worse than
+    no number at all, because it will be believed.
+    """
+
+    def setUp(self):
+        import yaml
+
+        self.cfg = yaml.safe_load(
+            (support.CONFIG / "pipeline.yaml").read_text(encoding="utf-8")
+        )
+
+    def test_the_configuration_agrees_with_the_runtime_constants(self):
+        for path, constant in (
+            (("risk_rules_baseline", "stop", "nearest_obstacle_m_lt"), hdsg.OBJECT_STOP_BELOW_M),
+            (("risk_rules_baseline", "caution", "nearest_obstacle_m_lt"),
+             hdsg.OBJECT_CAUTION_BELOW_M),
+            (("risk_rules_baseline", "stop", "hazard_within_m_lte"),
+             hdsg.HAZARD_STOP_AT_OR_BELOW_M),
+            (("sector", "clear_at_or_above_m"), hdsg.SECTOR_CLEAR_AT_OR_ABOVE_M),
+        ):
+            with self.subTest(key=".".join(path)):
+                value = self.cfg
+                for key in path:
+                    value = value[key]
+                self.assertEqual(float(value), float(constant))
+
+    def test_the_recorded_thresholds_are_the_thresholds_in_force(self):
+        recorded = support.fact_packet()["configuration"]["thresholds_m"]
+        self.assertEqual(recorded["object_stop_below"], hdsg.OBJECT_STOP_BELOW_M)
+        self.assertEqual(recorded["object_caution_below"], hdsg.OBJECT_CAUTION_BELOW_M)
+        self.assertEqual(recorded["hazard_stop_at_or_below"], hdsg.HAZARD_STOP_AT_OR_BELOW_M)
+        self.assertEqual(recorded["sector_clear_at_or_above"], hdsg.SECTOR_CLEAR_AT_OR_ABOVE_M)
+
+    def test_a_caller_that_changes_a_threshold_changes_what_is_recorded(self):
+        """The record must follow the value in force, not a literal beside it."""
+        packet = hdsg.build_fact_packet(
+            run_id="run_t", event_id="evt_1", observation_id="obs_1", ticket_id=None,
+            timestamp_ms=1.0, intent="FORWARD", trigger_type="USER_REQUESTED",
+            request_id="MORE_DETAIL", response_mode="MORE_DETAIL", previous_signature=None,
+            objects=[], sectors=support.sectors(),
+            authority=hdsg.determine_authority("FORWARD", "SAFE", support.sectors()),
+            mirror_view=False, detector_model="yolov8n.pt", detector_confidence=0.35,
+            pipeline_config_path=support.CONFIG / "pipeline.yaml",
+            ontology_path=support.CONFIG / "ontology.yaml",
+            clear_threshold_m=1.2, blocked_threshold_m=0.5, sector_choice_tolerance_m=0.10,
+            motion_tracker=hdsg.MotionTracker(),
+            object_caution_below_m=1.1, hazard_stop_at_or_below_m=3.3,
+        )
+        recorded = packet["configuration"]["thresholds_m"]
+        self.assertEqual(recorded["object_caution_below"], 1.1)
+        self.assertEqual(recorded["hazard_stop_at_or_below"], 3.3)
+        self.assertEqual(recorded["sector_clear_at_or_above"], 1.2)
+
+
 if __name__ == "__main__":
     unittest.main()

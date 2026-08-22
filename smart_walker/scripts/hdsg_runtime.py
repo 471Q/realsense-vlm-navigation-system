@@ -48,6 +48,26 @@ PROMPT_PACKET_SCHEMA = "hdsg.prompt_packet.v2"
 CAPTION_SCHEMA = "hdsg.vlm_caption.v1"
 RELEASE_SCHEMA = "hdsg.release.v2"
 
+# The motion thresholds, in metres. One home each.
+#
+# These are the fallback values, used when a caller supplies nothing. `config/pipeline.yaml` is the
+# configuration home and the live entry script reads them from there and passes them in; the
+# constants exist so that a caller without a config file, a test or an offline replay, agrees with
+# the shipped configuration rather than inventing its own number.
+#
+# They were written as literals in three places until 23 August 2026. `determine_authority` used
+# 1.50 and 2.0 as parameter defaults, `build_fact_packet` wrote the same two as literals into the
+# thresholds record a run is audited by, and the sector clear distance was 1.8 on the command line
+# while every test packet recorded 2.0. A record claiming to state how a run was configured must
+# not carry a number the run did not use.
+OBJECT_STOP_BELOW_M = 0.70
+OBJECT_CAUTION_BELOW_M = 1.50
+HAZARD_STOP_AT_OR_BELOW_M = 2.0
+# 1.8 rather than 2.0 because every run in the archive was recorded at 1.8, the command line's
+# default, and moving the configuration would put the shipped value at odds with the evidence
+# already collected. The value itself is not settled; it awaits a measurement at the laboratory.
+SECTOR_CLEAR_AT_OR_ABOVE_M = 1.8
+
 SEVERITY = {"SAFE": 0, "CAUTION": 1, "STOP": 2}
 SECTORS = ("LEFT", "CENTRE", "RIGHT")
 PROFILE_LIMITS = {
@@ -462,9 +482,9 @@ def determine_authority(
     objects: Optional[Iterable[Mapping[str, Any]]] = None,
     previous_selected_sector: Optional[str] = None,
     sector_choice_tolerance_m: float = 0.10,
-    object_stop_below_m: float = 0.70,
-    object_caution_below_m: float = 1.50,
-    hazard_stop_at_or_below_m: float = 2.0,
+    object_stop_below_m: float = OBJECT_STOP_BELOW_M,
+    object_caution_below_m: float = OBJECT_CAUTION_BELOW_M,
+    hazard_stop_at_or_below_m: float = HAZARD_STOP_AT_OR_BELOW_M,
 ) -> dict:
     """Applies the approved finite deterministic action and sector-selection policy."""
     intent = str(intent or "NONE").upper()
@@ -705,6 +725,8 @@ def build_fact_packet(
     blocked_threshold_m: float,
     sector_choice_tolerance_m: float,
     motion_tracker: MotionTracker,
+    object_caution_below_m: float = OBJECT_CAUTION_BELOW_M,
+    hazard_stop_at_or_below_m: float = HAZARD_STOP_AT_OR_BELOW_M,
     configuration_hash: Optional[str] = None,
     post_reorientation_stable_observations: int = 4,
     post_reorientation_max_variation_m: float = 0.10,
@@ -782,8 +804,8 @@ def build_fact_packet(
             "detector_confidence_threshold": float(detector_confidence),
             "thresholds_m": {
                 "object_stop_below": float(blocked_threshold_m),
-                "object_caution_below": 1.5,
-                "hazard_stop_at_or_below": 2.0,
+                "object_caution_below": float(object_caution_below_m),
+                "hazard_stop_at_or_below": float(hazard_stop_at_or_below_m),
                 "sector_blocked_below": float(blocked_threshold_m),
                 "sector_clear_at_or_above": float(clear_threshold_m),
                 "binding_tie_margin": 0.15,
