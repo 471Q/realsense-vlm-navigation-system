@@ -9,13 +9,14 @@
 # The file's digest is folded into `runtime_configuration_hash` and recorded with every run, so two
 # runs carrying the same hash were configured identically.
 #
-# **Every block below is read by the live pipeline.** Four blocks that nothing read were removed on
-# 23 August 2026: `open_vocab`, eighteen prompts for an open-vocabulary detector the system does not
-# use; `depth.monocular_bins_norm` and `depth.mode`, for a camera with no depth sensor, where the
-# D455f has one and `source_depth` is hardcoded to rgbd; `uncertainty_thresholds`, whose two values
-# were never computed and whose `low_light` is hardcoded false; and `output_schema_fields`, a
-# description of a record shape written in prose beside four JSON Schema files that describe the
-# same thing and are enforced. Each read as an active part of the specification and was not one.
+# **Every block below is read by the live pipeline**, except `free_space`, which is marked. Four
+# blocks that nothing read were removed on 23 August 2026: `open_vocab`, eighteen prompts for an
+# open-vocabulary detector the system does not use; `depth.monocular_bins_norm` and `depth.mode`,
+# for a camera with no depth sensor, where the D455f has one and `source_depth` is hardcoded to
+# rgbd; `uncertainty_thresholds`, whose two values were never computed and whose `low_light` was
+# hardcoded false; and `output_schema_fields`, a description of a record shape written in prose
+# beside four JSON Schema files that describe the same thing and are enforced. Each read as an
+# active part of the specification and was not one.
 #
 # Read by `realsense_shared_control.py` and `realsense_vlm_on_change_qwen.py` on the live path, and
 # by five older standalone scripts that are not part of the current system.
@@ -70,14 +71,17 @@ free_space:
   #      below is 0.60, narrower than most walkers, so it was never a considered value.
   #   3. Whether to report the narrowest gap anywhere within stopping range, or the gap at a fixed
   #      lookahead. The first is the safer reading and costs nothing extra.
-  # Collected with everything else blocked on the laboratory in
-  # `thesis/Claude Session/LAB_SESSION_CHECKLIST.md`, sections A and B2.
   #   4. The camera's height above the floor and its tilt. Without these, image rows cannot be
   #      converted to physical heights, and the measurement can only be taken across a band of rows
   #      as `compute_lane_state` already does, which makes the height approximate rather than
   #      metric. It matters because a doorway is clear at floor level and narrows at handle height,
   #      and a table is clear underneath and blocked at waist height, so the gap has to be measured
   #      across a range of heights rather than one.
+  #
+  # These four are collected with everything else blocked on the laboratory in
+  # `thesis/Claude Session/LAB_SESSION_CHECKLIST.md`, sections A and B2. Section B2 lists the gap
+  # scenes to capture with their true widths measured, without which a computed width can be
+  # plotted but not checked.
   central_wedge_deg: 20  # +/- degrees around the centreline searched for the gap
   sample_rows: 12        # how many rows of the depth image the width is measured across
   min_gap_width_m: 0.60  # placeholder, see open question 2
@@ -87,14 +91,17 @@ risk_rules_baseline:
   # `determine_authority` as the object side of the decision. The sector side is computed
   # separately from the depth image.
   #
-  # Three of the six rules below cannot fire as the system stands, and are kept because the
+  # Two of the six rules below cannot fire as the system stands, and are kept because the
   # measurements they need are wanted rather than abandoned:
   #   `corridor_min_width_m_lt`  needs free_space above, which is not implemented.
   #   `hazard_within_m_lte`      needs an object mapped to ontology_class hazard. No COCO class
   #                              reaches it, so the hazard list is always empty. This is the cost of
   #                              the deferred decision on how stairs are detected.
-  #   `high_uncertainty`         needs uncertainty.low_light, which is hardcoded false.
-  # What runs today is: stop under 0.70 m, caution under 1.50 m or two or more objects nearby.
+  # Both are owned: see `LAB_SESSION_CHECKLIST.md`, sections A and D. A third, `high_uncertainty`,
+  # was replaced by `min_valid_depth_fraction` on 23 August 2026 and now fires.
+  #
+  # What runs today is: stop under 0.70 m; caution under 1.50 m, or with two or more objects
+  # nearby, or with less than half the reasoning band carrying a depth reading.
   stop:
     nearest_obstacle_m_lt: 0.70
     corridor_min_width_m_lt: 0.60
