@@ -176,41 +176,49 @@ class Mapped:
 
 
 class OntologyMapper:
-    def __init__(self, ontology_path: Path, sim_threshold: float = 80.0):
+    """Assigns a detector label to a safety bucket, by exact match only.
+
+    The bucket is not cosmetic. `hazard` blocks a sector at 2.00 m where everything else blocks at
+    0.70 m, and the canonical name it returns becomes the word the caption is permitted to use for
+    the object.
+
+    **Matching used to fall back to string similarity, and it must not.** The previous form called
+    `rapidfuzz.WRatio` and accepted any match scoring 80 or better. Run over the detector's real
+    vocabulary on 22 August 2026, that produced `stop sign -> stairs_up -> hazard`, so the walker
+    stopped for a road sign and recorded a staircase; `tie -> person -> agent`, so a necktie became
+    eligible to be reported as a moving person; and `carrot -> trolley`, `cat -> trolley`,
+    `hair drier -> chair` and `dining table -> chair`, the last of which renamed a table in the Fact
+    Packet that the whole safety argument treats as authoritative. A label the ontology does not
+    name is now `unknown_obstacle`, which is what it is.
+
+    A word appearing only in a bucket's `prompts` list yields the bucket and no canonical name, so
+    the detector's own word survives into the caption. Mapping it to the bucket's first canonical,
+    as the previous form did, turned every bench and desk into a chair.
+    """
+
+    def __init__(self, ontology_path: Path):
         cfg = load_yaml(ontology_path)
-        self.sim_threshold = sim_threshold
-        self.ontology_buckets = {}
-        self.prompts = []
-        self.prompt2canon = {}
+        self.ontology_buckets: dict[str, str] = {}
+        self.prompt_buckets: dict[str, str] = {}
         self.synonyms = {k.lower(): v.lower()
                          for k, v in cfg.get("synonyms_to_canonical", {}).items()}
         for bucket in cfg["ontology"]:
             ont = bucket["name"]
             for c in bucket.get("canonical", []):
-                cl = c.lower()
-                self.ontology_buckets[cl] = ont
-                self.prompts.append(cl)
-                self.prompt2canon[cl] = cl
+                self.ontology_buckets[c.lower()] = ont
             for p in bucket.get("prompts", []):
-                pl = p.lower()
-                self.prompts.append(pl)
-                if bucket.get("canonical"):
-                    self.prompt2canon[pl] = bucket["canonical"][0].lower()
+                self.prompt_buckets.setdefault(p.lower(), ont)
 
     def map_label(self, raw_label: str) -> Mapped:
         if not raw_label:
             return Mapped(None, "unknown_obstacle")
         s = raw_label.strip().lower()
-        if s in self.synonyms:
-            canon = self.synonyms[s]
-            return Mapped(canon, self.ontology_buckets.get(canon, "unknown_obstacle"))
-        if s in self.ontology_buckets:
-            return Mapped(s, self.ontology_buckets[s])
-        match = process.extractOne(s, self.prompts, scorer=fuzz.WRatio)
-        if match and match[1] >= self.sim_threshold:
-            canon = self.prompt2canon.get(match[0])
-            if canon:
-                return Mapped(canon, self.ontology_buckets.get(canon, "unknown_obstacle"))
+        canonical = self.synonyms.get(s, s)
+        if canonical in self.ontology_buckets:
+            return Mapped(canonical, self.ontology_buckets[canonical])
+        bucket = self.prompt_buckets.get(s)
+        if bucket:
+            return Mapped(None, bucket)
         return Mapped(None, "unknown_obstacle")
 
 # ----------------------- Detection / Depth helpers ----------------------

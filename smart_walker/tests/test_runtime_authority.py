@@ -248,13 +248,31 @@ class MotionTrackerTests(unittest.TestCase):
         """A single jump is noise, and reporting it as movement is what confirmation prevents."""
         self.assertNotEqual(self.frames([3.00, 2.00])["motion_state"], "MOVING")
 
-    def test_an_ineligible_class_is_never_reported_as_moving(self):
-        """Only an agent or a rolling obstacle may be classified as moving. Furniture that appears
-        to approach is the walker approaching it, and saying otherwise would put a moving hazard on
-        the display that is not there."""
+    def test_the_class_does_not_decide_whether_something_moved(self):
+        """Furniture that approaches under a compensated camera is reported as moving.
+
+        Motion used to require an ontology class of agent or rolling obstacle. An object outside
+        those two was not left unclassified: after enough observations it was recorded as STATIONARY
+        with a confidence of 1.0, so a chair being pushed towards the user was asserted with
+        complete certainty not to be moving. The prior about which things move is wrong in the
+        direction that costs most, because the objects that matter are the ones behaving
+        unexpectedly.
+        """
         state = self.frames([3.00, 2.60, 2.20, 1.80, 1.40], ontology_class="furniture")
-        self.assertNotEqual(state["motion_state"], "MOVING")
-        self.assertIn("MOTION_CLASS_NOT_ELIGIBLE", state["motion_reason_codes"])
+        self.assertEqual("MOVING", state["motion_state"])
+
+    def test_furniture_holding_still_is_still_stationary(self):
+        """Removing the class gate must not make everything look like it is moving. The evidence,
+        not the class, is what separates the two."""
+        state = self.frames([2.00, 2.01, 2.00, 2.01, 2.00], ontology_class="furniture")
+        self.assertEqual("STATIONARY", state["motion_state"])
+
+    def test_a_stationary_verdict_reports_measured_confidence(self):
+        """The forced verdict carried a confidence of 1.0 that nothing had measured. A verdict now
+        reports what the evidence supports."""
+        state = self.frames([2.00, 2.01, 2.00, 2.01, 2.00], ontology_class="furniture")
+        self.assertEqual("STATIONARY", state["motion_state"])
+        self.assertIn("MOTION_WITHIN_STATIONARY_TOLERANCE", state["motion_reason_codes"])
 
 
 if __name__ == "__main__":

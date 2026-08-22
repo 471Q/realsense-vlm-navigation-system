@@ -39,11 +39,13 @@ def detected_object(track_id=3, label="chair", bearing="LEFT", distance_m=1.62,
                     ontology_class="furniture"):
     """One detection, normalised as the runtime normalises it.
 
-    `ontology_class` carries more than it appears to and is the only way to reach two behaviours,
-    so it is passed rather than hidden behind a flag. "hazard" is what makes an object stop the
-    walker at the longer hazard distance, and "agent" or "rolling_obstacle" is what makes it
-    eligible to be classified as moving. `normalise_objects` derives both, so setting an is_hazard
-    key directly does nothing.
+    `ontology_class` is passed rather than hidden behind a flag because "hazard" is what makes an
+    object stop the walker at the longer hazard distance. `normalise_objects` derives `is_hazard`
+    from it, so setting that key directly does nothing.
+
+    It no longer governs motion. Requiring an ontology class of agent or rolling obstacle before an
+    object could be called moving recorded everything else as STATIONARY with a confidence of 1.0,
+    which asserted a certainty nothing had measured.
     """
     return hdsg.normalise_objects([{
         "id": 0, "track_id": track_id, "raw_label": label, "canonical_class": label,

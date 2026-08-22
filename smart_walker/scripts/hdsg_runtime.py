@@ -280,19 +280,24 @@ class MotionTracker:
             history.append(current)
             self.motion_scores[track_id].append(score_m)
             self.missed[track_id] = 0
-            eligible_for_movement = str(item.get("ontology_class") or "") in {
-                "agent", "rolling_obstacle"
-            }
             previous_state = self.confirmed_states.get(track_id, "UNCONFIRMED")
-            if not eligible_for_movement:
-                self.moving_hits[track_id] = 0
-                self.stationary_hits[track_id] = self.stationary_hits.get(track_id, 0) + 1
-                if self.stationary_hits[track_id] >= self.confirmation_observations:
-                    state = "STATIONARY"
-                    confidence = 1.0
-                    self.confirmed_states[track_id] = state
-                reasons.append("MOTION_CLASS_NOT_ELIGIBLE")
-            elif compensated and len(history) >= self.confirmation_observations:
+            # Every tracked object is judged on the evidence, whatever class it belongs to.
+            #
+            # Motion used to require an ontology class of agent or rolling_obstacle, and an object
+            # outside those two was not merely left unclassified: after enough observations it was
+            # recorded as STATIONARY with a confidence of 1.0. A chair being pushed towards the user
+            # was therefore asserted, with complete certainty, not to be moving, on the strength of
+            # a prior about which kinds of thing move rather than any measurement. The objects that
+            # matter are the ones behaving unexpectedly, so that prior was wrong in the direction
+            # that costs most.
+            #
+            # What keeps sensor noise out is the evidence itself, and it is unchanged: optical flow
+            # must have compensated for the camera's own motion, enough observations must have
+            # accumulated, the displacement is converted to metres through the measured depth, it
+            # must exceed movement_threshold_m, and it must persist for confirmation_observations
+            # consecutive frames. If that is too loose it is a threshold to measure and tune, not a
+            # class list to guess from.
+            if compensated and len(history) >= self.confirmation_observations:
                 recent = list(history)[-self.confirmation_observations:]
                 recent_scores = list(self.motion_scores[track_id])[-(self.confirmation_observations - 1):]
                 accumulated_motion = sum(recent_scores)
