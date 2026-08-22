@@ -614,7 +614,7 @@ def main():
     ap.add_argument("--jpeg_quality", type=int, default=70)
     ap.add_argument("--encode", choices=["jpeg", "png"], default="jpeg")
     ap.add_argument("--process_hz", type=float, default=8.0)
-    ap.add_argument("--det_model", default="yolov8n-oiv7.pt")
+    ap.add_argument("--det_model", default="yolov8n.pt")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--half", action="store_true")
@@ -795,10 +795,12 @@ def main():
     state_lock = threading.Lock()
 
     model = YOLO(args.det_model)
-    # The detector's whole class vocabulary. A class it can recognise but did not report in the
-    # current observation may not be named in a caption, which is what makes object hallucination
-    # impossible rather than infrequent. A word outside this vocabulary is ordinary language and is
-    # not policed.
+    # The detector's whole class vocabulary. A caption may not use the detector's own label for a
+    # class it can recognise but did not report in the current observation. The bound is lexical: it
+    # covers those labels and their enumerated plural forms, and a synonym passes, so a caption may
+    # say "steps" where "stairs" would be refused. Section 10.10 of
+    # `HDSG_VERIFIED_GENERATION_POLICY.md` measures the gap. A word outside this vocabulary is
+    # ordinary language and is not policed.
     detector_classes = [str(name) for name in (getattr(model, "names", None) or {}).values()]
     if not detector_classes:
         # An empty vocabulary makes the object check a no-operation, so every class becomes
@@ -982,6 +984,10 @@ def main():
                 str(catalogue_entry["fixed_instruction"]),
             )
             responded_ms = hdsg.monotonic_time_ms()
+            # Recorded whenever the gate scored anything, which now includes a caption that
+            # declared no measurement and named an object the detector had not reported. That case
+            # previously wrote nothing at all, so the evidence for it existed only as a reason code
+            # on the release and never reached the assertions log the evaluation reads.
             if scored_assertions:
                 record("declared_assertions", {
                     "event_id": fact_packet["identity"]["event_id"],

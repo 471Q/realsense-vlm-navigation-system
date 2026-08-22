@@ -15,6 +15,7 @@ four of ten naturally worded truthful captions before that was measured.
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from support import DETECTOR_CLASSES, caption, declares, declares_object, detected_object, \
@@ -194,6 +195,42 @@ class DeclarationScoringTests(unittest.TestCase):
 
     def score(self, text, assertions):
         return gate(caption(text, assertions), self.packet, self.prompt)
+
+    def test_a_correct_transcription_scores_no_error(self):
+        """The error was taken against the raw reading, and the model is shown the reading rounded
+        to two decimals. Writing 2.37 for a measured 2.371 is exactly what the prompt asks for, and
+        it scored an error of 0.001. Every declaration in the four runs of 22 August 2026 was
+        correct while this figure reported 0.001 to 0.004 metres, so Chapter 5 would have published
+        the renderer's decimal places as the model's accuracy."""
+        packet, prompt = event(lane=sectors(centre=2.371))
+        _, scored = gate(caption("the centre is 2.37 metres", [declares("centre", 2.37)]),
+                         packet, prompt)
+        self.assertEqual("AGREES", scored[0]["outcome"])
+        self.assertEqual(0.0, scored[0]["absolute_error_m"])
+
+    def test_the_error_figures_describe_the_declarations_that_departed(self):
+        """Averaging across the correct ones too gave a figure that fell as the model got more
+        right: one value wrong by 8 metres among nine correct reported a mean of 0.8. The question
+        is how wrong the model is when it is wrong."""
+        packet, prompt = event(lane=sectors(left=3.132, centre=2.371))
+        _, scored = gate(caption("the centre is 2.37 metres and the left is 9.99 metres",
+                                 [declares("centre", 2.37), declares("left", 9.99)]),
+                         packet, prompt)
+        summary = composed.assertion_summary(scored)
+        self.assertEqual(1, summary["agreeing"])
+        self.assertEqual(1, summary["disagreeing"])
+        self.assertEqual(6.86, summary["mean_absolute_error_m"])
+        self.assertEqual(6.86, summary["max_absolute_error_m"])
+
+    def test_an_event_with_nothing_wrong_reports_no_error_figure(self):
+        """None rather than zero. An event where nothing departed has no departure to describe, and
+        a zero would be pooled with real measurements as though one had been taken."""
+        packet, prompt = event(lane=sectors(centre=2.371))
+        _, scored = gate(caption("the centre is 2.37 metres", [declares("centre", 2.37)]),
+                         packet, prompt)
+        summary = composed.assertion_summary(scored)
+        self.assertIsNone(summary["mean_absolute_error_m"])
+        self.assertIsNone(summary["max_absolute_error_m"])
 
     def test_an_exact_declaration_agrees(self):
         codes, scored = self.score("The centre is clear for 1.74 metres.",
@@ -516,6 +553,18 @@ class ProhibitedContentTests(unittest.TestCase):
     def codes(self, text, assertions=()):
         return gate(caption(text, assertions), self.packet, self.prompt)[0]
 
+    def named(self, text, classes=DETECTOR_CLASSES, assertions=()):
+        """The absent-class words the gate recorded for this caption.
+
+        Naming an absent class stopped being a refusal on 23 August 2026 and became a counted
+        observation, because the check sees only the detector's own words and a synonym passes, so
+        refusing on it enforced the rule on whichever words happened to be in the list. What each
+        case below still asserts is that the word is detected, which is unchanged.
+        """
+        _, scored = gate(caption(text, assertions), self.packet, self.prompt, classes=classes)
+        return [item["named_term"] for item in scored
+                if item.get("outcome") == "NAMED_ABSENT_CLASS"]
+
     def test_an_instruction_is_refused(self):
         """The deterministic tuple is the guidance. Generated prose may describe but never direct."""
         self.assertIn("RG_ACTION_LANGUAGE_DETECTED", self.codes("Turn towards the wider side."))
@@ -533,38 +582,190 @@ class ProhibitedContentTests(unittest.TestCase):
         self.assertEqual([], self.codes("The room's centre is clear for 1.74 metres.",
                                         [declares("centre", CENTRE)]))
 
-    def test_a_class_the_detector_did_not_report_is_refused(self):
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID", self.codes("A chair stands in the doorway."))
+    def test_a_class_the_detector_did_not_report_is_recorded(self):
+        self.assertEqual(["chair"], self.named("A chair stands in the doorway."))
 
     def test_the_plural_of_an_absent_class_is_refused(self):
         """A suffix rule misses "people", and person is the class a walker is most often wrong
         about: "two people" went unchecked while "a person" was refused."""
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID", self.codes("Two people stand nearby."))
+        self.assertEqual(["people"], self.named("Two people stand nearby."))
 
-    def test_a_sibilant_plural_is_refused(self):
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID", self.codes("Several buses are parked here."))
+    def test_a_sibilant_plural_is_recorded(self):
+        self.assertEqual(["buses"], self.named("Several buses are parked here."))
 
     def test_an_f_stem_plural_is_refused(self):
         """The suffix rules produce "shelfs" and leave "shelves" unguarded. The Open Images
         vocabulary adopted on 22 August 2026 contains Shelf, Scarf, Man, Woman, Goose, Deer, Potato
         and Tomato, none of which the rules pluralise correctly, so each is tabled explicitly."""
         packet, prompt = event()
-        codes, _ = gate(caption("Shelves line the wall."), packet, prompt,
-                        classes=("Shelf", "Chair"))
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID", codes)
+        self.assertEqual(["shelves"], self.named("Shelves line the wall.",
+                                                 classes=("Shelf", "Chair")))
 
     def test_the_plural_of_man_is_refused(self):
         packet, prompt = event()
-        codes, _ = gate(caption("Two men are waiting."), packet, prompt, classes=("Man", "Chair"))
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID", codes)
+        self.assertEqual(["men"], self.named("Two men are waiting.", classes=("Man", "Chair")))
+
+    def test_a_class_named_with_a_bracketed_sense_is_refused_by_its_bare_word(self):
+        """Eleven detector classes carry a bracketed note telling two senses apart, `Jaguar
+        (Animal)` from the car and `Bat (Animal)` from the baseball bat. Each was matched only as
+        the whole bracketed string, which no caption contains, and a word boundary cannot follow a
+        closing bracket so even that could not match. All eleven were unguarded."""
+        packet, prompt = event()
+        self.assertEqual(["jaguar"], self.named("A jaguar is ahead.",
+                                                classes=("Jaguar (Animal)", "Chair")))
+
+    def test_a_longer_word_starting_with_a_forbidden_phrase_is_permitted(self):
+        """The closing boundary is asserted wherever the term ends in a word character, so
+        "clockwork" is not an alarm clock."""
+        packet, prompt = event()
+        self.assertEqual([], self.named("The alarm clockwork is quiet.",
+                                        classes=("Alarm clock", "Chair")))
+
+    def test_a_plural_whose_noun_comes_first_is_refused(self):
+        """The suffix rule adds to the last word, giving "chest of drawerses" and leaving the real
+        plural unguarded."""
+        packet, prompt = event()
+        self.assertEqual(["chests of drawers"],
+                         self.named("Chests of drawers line the hall.",
+                                    classes=("Chest of drawers", "Chair")))
+
+    def test_a_group_name_does_not_unlock_the_matching_class(self):
+        """The prompt hands the model the object's name and never its ontology group, so permitting
+        a group name permits a word the model was not offered. Detecting a chair put "furniture"
+        into the permitted set, and the detector has a class called `Furniture`, so a caption could
+        name furniture having been told only about a chair."""
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       ontology_class="furniture"))
+        _, scored = gate(caption("A piece of furniture is somewhere about."), packet, prompt,
+                         classes=("Chair", "Furniture"))
+        self.assertEqual(["furniture"], [item["named_term"] for item in scored
+                                         if item.get("outcome") == "NAMED_ABSENT_CLASS"])
+
+    def test_the_name_the_prompt_gives_the_model_is_always_permitted(self):
+        """The other side of the same rule. The prompt presents the object by its canonical name, so
+        forbidding that name would ask the model for a word and refuse it in the same breath."""
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair"))
+        codes, _ = gate(caption("A chair is 1.62 metres away on the left.",
+                                [declares_object(3, 1.62)]),
+                        packet, prompt, classes=("Chair", "Furniture"))
+        self.assertEqual([], codes)
+
+    def test_naming_an_absent_class_is_scored_like_altering_a_measurement(self):
+        """Both are the model being handed data and writing something else, so both are counted in
+        one place. This one produced a bare reason code and reached no aggregate, so the evaluation
+        could report altered measurements and could not report named objects at all."""
+        packet, prompt = event()
+        _, scored = gate(caption("A chair stands in the doorway."), packet, prompt)
+        entries = [item for item in scored if item["outcome"] == "NAMED_ABSENT_CLASS"]
+        self.assertEqual(1, len(entries))
+        self.assertEqual("chair", entries[0]["named_term"])
+        self.assertEqual("caption", entries[0]["source"])
+
+    def test_a_claimed_sighting_records_which_observation_named_it(self):
+        """A sighting of an absent class is told apart from the caption prose naming one."""
+        packet, prompt = event()
+        _, scored = gate(caption("The way ahead is open.", visuals=[observation(label="chair")]),
+                         packet, prompt)
+        entries = [item for item in scored if item["outcome"] == "NAMED_ABSENT_CLASS"]
+        self.assertEqual(["visual:1"], [item["source"] for item in entries])
+
+    def test_declaring_a_number_more_often_than_it_is_written_counts_once(self):
+        """The agreement rate is a headline Chapter 5 figure, and a caption stating one number and
+        declaring it ten times was aggregated as ten declarations and ten agreements. A comparison
+        between two models is not sound while one can add weight to its own score by repeating
+        itself."""
+        packet, prompt = event()
+        _, scored = gate(caption("The centre is clear for 1.74 metres.",
+                                 [declares("centre", CENTRE)] * 10), packet, prompt)
+        summary = composed.assertion_summary(scored)
+        self.assertEqual(1, summary["declared"])
+        self.assertEqual(9, summary["duplicate_declarations"])
+
+    def test_a_measurement_written_twice_may_be_declared_twice(self):
+        """The prompt asks for a declaration for every number written, so a caption that writes one
+        measurement twice obeys it by declaring twice. Refusing that, or discounting it, would
+        enforce a rule the prompt does not state."""
+        packet, prompt = event()
+        codes, scored = gate(
+            caption("The centre is clear for 1.74 metres, a full 1.74 metres of floor.",
+                    [declares("centre", CENTRE)] * 2), packet, prompt)
+        self.assertEqual([], codes)
+        summary = composed.assertion_summary(scored)
+        self.assertEqual(2, summary["declared"])
+        self.assertEqual(0, summary["duplicate_declarations"])
+
+    def test_padding_cannot_dilute_a_wrong_value(self):
+        """Nine correct repeats beside one wrong value reported an agreement rate of 0.9, where the
+        caption made two distinct claims and got one of them wrong."""
+        packet, prompt = event()
+        _, scored = gate(caption("The centre is clear for 1.74 metres.",
+                                 [declares("centre", CENTRE)] * 9 + [declares("left", 9.99)]),
+                         packet, prompt)
+        self.assertEqual(0.5, composed.assertion_summary(scored)["agreement_rate"])
+
+    def test_a_surplus_declaration_carrying_a_wrong_value_still_rejects(self):
+        """Excluding a repeat from the aggregate must not exclude it from the checks. A second
+        declaration with a different value is a contradiction, and not looking at it would let the
+        wrong one through unexamined."""
+        packet, prompt = event()
+        codes, _ = gate(caption("The centre is clear for 1.74 metres.",
+                                [declares("centre", CENTRE), declares("centre", 9.99)]),
+                        packet, prompt)
+        self.assertIn("RG_STATED_VALUE_MISMATCH", codes)
+
+    def test_a_declaration_the_caption_never_states_is_still_counted(self):
+        """A declaration whose value the caption never writes states the number zero times. Without
+        a floor of one it would be called surplus and drop out of the aggregate, taking the count of
+        unstated declarations with it, and that is a different failure this summary reports."""
+        packet, prompt = event()
+        _, scored = gate(caption("The centre is clear for 1.74 metres.",
+                                 [declares("centre", CENTRE), declares("left", LEFT)]),
+                         packet, prompt)
+        summary = composed.assertion_summary(scored)
+        self.assertEqual(2, summary["declared"])
+        self.assertEqual(1, summary["not_stated_in_caption"])
+        self.assertEqual(0, summary["duplicate_declarations"])
+
+    def test_a_named_absent_class_is_not_counted_as_a_declaration(self):
+        """It is a departure the model never declared, so counting it as one would inflate the
+        denominator of the agreement rate with something that was never a declaration."""
+        packet, prompt = event()
+        _, scored = gate(caption("A chair is here and the centre is clear for 1.74 metres.",
+                                 [declares("centre", CENTRE)]), packet, prompt)
+        summary = composed.assertion_summary(scored)
+        self.assertEqual(1, summary["declared"])
+        self.assertEqual(1, summary["named_absent_class"])
+        self.assertEqual(["chair"], summary["named_absent_terms"])
+        self.assertEqual(1.0, summary["agreement_rate"])
+
+    def test_a_faithful_caption_counts_nothing(self):
+        packet, prompt = event(objects=detected_object(track_id=3, label="chair",
+                                                       distance_m=1.62))
+        _, scored = gate(caption("A chair is 1.62 metres away on the left.",
+                                 [declares_object(3, 1.62)]), packet, prompt)
+        self.assertEqual(0, composed.assertion_summary(scored)["named_absent_class"])
+
+    def test_the_singular_of_a_plural_class_name_is_refused(self):
+        """A caption in the run of 22 August 2026 reported "stair" as a sighting and was released,
+        because the detector's word is `Stairs` and nothing guarded the singular. It is the hazard
+        word, so it is the worst one to miss."""
+        packet, prompt = event()
+        self.assertEqual(["stair"], self.named("A stair is ahead.",
+                                               classes=("Stairs", "Chair")))
+
+    def test_a_common_word_is_not_guarded_by_stripping_an_s(self):
+        """The reason the singulars are written out rather than derived. Stripping a trailing "s"
+        would guard "short" from `Shorts` and refuse an ordinary description of a corridor."""
+        packet, prompt = event()
+        self.assertEqual([], self.named("There is a short corridor ahead.",
+                                        classes=("Shorts", "Chair")))
 
     def test_the_hazard_class_may_not_be_named_when_absent(self):
         """Stairs is the class the whole hazard argument rests on, and it became nameable only when
         the detector vocabulary changed to Open Images. COCO had no word for it."""
         packet, prompt = event()
-        codes, _ = gate(caption("Stairs lead down ahead."), packet, prompt,
-                        classes=("Stairs", "Chair"))
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID", codes)
+        self.assertEqual(["stairs"], self.named("Stairs lead down ahead.",
+                                                classes=("Stairs", "Chair")))
 
     def test_a_reported_class_may_be_named(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
@@ -600,11 +801,20 @@ class VisualObservationTests(unittest.TestCase):
     def test_a_plain_label_is_accepted(self):
         self.assertEqual([], self.codes(observation("visual:1", "doorway", "LEFT")))
 
-    def test_a_label_naming_an_absent_class_is_refused(self):
+    def test_a_label_naming_an_absent_class_is_recorded(self):
         """Compared by equality, a forbidden class inside a longer label passed unnoticed while the
-        same class alone was refused."""
-        self.assertIn("RG_OBJECT_REFERENCE_INVALID",
-                      self.codes(observation("visual:1", "glass doors", "LEFT")))
+        same class alone was caught.
+
+        Recorded rather than refused since 23 August 2026. This channel is where the change matters
+        most: it exists so the model can report something the measurements do not list, and almost
+        everything worth reporting indoors is a word the detector knows, so refusing on those words
+        left it able to report only what the detector cannot name."""
+        _, scored = gate(caption("The way ahead is open.",
+                                 visuals=[observation("visual:1", "glass doors", "LEFT")]),
+                         self.packet, self.prompt)
+        entries = [item for item in scored if item.get("outcome") == "NAMED_ABSENT_CLASS"]
+        self.assertEqual(["doors"], [item["named_term"] for item in entries])
+        self.assertEqual(["visual:1"], [item["source"] for item in entries])
 
     def test_a_label_carrying_an_instruction_is_refused(self):
         self.assertIn("RG_UNAPPROVED_LANGUAGE_DETECTED",
@@ -750,6 +960,40 @@ class ReleaseTests(unittest.TestCase):
             scored_assertions=scored)
         self.assertEqual(1, len(release["evidence"]["measurement_substitutions"]))
 
+    def test_the_released_text_reads_as_sentences(self):
+        """The run of 22 August 2026 released "Change direction and continue towards the left. the
+        centre is clear for 1.74 metres Possible doorway is visible in the left." The caption carried
+        no terminal punctuation and the join adds only a space, so two sentences ran together and the
+        second began in lower case."""
+        candidate = caption("the centre is clear for 1.74 metres", [declares("centre", CENTRE)],
+                            [observation("visual:1", "doorway", "LEFT")])
+        codes, scored = gate(candidate, self.packet, self.prompt)
+        self.assertEqual([], codes)
+        release = composed.build_composed_release(
+            self.packet, self.prompt, release_id="release_9", candidate=candidate,
+            scored_assertions=scored)
+        self.assertIn("The centre is clear for 1.74 metres. Possible doorway",
+                      release["content"]["caption_text"])
+
+    def test_the_models_own_wording_is_still_recorded_unaltered(self):
+        """Only the joined display string is tidied. What the gate checked must stay on the record
+        exactly as the model wrote it, or the evidence no longer matches what was judged."""
+        candidate = caption("the centre is clear for 1.74 metres", [declares("centre", CENTRE)])
+        _, scored = gate(candidate, self.packet, self.prompt)
+        release = composed.build_composed_release(
+            self.packet, self.prompt, release_id="release_10", candidate=candidate,
+            scored_assertions=scored)
+        self.assertEqual("the centre is clear for 1.74 metres",
+                         release["content"]["reason_text"])
+
+    def test_punctuation_the_model_supplied_is_not_doubled(self):
+        candidate = caption("The centre is clear for 1.74 metres.", [declares("centre", CENTRE)])
+        _, scored = gate(candidate, self.packet, self.prompt)
+        release = composed.build_composed_release(
+            self.packet, self.prompt, release_id="release_11", candidate=candidate,
+            scored_assertions=scored)
+        self.assertNotIn("metres..", release["content"]["caption_text"])
+
     def test_a_refused_candidate_falls_back(self):
         release = composed.build_composed_release(
             self.packet, self.prompt, release_id="release_3", candidate=self.candidate,
@@ -835,6 +1079,58 @@ class PromptTests(unittest.TestCase):
     def test_a_whole_metre_is_shown_padded(self):
         packet, prompt = event(lane=sectors(centre=2.0))
         self.assertIn("2.00 metres", composed.build_composed_prompt(prompt, packet))
+
+    def _examples(self, prompt, packet):
+        """The Write and Not lines, read back out of the prompt the model is actually sent."""
+        written, refused = [], []
+        for line in composed.build_composed_prompt(prompt, packet).splitlines():
+            if line.startswith("  Write:"):
+                written.append(line.split("Write:", 1)[1].strip())
+            elif line.startswith("  Not:"):
+                refused.append(line.split("Not:", 1)[1].strip())
+        return written, refused
+
+    def test_every_worked_example_behaves_as_the_prompt_says_it_does(self):
+        """The examples were fixed text and went stale without anyone noticing. The prompt told the
+        model not to write "the centre is the widest, at 1.74 metres", and the gate accepted that
+        sentence, so the prompt forbade valid language after the attribution rule was rewritten.
+        Generating them from the scene is only half the fix; running them through the gate is the
+        other half."""
+        for scene in (event(), event(lane=sectors(centre=2.0)),
+                      event(objects=detected_object(track_id=3, label="chair",
+                                                    bearing="LEFT", distance_m=1.62))):
+            packet, prompt = scene
+            written, refused = self._examples(prompt, packet)
+            # The declaration the prompt shows alongside them, so the examples are checked as the
+            # model would send them rather than against a value written into this test.
+            declaration = json.loads(composed.declaration_example(prompt, packet))
+            self.assertTrue(written, "the prompt shows no permitted example")
+            for text in written:
+                with self.subTest(write=text):
+                    codes, _ = gate(caption(text, [declaration]), packet, prompt)
+                    self.assertEqual([], codes)
+            for text in refused:
+                with self.subTest(refuse=text):
+                    codes, _ = gate(caption(text, [declaration]), packet, prompt)
+                    self.assertIn("RG_SUBJECT_MISMATCH", codes)
+
+    def test_the_examples_use_this_scene_and_no_invented_object(self):
+        """A model copied "a chair is 1.62 metres away on the left" out of the prompt into a release,
+        in a scene holding no chair and no measurement of 1.62. Every number it declared was correct;
+        the object name was the only thing that caught it."""
+        packet, prompt = event()
+        text = composed.build_composed_prompt(prompt, packet)
+        self.assertNotIn("chair", text.lower())
+        self.assertNotIn("1.62", text)
+
+    def test_the_declaration_example_is_one_the_gate_would_accept(self):
+        """Copying it must produce a true declaration, not a plausible-looking one."""
+        packet, prompt = event()
+        declaration = json.loads(composed.declaration_example(prompt, packet))
+        codes, scored = gate(caption("the centre sector is 1.74 metres", [declaration]),
+                             packet, prompt)
+        self.assertEqual([], codes)
+        self.assertEqual("AGREES", scored[0]["outcome"])
 
 
 if __name__ == "__main__":

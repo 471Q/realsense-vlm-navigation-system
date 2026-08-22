@@ -112,6 +112,7 @@ measurements to transcribe. The two must not be reported as one figure.
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import re
 from typing import Any, Iterable, Mapping, NamedTuple, Optional, Sequence
@@ -524,6 +525,25 @@ _IRREGULAR_PLURALS = {
     "potato": "potatoes",
     "tomato": "tomatoes",
     "human foot": "human feet",
+    # The suffix goes on the last word, which is wrong where the noun being counted comes first.
+    "chest of drawers": "chests of drawers",
+    "bow and arrow": "bows and arrows",
+}
+
+# Class names that are already plural, with the singular a caption is likely to use. Guarded in the
+# other direction from the table above: there the class name is singular and the plural is derived,
+# here the class name is plural and the singular is.
+#
+# A caption in the run of 22 August 2026 reported "stair" as a sighting and was released, because
+# the detector's word is `Stairs` and nothing guarded the singular. It is the hazard word, so it is
+# the worst one to miss.
+#
+# Written out rather than derived by stripping a trailing "s", which would guard "short" from
+# `Shorts` and refuse "a short corridor", "jean" from `Jeans`, and "goggle" from `Goggles`. Only
+# names whose singular is a word somebody would actually write belong here.
+_PLURAL_CLASS_SINGULARS = {
+    "stairs": "stair",
+    "scissors": "scissor",
 }
 
 # A class ending in a sibilant takes "es", so "bus" pluralises to "buses" and not to "buss".
@@ -531,6 +551,13 @@ _SIBILANT_ENDINGS = ("s", "x", "z", "ch", "sh")
 
 # Singular nouns that end in "s". A visual label is rendered into the release with a verb, and
 # testing only for a trailing "s" produced "Possible bus are visible in the left".
+#
+# Checked against the whole detector vocabulary on 22 August 2026. The endings decide correctly for
+# 600 of the 601 class names. The exception is `Maracas`, which "as" makes singular, giving "Possible
+# maracas is visible". The "as" ending is kept regardless, because this function is applied to the
+# label the model proposes rather than to a detector class name, and the model may propose "gas",
+# "canvas" or "atlas", which the ending protects. One wrong verb on a word no walker will meet is
+# the cheaper error.
 _SINGULAR_S_ENDINGS = ("ss", "us", "is", "as", "os")
 
 
@@ -543,21 +570,46 @@ def _label_is_plural(label: str) -> bool:
     return last.endswith("s") and not last.endswith(_SINGULAR_S_ENDINGS)
 
 
+# A detector class name may carry a bracketed note telling two senses apart, as `Jaguar (Animal)`
+# does from the car and `Bat (Animal)` from the baseball bat. The note is not part of the word.
+_BRACKETED_SENSE_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _pluralise(word: str) -> set[str]:
+    """Returns one word and its plural."""
+    forms = {word}
+    irregular = _IRREGULAR_PLURALS.get(word)
+    if irregular:
+        forms.add(irregular)
+    elif word.endswith(_SIBILANT_ENDINGS):
+        forms.add(word + "es")
+    elif word.endswith("y") and len(word) > 1 and word[-2] not in "aeiou":
+        forms.add(word[:-1] + "ies")
+    else:
+        forms.add(word + "s")
+    return forms
+
+
 def _surface_forms(term: str) -> set[str]:
-    """Returns the written forms of one detector class, singular and plural."""
+    """Returns the written forms of one detector class, singular and plural.
+
+    A class named with a bracketed sense yields the bare word as well. Eleven of the detector's
+    classes are named that way, and until 22 August 2026 each was matched only as the whole string
+    including its brackets, which no caption will ever contain. Worse, a word boundary cannot follow
+    a closing bracket, so even the whole string could not match. All eleven were unguarded: with
+    nothing detected a caption could say "a jaguar", "a drill" or "an organ" freely.
+    """
     lowered = str(term).lower().strip()
     if not lowered:
         return set()
-    forms = {lowered}
-    irregular = _IRREGULAR_PLURALS.get(lowered)
-    if irregular:
-        forms.add(irregular)
-    elif lowered.endswith(_SIBILANT_ENDINGS):
-        forms.add(lowered + "es")
-    elif lowered.endswith("y") and len(lowered) > 1 and lowered[-2] not in "aeiou":
-        forms.add(lowered[:-1] + "ies")
-    else:
-        forms.add(lowered + "s")
+    forms = _pluralise(lowered)
+    bare = _BRACKETED_SENSE_RE.sub("", lowered).strip()
+    if bare and bare != lowered:
+        forms |= _pluralise(bare)
+    for word in list(forms):
+        singular = _PLURAL_CLASS_SINGULARS.get(word)
+        if singular:
+            forms.add(singular)
     return forms
 
 
@@ -565,10 +617,22 @@ def forbidden_entity_terms(fact_packet: Mapping[str, Any],
                            detector_classes: Iterable[str]) -> set[str]:
     """Returns the written forms the caption may not use, singular and plural.
 
-    A class the detector did not report in this observation cannot be named, which is what makes
-    object hallucination impossible rather than merely infrequent. Classes that are present are
-    permitted, and so is any word outside the detector's vocabulary, since the check bounds what the
-    model may assert about recognised objects rather than policing ordinary language.
+    WHAT THIS DOES AND DOES NOT GUARANTEE. It removes the detector's own label, in the written forms
+    enumerated below, for every class the detector did not report in this observation. It does not
+    prevent the model from naming that thing in other words. Measured on 22 August 2026 against an
+    observation with nothing detected, the caption may still say "sofa", "settee", "armchair",
+    "seating", "sideboard", "handrail", "banister", "staircase", "steps", "kerb", "pet", "puppy" or
+    "rollator", because none of those is one of the detector's 601 labels. Two of those, "staircase"
+    and "steps", name the hazard the whole stopping distance argument rests on.
+
+    This docstring previously said the check made object hallucination impossible rather than merely
+    infrequent. That was wrong, and the word appeared in the thesis text as well. The bound is
+    lexical, over a fixed and knowable set of written forms, and a lexical bound cannot close a
+    semantic hole. Section 10.10 of `HDSG_VERIFIED_GENERATION_POLICY.md` records the measurement and
+    the two ways of closing it, neither of which is implemented here.
+
+    Classes that are present are permitted, and so is any word outside the detector's vocabulary,
+    since the check bounds the detector's own vocabulary rather than policing ordinary language.
 
     Plurals are enumerated here rather than by appending "s" at the point of search, because a
     single suffix does not cover the vocabulary: it misses "people" entirely and turns "bus" into
@@ -576,7 +640,16 @@ def forbidden_entity_terms(fact_packet: Mapping[str, Any],
     """
     present: set[str] = set()
     for item in fact_packet.get("objects", []):
-        for key in ("canonical_label", "raw_label", "ontology_class"):
+        # `canonical_label` and `raw_label` only. The first is the word the prompt hands the model
+        # for this object, so forbidding it would ask for a word and refuse it in the same breath.
+        # The second is what the detector actually said, so naming it is true.
+        #
+        # `ontology_class` was read here until 22 August 2026 and must not be. The prompt never
+        # gives the model a group name, so permitting one permits a word the model was not offered,
+        # and the group names are not labels for individual objects. Detecting a chair put
+        # "furniture" into this set, and the detector has a class called `Furniture`, so a caption
+        # could name it having been told only about a chair.
+        for key in ("canonical_label", "raw_label"):
             value = item.get(key)
             if value:
                 present.update(_surface_forms(str(value)))
@@ -589,15 +662,50 @@ def forbidden_entity_terms(fact_packet: Mapping[str, Any],
     return forbidden
 
 
-def _names_forbidden_term(text: str, forbidden: Iterable[str]) -> bool:
-    """True when the text names one of the forbidden forms as a whole word.
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def forbidden_terms_named(text: str, forbidden: Iterable[str]) -> list[str]:
+    """Returns the forbidden forms the text names as whole words, in the order found.
+
+    The words are returned rather than a yes or no, because naming an object the Fact Packet does
+    not contain is the same kind of failure as altering a measurement it does contain: the model was
+    given the data and departed from it. A measurement departure is recorded with the value stated
+    and the value measured, and this one was recorded as a bare reason code, so the evaluation could
+    say a caption was refused for naming something absent but not what it named.
 
     Used for the caption and for a visual observation's label alike. The label was previously
     compared by equality, so a forbidden class sitting inside a longer label passed unnoticed while
     the same class alone was rejected.
+
+    The single words are answered by set membership and the rest by search, and a multi-word form is
+    searched only when its first word is present in the text. A search for each of the forbidden
+    forms in turn cost 0.37 ms against COCO's 159 forms and 19.9 ms against the 1220 the Open Images
+    vocabulary produces, which is the same answer 54 times slower. This arrangement answers in
+    0.39 ms, back to what the check cost before the vocabulary grew.
     """
     lowered = str(text).lower()
-    return any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in forbidden)
+    words = set(_WORD_RE.findall(lowered))
+    found: set[str] = set()
+    remainder: dict[str, list[str]] = {}
+    for term in forbidden:
+        parts = _WORD_RE.findall(term)
+        # A single plain word is decided by membership. Anything else, a phrase or a form carrying
+        # a hyphen or an ampersand, still needs a search, because the text is split on those.
+        if len(parts) == 1 and parts[0] == term:
+            if term in words:
+                found.add(term)
+        elif parts:
+            remainder.setdefault(parts[0], []).append(term)
+    for first in words & remainder.keys():
+        for term in remainder[first]:
+            # The closing boundary is only asserted where the term ends in a word character. A word
+            # boundary cannot follow a bracket or a hyphen, so asserting one there would make the
+            # term unmatchable, which is how the bracketed class names went unguarded.
+            tail = r"\b" if term[-1].isalnum() else ""
+            if re.search(rf"\b{re.escape(term)}{tail}", lowered):
+                found.add(term)
+    return sorted(found, key=lowered.find)
 
 
 def validate_caption_candidate(
@@ -659,8 +767,34 @@ def validate_caption_candidate(
         errors.append("RG_VISIBLE_TEXT_CONTENT_DETECTED")
 
     forbidden = forbidden_entity_terms(fact_packet, detector_classes)
-    if _names_forbidden_term(caption, forbidden):
-        errors.append("RG_OBJECT_REFERENCE_INVALID")
+    named_absent = forbidden_terms_named(caption, forbidden)
+    if named_absent:
+        # Recorded, not refused. Atiq's decision on 23 August 2026.
+        #
+        # The check sees the detector's own 601 words and their inflections. A synonym is not one of
+        # them, so a caption naming an absent chair is refused if it writes "chair" and released if
+        # it writes "sofa" or "seating". Refusing on that boundary punishes the cases the word list
+        # happens to cover and permits the rest, and the boundary has nothing to do with whether the
+        # sentence is true. The refusal rate reported in Chapter 5 would then mix a real property
+        # with an accident of vocabulary, and would not be interpretable.
+        #
+        # Naming something the Fact Packet does not contain is the model not following the
+        # instruction it was given, which the prompt states as "Name only objects that appear in the
+        # measurements below". Non-compliance is counted and published. What cannot be counted
+        # completely should not be enforced partially.
+        #
+        # The consequence is stated plainly rather than hidden: a caption naming an object that is
+        # not there now reaches the user. Section 10.15 of `HDSG_VERIFIED_GENERATION_POLICY.md`
+        # records the decision and both readings of it.
+        for term in named_absent:
+            scored.append({
+                "fact_id": None,
+                "measurement_id": None,
+                "stated_value": None,
+                "named_term": term,
+                "source": "caption",
+                "outcome": "NAMED_ABSENT_CLASS",
+            })
 
     # The measurement each permitted fact carries, so a declaration can be checked against the
     # pairing the prompt offered rather than only against the two lists separately.
@@ -672,7 +806,21 @@ def validate_caption_candidate(
     permitted_measurements = {value for value in measurement_of_fact.values() if value}
     permitted_fact_ids = set(measurement_of_fact)
 
-    caption_tokens = set(_caption_numbers(caption))
+    caption_numbers = _caption_numbers(caption)
+    caption_tokens = set(caption_numbers)
+    # How many times each number is actually written, and how many times each fact has been declared
+    # so far. A caption stating one measurement twice legitimately declares it twice, because the
+    # prompt asks for a declaration for every number written. A caption stating it once and
+    # declaring it ten times has declared nine numbers it did not write, and those nine were
+    # aggregated as nine further declarations and nine further agreements. A caption claiming one
+    # thing was recorded as claiming ten, and nine correct repeats beside one wrong value reported
+    # an agreement rate of 0.9 where the caption made two distinct claims and got one wrong.
+    #
+    # The surplus is excluded from the aggregate rather than refused. Refusing would enforce a rule
+    # the prompt does not state, and the prompt's instruction is to declare every number written,
+    # which a legitimate repeat obeys.
+    caption_number_counts = Counter(caption_numbers)
+    declared_facts: dict[Any, int] = {}
 
     for index, item in enumerate(assertions):
         if not isinstance(item, Mapping) \
@@ -692,6 +840,7 @@ def validate_caption_candidate(
             "index": index, "fact_id": fact_id, "measurement_id": measurement_id,
             "stated_value": float(stated),
         }
+        declared_facts[fact_id] = declared_facts.get(fact_id, 0) + 1
         if fact_id not in permitted_fact_ids:
             errors.append("RG_FACT_REFERENCE_INVALID")
             entry["outcome"] = "FACT_NOT_PERMITTED"
@@ -722,7 +871,14 @@ def validate_caption_candidate(
             entry["outcome"] = "NOT_MEASURED"
             scored.append(entry)
             continue
-        entry["absolute_error_m"] = round(abs(float(stated) - float(measured)), 3)
+        # Measured against the value as displayed, not against the raw reading. The model is shown
+        # "2.37 metres" for a reading of 2.371 and is required to write exactly that, so writing
+        # 2.37 is a perfect transcription. Against the raw value it recorded an error of 0.001, and
+        # every declaration in the four runs of 22 August 2026 was correct while this figure
+        # reported 0.001 to 0.004 metres. Chapter 5 would have published the renderer's decimal
+        # places as though they were the model's accuracy. A correct declaration now scores exactly
+        # zero and any non-zero value is a departure the model made.
+        entry["absolute_error_m"] = round(abs(float(stated) - hdsg.display_value(measured)), 3)
         # The declared value must be the measurement as displayed, not a value that rounds onto it.
         # Rounding both sides scored a declaration of 1.7449 against a measurement of 1.74 as
         # agreement, so a model altering a value below the display precision was counted as
@@ -732,6 +888,16 @@ def validate_caption_candidate(
         # declaration the caption never states widens the set of numbers the prose is allowed to
         # contain without the model having written anything, so the two are recorded separately.
         entry["stated_in_caption"] = _display_string(measured) in caption_tokens
+        # Surplus to what the caption wrote. The value is still compared, so a repeat carrying a
+        # different value is still a disagreement and still rejects; only the aggregate ignores it.
+        #
+        # The floor of one matters. A declaration whose value the caption never states writes the
+        # number zero times, and without the floor the first such declaration would be called
+        # surplus and drop out of the aggregate, taking `not_stated_in_caption` with it. That is a
+        # different failure and one this summary already reports, so it must stay counted.
+        entry["duplicate"] = declared_facts[fact_id] > max(
+            1, caption_number_counts.get(_display_string(measured), 0)
+        )
         if not entry["exact"]:
             errors.append("RG_STATED_VALUE_MISMATCH")
             entry["outcome"] = "DISAGREES"
@@ -784,10 +950,29 @@ def validate_caption_candidate(
                 or visual_id in seen_visual_ids:
             errors.append("RG_SCHEMA_FAILURE")
         seen_visual_ids.add(str(visual_id))
+        label_absent = (forbidden_terms_named(label.replace("_", " "), forbidden)
+                        if isinstance(label, str) else [])
+        # Recorded with `source` set to the observation's own identifier, so a claimed sighting of
+        # an absent class is told apart from the caption prose naming one. Recorded and not refused,
+        # for the reason given where the caption is checked: the word list is incomplete, so
+        # refusing on it enforces the rule unevenly.
+        #
+        # The sighting channel is the case where this matters most. It exists so the model can
+        # report something the measurements do not list, and almost everything worth reporting
+        # indoors is a word the detector knows. Refusing on those words left the channel able to
+        # report only what the detector cannot name, which is the opposite of its purpose: in the
+        # run of 22 August 2026 "ceiling" and "wall" were released and "chair" was not.
+        for term in label_absent:
+            scored.append({
+                "fact_id": None,
+                "measurement_id": None,
+                "stated_value": None,
+                "named_term": term,
+                "source": str(visual_id),
+                "outcome": "NAMED_ABSENT_CLASS",
+            })
         if not isinstance(label, str) or not re.fullmatch(r"[a-z][a-z0-9_ ]{0,47}", label):
             errors.append("RG_UNAPPROVED_LANGUAGE_DETECTED")
-        elif _names_forbidden_term(label.replace("_", " "), forbidden):
-            errors.append("RG_OBJECT_REFERENCE_INVALID")
         elif (hdsg.NUMBER_RE.search(label) or hdsg.ACTION_RE.search(label)
               or hdsg.COMMENTARY_RE.search(label)
               or hdsg.VISUAL_LABEL_PROHIBITED_RE.search(label)):
@@ -814,18 +999,16 @@ _COMPOSED_INSTRUCTION = """Write one short caption describing the space around t
 
 Use the measurements below. Write the distances into your sentences in metres, exactly as they are given, digit for digit. Do not round them, do not approximate them, do not drop a trailing zero, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres. A measurement given as 2.00 metres is written as 2.00 metres, not as 2 metres and not as two metres.
 
+Give each measurement its own sentence, ending in a full stop. Do not join two measurements with a comma.
+
 Name the thing a distance belongs to, then give the distance, and do not name any other place or object in between. The name must be closer to the number than any other name in that sentence.
 
-  Write: the centre is clear for 1.74 metres
-  Write: a chair is 1.62 metres away on the left
-  Not:   the chair on the left is 1.62 metres away
-  Not:   the centre is the widest, at 1.74 metres
-
+{worked_examples}
 A distance whose nearest name is not the thing it was measured from causes the caption to be discarded, whether or not the number itself is correct.
 
-Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id looks like sector:centre, measurement_id looks like m:sector:centre:clearance. For a clearance of 1.74 metres at the centre, the declaration is:
+Then declare every number you wrote. For each one give the fact_id and the measurement_id it came from, exactly as they appear below, and the value you stated. They are different: fact_id names the thing, measurement_id names the reading and begins with "m:". For the first measurement below, the declaration is:
 
-  {{"fact_id": "sector:centre", "measurement_id": "m:sector:centre:clearance", "stated_value": 1.74}}
+  {declaration_example}
 
 A number in the caption that is not declared, or any number that differs from its measurement, causes the caption to be discarded. This applies to a distance written as a word as much as to one written in digits.
 
@@ -869,6 +1052,68 @@ def describe_permitted_facts(prompt_packet: Mapping[str, Any],
     return "\n".join(lines)
 
 
+def _measured_facts(prompt_packet: Mapping[str, Any],
+                    fact_packet: Mapping[str, Any]) -> list[tuple[dict, float]]:
+    """The permitted facts that carry a value, paired with it, in the order the prompt lists them."""
+    pairs: list[tuple[dict, float]] = []
+    for item in prompt_packet["permitted_facts"]:
+        measurement = item.get("measurement")
+        if not isinstance(measurement, Mapping):
+            continue
+        value = measured_value(fact_packet, measurement["measurement_id"])
+        if value is not None:
+            pairs.append((dict(item), float(value)))
+    return pairs
+
+
+def worked_examples(prompt_packet: Mapping[str, Any], fact_packet: Mapping[str, Any]) -> str:
+    """Builds the worked examples from this scene's own measurements.
+
+    The examples were fixed text, and on 22 August 2026 a model copied one of them into a release:
+    the prompt showed "a chair is 1.62 metres away on the left", and the caption contained that
+    sentence word for word in a scene whose Fact Packet held no chair and no measurement of 1.62.
+    The gate refused it on the object name, which was the only check that could see it, since every
+    number the model actually declared was correct.
+
+    An example built from the scene cannot do that. Copying it produces a true sentence about a
+    measurement the model was given, so the worst case is a caption that says less than it might
+    have, rather than one asserting something that is not there.
+
+    The refused example is generated too, and `tests/test_composed_gate.py` puts both through the
+    gate. The fixed text had gone stale without anyone noticing: it told the model not to write "the
+    centre is the widest, at 1.74 metres", which the gate accepts, so the prompt was forbidding
+    valid language after the attribution rule was rewritten.
+    """
+    pairs = _measured_facts(prompt_packet, fact_packet)
+    if not pairs:
+        return ""
+    lines = []
+    first, value = pairs[0]
+    name = str(first.get("name") or first["fact_id"])
+    lines.append(f"  Write: the {name} is {hdsg._format_measurement(value)}")
+    # The refused shape needs two names in one sentence with the wrong one nearer the number. It
+    # takes a second fact, so a scene offering only one measurement gets the permitted example alone
+    # rather than an invented counter-example.
+    if len(pairs) > 1:
+        other = str(pairs[1][0].get("name") or pairs[1][0]["fact_id"])
+        lines.append(f"  Not:   the {name}, wider than the {other}, is "
+                     f"{hdsg._format_measurement(value)}")
+    return "\n".join(lines) + "\n"
+
+
+def declaration_example(prompt_packet: Mapping[str, Any], fact_packet: Mapping[str, Any]) -> str:
+    """One declaration, written for the scene's first measurement rather than for an invented one."""
+    pairs = _measured_facts(prompt_packet, fact_packet)
+    if not pairs:
+        return "{}"
+    item, value = pairs[0]
+    return json.dumps({
+        "fact_id": item["fact_id"],
+        "measurement_id": item["measurement"]["measurement_id"],
+        "stated_value": hdsg.display_value(value),
+    })
+
+
 def build_composed_prompt(prompt_packet: Mapping[str, Any], fact_packet: Mapping[str, Any],
                           fixed_instruction: str = "") -> str:
     """Builds the text sent to the model for a composed caption."""
@@ -885,9 +1130,33 @@ def build_composed_prompt(prompt_packet: Mapping[str, Any], fact_packet: Mapping
     return _COMPOSED_INSTRUCTION.format(
         max_chars=caption_char_limit(prompt_packet),
         visual_instruction=visual_instruction,
+        worked_examples=worked_examples(prompt_packet, fact_packet),
+        declaration_example=declaration_example(prompt_packet, fact_packet),
         facts=describe_permitted_facts(prompt_packet, fact_packet),
         fixed_instruction=fixed_instruction,
     )
+
+
+def _as_sentence(text: str) -> str:
+    """Capitalises the first letter and closes the text with a full stop if it has none.
+
+    Applied only where the caption is joined to the action and the sightings to form the single
+    string the user reads. `reason_text` keeps the model's wording untouched, so what the gate
+    checked is still recorded exactly as it was written, and no check is affected because all of
+    them have already run by this point.
+
+    The run of 22 August 2026 released "Change direction and continue towards the left. the centre
+    is clear for 1.74 metres Possible doorway is visible in the left." The caption carried no
+    terminal punctuation and the join adds only a space, so two sentences ran into one another and
+    the second began in lower case. A person reading or hearing that is being asked to work out
+    where one statement ends and the next begins.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return stripped
+    if stripped[-1] not in ".!?":
+        stripped += "."
+    return stripped[0].upper() + stripped[1:]
 
 
 def build_composed_release(
@@ -936,7 +1205,7 @@ def build_composed_release(
     ]
     action_text = base["content"]["action_text"]
     interaction_text = base["content"]["interaction_text"]
-    parts = [action_text, caption_text]
+    parts = [action_text, _as_sentence(caption_text)]
     if interaction_text:
         parts.append(interaction_text)
     parts.extend(visuals)
@@ -994,12 +1263,41 @@ def build_composed_release(
 
 
 def assertion_summary(scored: Sequence[Mapping[str, Any]]) -> dict:
-    """Aggregates the scored assertions of one event into the Chapter 5 measures."""
-    comparable = [item for item in scored if item.get("outcome") in {"AGREES", "DISAGREES"}]
+    """Aggregates one event's departures from the Fact Packet into the Chapter 5 measures.
+
+    Two kinds of departure are counted, and they are the same kind of failure seen from two sides.
+    The model was handed a measurement and wrote a different number, or it was handed a set of
+    objects and wrote a different one. Both are the model not doing as it was told rather than the
+    model inventing from nothing, and both belong in one table.
+
+    `named_absent_class` was added on 22 August 2026. Until then a caption naming an object the
+    detector had not reported produced a bare reason code and reached no aggregate, so the one place
+    Chapter 5 reads could report altered measurements and could not report named objects at all.
+
+    A repeated declaration of the same fact is counted once, on the same date and for the same
+    reason. Every figure here is meant to describe what the caption claimed, and a caption claiming
+    one thing twice claimed one thing. The repeats are reported as `duplicate_declarations` so the
+    exclusion is visible rather than silent.
+    """
+    counted = [item for item in scored if not item.get("duplicate")]
+    duplicates = [item for item in scored if item.get("duplicate")]
+    comparable = [item for item in counted if item.get("outcome") in {"AGREES", "DISAGREES"}]
     agreeing = [item for item in comparable if item["outcome"] == "AGREES"]
-    errors = [item["absolute_error_m"] for item in comparable]
+    # The size of a departure, over the declarations that departed. Averaging across the agreeing
+    # ones too gave a figure that fell as the model got more right, so one wrong value by 8 metres
+    # among nine correct ones reported a mean error of 0.8 metres. The question this answers is how
+    # wrong the model is when it is wrong, and an event with nothing wrong answers it with None.
+    errors = [item["absolute_error_m"] for item in comparable
+              if item["outcome"] == "DISAGREES"]
+    named_absent = [item for item in counted if item.get("outcome") == "NAMED_ABSENT_CLASS"]
     return {
-        "declared": len(scored),
+        # Declarations only. An absent-class entry is a departure the model did not declare, so
+        # counting it here would inflate the denominator of the agreement rate with something that
+        # was never a declaration.
+        "declared": len(counted) - len(named_absent),
+        "duplicate_declarations": len(duplicates),
+        "named_absent_class": len(named_absent),
+        "named_absent_terms": [item["named_term"] for item in named_absent],
         "comparable": len(comparable),
         "agreeing": len(agreeing),
         "disagreeing": len(comparable) - len(agreeing),
