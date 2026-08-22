@@ -251,12 +251,21 @@ def bearing_from_bbox(box, img_w, bearing_cfg):
 
 
 def distance_bin_from_m(d_m, bins_cfg):
+    """Labels a distance with the band it falls in, or "unknown" where no band contains it.
+
+    The fallback was "far", so a distance below the lowest band, a negative reading among them,
+    was labelled with the band that means the most room. A value the bands do not cover is a value
+    the system has no opinion about, and "unknown" is what the rest of the pipeline already treats
+    as not free space. A reading beyond the top of the far band, which the D455f does not produce
+    at 99 metres, is the only case that loses a label it previously had, and calling that unknown
+    is correct rather than a regression.
+    """
     if d_m is None or (isinstance(d_m, float) and (np.isnan(d_m) or np.isinf(d_m))):
         return "unknown"
     for name, (lo, hi) in bins_cfg.items():
         if lo <= d_m < hi:
             return name
-    return "far"
+    return "unknown"
 
 
 def _safe_int_bounds(x1, y1, x2, y2, W, H):

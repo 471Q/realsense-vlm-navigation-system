@@ -48,11 +48,37 @@ free_space:
   # the nearest object is. A corridor can be clear for four metres and still too narrow to enter.
   #
   # NOT YET IMPLEMENTED. `corridor_min_width_m` is set to None at every site that builds a scene, so
-  # the `stop:corridor_narrow` rule below has never fired. The parameters here are retained rather
-  # than removed because the measurement is wanted; see the open questions recorded with them.
+  # the `stop:corridor_narrow` rule below has never fired. The parameters are retained rather than
+  # removed because the measurement is wanted, and are to be measured in the laboratory.
+  #
+  # **Why the existing sector clearances cannot answer this.** `compute_lane_state` splits the image
+  # into three fixed vertical bands and takes the median depth in each, which reports how far the
+  # camera can see in each band. The bands are fixed in the image, not in the world: the centre band
+  # covers roughly 0.6 m of real width at 1 m and 1.9 m at 3 m. Distance and width are different
+  # measurements and neither implies the other, so a doorway 0.75 m wide reads as a clear centre.
+  #
+  # **The measurement.** For each sampled row of the depth image, find the longest unbroken run of
+  # columns whose depth is at least the lookahead distance. Convert that run from pixels to metres
+  # as `width_m = pixels * depth_m / fx`, where fx is the depth stream's horizontal focal length in
+  # pixels. fx is not currently read; it comes from the RealSense stream profile beside where
+  # `depth_scale` is read at startup. Take the narrowest run across the sampled rows.
+  #
+  # **Open, to be settled from measurements taken in the laboratory. Do not pick defaults for these.**
+  #   1. The walker's width at its widest point in normal use, usually the handgrips or the rear
+  #      legs. Every threshold here is relative to it and it is not recorded anywhere in the repo.
+  #   2. The clearance margin a person who is unsteady needs beyond that width. `min_gap_width_m`
+  #      below is 0.60, narrower than most walkers, so it was never a considered value.
+  #   3. Whether to report the narrowest gap anywhere within stopping range, or the gap at a fixed
+  #      lookahead. The first is the safer reading and costs nothing extra.
+  #   4. The camera's height above the floor and its tilt. Without these, image rows cannot be
+  #      converted to physical heights, and the measurement can only be taken across a band of rows
+  #      as `compute_lane_state` already does, which makes the height approximate rather than
+  #      metric. It matters because a doorway is clear at floor level and narrows at handle height,
+  #      and a table is clear underneath and blocked at waist height, so the gap has to be measured
+  #      across a range of heights rather than one.
   central_wedge_deg: 20  # +/- degrees around the centreline searched for the gap
   sample_rows: 12        # how many rows of the depth image the width is measured across
-  min_gap_width_m: 0.60  # used only where depth is qualitative rather than metric
+  min_gap_width_m: 0.60  # placeholder, see open question 2
 
 risk_rules_baseline:
   # The object advisory: SAFE, CAUTION or STOP, computed by `compute_baseline_risk` and passed to

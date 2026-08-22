@@ -2,6 +2,7 @@ import argparse
 import base64
 from datetime import datetime
 import json
+import math
 import time
 import re
 import sys
@@ -369,8 +370,16 @@ def identify_binding_fact(objects: Optional[list], lane_state: Optional[dict],
 
 
 def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
-                       clear_t: float, blocked_t: float) -> Optional[dict]:
+                       clear_t: float, blocked_t: float,
+                       left_max: float, right_min: float) -> Optional[dict]:
     """Partition the lower field of view into three depth bands and classify each.
+
+    The column boundaries come from `bearing` in pipeline.yaml, the same fractions
+    `bearing_from_bbox` uses to decide which sector an object is in. They were hardcoded here as
+    exact thirds while the config held 0.33 and 0.66, so an object between 0.33 and 0.3333 of the
+    image width was called centre while its pixels were measured as part of the left band, and
+    likewise between 0.66 and 0.6667 on the other side. Two and four pixels at 640 wide, but the
+    caption could place an object in a sector whose clearance was measured without it.
 
     This is the single place lane clearance is computed. The risk override, the
     VLM prompt, the band overlay and the safe-path badge all read this result, so
@@ -393,9 +402,14 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
         H, W = depth_m.shape[:2]
         y1 = int(0.55 * H)
         y2 = int(0.95 * H)
-        xL1, xL2 = 0, int(W / 3)
-        xC1, xC2 = int(W / 3), int(2 * W / 3)
-        xR1, xR2 = int(2 * W / 3), W
+        # Derived from the predicate `bearing_from_bbox` applies, not from rounding the fraction.
+        # A column is left where its fraction is below left_max, so the first centre column is
+        # ceil(left_max * W); it is right where its fraction is strictly above right_min, so the
+        # first right column is floor(right_min * W) + 1. Rounding both instead left two columns
+        # out of 640 assigned to a different sector than the objects standing in them.
+        xL1, xL2 = 0, min(W, math.ceil(left_max * W))
+        xC1, xC2 = xL2, min(W, math.floor(right_min * W) + 1)
+        xR1, xR2 = max(xC2, xL2), W
         d_L = sw.median_depth_in_box(depth_m, xL1, y1, xL2, y2)
         d_C = sw.median_depth_in_box(depth_m, xC1, y1, xC2, y2)
         d_R = sw.median_depth_in_box(depth_m, xR1, y1, xR2, y2)
@@ -795,6 +809,13 @@ def main():
         )
     except Exception:
         blocked_threshold_m = 0.7
+    # The same fractions that decide an object's bearing decide the sector columns, so the sector a
+    # caption names is the sector whose depth was measured.
+    try:
+        sector_left_max = float(cfg["bearing"]["left_max"])
+        sector_right_min = float(cfg["bearing"]["right_min"])
+    except Exception:
+        sector_left_max, sector_right_min = 1.0 / 3.0, 2.0 / 3.0
     runtime_configuration_hash = hdsg.sha256_text(json.dumps({
         "pipeline_hash": hdsg.sha256_file(sw.PIPELINE_CFG),
         "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
@@ -1769,6 +1790,8 @@ def main():
                     mirror_view=args.mirror_view,
                     clear_t=args.clear_threshold_m,
                     blocked_t=blocked_threshold_m,
+                    left_max=sector_left_max,
+                    right_min=sector_right_min,
                 )
                 latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
                 baseline_facts = {
