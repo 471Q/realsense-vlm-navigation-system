@@ -177,7 +177,6 @@ synonyms_to_canonical:
   insect: animal
   invertebrate: animal
   goldfish: fish
-  mouse: animal
   squirrel: animal
   hedgehog: animal
   tortoise: animal
@@ -325,7 +324,6 @@ synonyms_to_canonical:
   cassette deck: small appliance
   corded phone: telephone
   mobile phone: telephone
-  fax: printer
   paper cutter: printer
   mechanical fan: fan
   ceiling fan: fan
@@ -345,7 +343,6 @@ synonyms_to_canonical:
   jacuzzi: bath
   bidet: toilet
   plumbing fixture: sink
-  tap: sink
   soap dispenser: sink
   facial tissue holder: sink
   hand dryer: small appliance
@@ -370,7 +367,6 @@ synonyms_to_canonical:
   tennis ball: ball
   cricket ball: ball
   golf ball: ball
-  ring binder: book
   pencil case: box
   jug: container
   bucket: bucket
@@ -413,6 +409,24 @@ synonyms_to_canonical:
   surfboard: board
   paddle: sports equipment
   bathroom accessory: bathroom fitting
+
+  # COCO spellings. The detector reverted to COCO on 22 August 2026, and these are the words it
+  # spells differently from Open Images. Both vocabularies are covered so that changing weights
+  # does not silently empty the buckets again.
+  #
+  # `mouse` is deliberately absent. Open Images means the animal by it and spells the desk device
+  # `Computer mouse`; COCO means the desk device and has no animal of that name. One entry cannot
+  # be right for both, and neither reading matters to a walker, so the word is left unmapped.
+  dining table: table
+  potted plant: plant
+  tv: television
+  cell phone: telephone
+  keyboard: computer
+  hair drier: small appliance
+  cow: animal
+  sports ball: ball
+  frisbee: ball
+  skis: board
 
   # doors
   door handle: door

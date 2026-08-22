@@ -24,8 +24,12 @@ SCHEMAS = ROOT / "schemas"
 # The detector's whole vocabulary is what the object check screens against, so a scene that reports
 # no chair must still know "chair" is a class the detector could have reported. These are Open
 # Images V7 names, as the detector now emits, rather than the COCO names used before 22 August 2026.
-DETECTOR_CLASSES = ("Chair", "Person", "Door", "Television", "Bed", "Couch", "Bicycle", "Bottle",
-                    "Bus", "Suitcase", "Backpack", "Houseplant", "Stairs", "Wheelchair")
+# COCO spellings, as the shipped detector emits. A few Open Images words are kept alongside them
+# because the gate is case-insensitive and vocabulary-agnostic, and the tests that matter should
+# keep working whichever weights are in use.
+DETECTOR_CLASSES = ("chair", "person", "tv", "bed", "couch", "bicycle", "bottle", "bus",
+                    "suitcase", "backpack", "potted plant", "dining table",
+                    "Door", "Stairs", "Wheelchair", "Furniture")
 
 
 def sectors(left=3.13, centre=1.74, right=1.16,
@@ -76,7 +80,7 @@ def fact_packet(intent="FORWARD", object_advisory="CAUTION", lane=None, objects=
         timestamp_ms=1.0, intent=intent, trigger_type=trigger_type,
         request_id=request_id, response_mode=response_mode, previous_signature=None,
         objects=list(objects), sectors=lane, authority=authority, mirror_view=False,
-        detector_model="yolov8n-oiv7.pt", detector_confidence=0.35,
+        detector_model="yolov8n.pt", detector_confidence=0.35,
         pipeline_config_path=CONFIG / "pipeline.yaml",
         ontology_path=CONFIG / "ontology.yaml",
         clear_threshold_m=2.0, blocked_threshold_m=0.7, sector_choice_tolerance_m=0.10,

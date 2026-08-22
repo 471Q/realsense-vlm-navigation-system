@@ -153,7 +153,7 @@ def main():
                     help="How to convert depth PNG to metres")
     ap.add_argument("--depth_scale", type=float, default=None,
                     help="Required if --preset=units (metres per unit)")
-    ap.add_argument("--model", default="yolov8n-oiv7.pt")
+    ap.add_argument("--model", default="yolov8n.pt")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     args = ap.parse_args()

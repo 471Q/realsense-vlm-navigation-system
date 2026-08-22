@@ -96,8 +96,8 @@
     "software_version": "hdsg-v1",
     "rule_set_version": "rules-v1",
     "configuration_hash": "sha256:4aef88ce51714f446c08a6cb3b7636f18a2742afa3bacc2f650c64915bc59341",
-    "ontology_hash": "sha256:a03d12fcb9a1da177984023ec2329183c0a1f99465a9dc2e2ef74e27526d552b",
-    "detector_model": "yolov8n-oiv7.pt",
+    "ontology_hash": "sha256:e84379380fa53d448d7b1bc0d930573226f3b0c429c861bc6e2a9184a028f0b1",
+    "detector_model": "yolov8n.pt",
     "detector_confidence_threshold": 0.35,
     "thresholds_m": {
       "object_stop_below": 0.7,

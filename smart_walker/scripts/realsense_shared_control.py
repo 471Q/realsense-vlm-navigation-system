@@ -891,13 +891,19 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
 
 def main():
     ap = argparse.ArgumentParser()
-    # Open Images V7 rather than COCO. COCO's eighty class names reached four of the ontology's
-    # buckets and never reached `hazard`, so the 2.00 m hazard stop could not fire. Open Images has
-    # 601 classes including Stairs, Door, Wheelchair and Crutch. Section 10.7 of
-    # `HDSG_VERIFIED_GENERATION_POLICY.md` records the measurement. The size suffix is n, s, m, l or
-    # x; peak allocation is 140 MiB for n and 243 MiB for m, against roughly 3.5 GiB held by the
-    # language model, so a larger model is a one-word change if the captures call for it.
-    ap.add_argument("--model", default="yolov8n-oiv7.pt")
+    # COCO, after `yolov8n-oiv7.pt` was tried and reverted on 22 August 2026. Open Images has the
+    # vocabulary COCO lacks, including Stairs, and swapping to it made `hazard` reachable for the
+    # first time. It also stopped finding furniture. Run over the same 1412 recorded frames, COCO
+    # found bed 453 times, tv 294, laptop 243 and chair 69, and Open Images found none of them: its
+    # detections were `Man`, `Human face`, `Clothing` and `Glasses`, and 926 frames of 1412 came
+    # back empty against 349. Open Images nano scores 18.4 mAP against COCO nano's 37.3, spread over
+    # 601 classes instead of 80.
+    #
+    # A caption cannot describe what the detector does not report, so the swap traded the furniture
+    # a walker has to avoid for a hazard class that had never fired in a real run. Section 10.12 of
+    # `HDSG_VERIFIED_GENERATION_POLICY.md` records the measurement. How the hazard class is detected
+    # returns to being open, and is settled by the lab captures rather than by a change of weights.
+    ap.add_argument("--model", default="yolov8n.pt")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--width", type=int, default=640)

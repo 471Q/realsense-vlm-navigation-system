@@ -19,7 +19,23 @@ import unittest
 from support import CONFIG  # noqa: F401
 from scripts.realsense_shared_control import OntologyMapper
 
-DETECTOR_WEIGHTS = "yolov8n-oiv7.pt"
+DETECTOR_WEIGHTS = "yolov8n.pt"
+
+# The ontology deliberately covers both vocabularies. `yolov8n-oiv7.pt` was adopted and reverted on
+# 22 August 2026, and its words are kept mapped so that trying it again does not silently empty the
+# buckets. A configuration entry is therefore live if either detector emits its word.
+ALTERNATE_WEIGHTS = "yolov8n-oiv7.pt"
+
+
+def _class_names(weights):
+    try:
+        from ultralytics import YOLO
+    except Exception as error:  # pragma: no cover, depends on the environment
+        raise unittest.SkipTest(f"ultralytics unavailable: {error}")
+    try:
+        return list(YOLO(weights).names.values())
+    except Exception as error:  # pragma: no cover, depends on the environment
+        raise unittest.SkipTest(f"{weights} unavailable: {error}")
 
 
 def detector_class_names():
@@ -29,14 +45,12 @@ def detector_class_names():
     visibly. Skipped where ultralytics or the weights file is unavailable, so the suite still runs
     on a machine with no model cache.
     """
-    try:
-        from ultralytics import YOLO
-    except Exception as error:  # pragma: no cover, depends on the environment
-        raise unittest.SkipTest(f"ultralytics unavailable: {error}")
-    try:
-        return list(YOLO(DETECTOR_WEIGHTS).names.values())
-    except Exception as error:  # pragma: no cover, depends on the environment
-        raise unittest.SkipTest(f"{DETECTOR_WEIGHTS} unavailable: {error}")
+    return _class_names(DETECTOR_WEIGHTS)
+
+
+def every_supported_class_name():
+    """Both vocabularies the ontology is written against."""
+    return _class_names(DETECTOR_WEIGHTS) + _class_names(ALTERNATE_WEIGHTS)
 
 
 class MapperTests(unittest.TestCase):
@@ -194,13 +208,32 @@ class DetectorVocabularyTests(unittest.TestCase):
         self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
         self.names = detector_class_names()
 
-    def test_the_hazard_bucket_is_reachable(self):
-        """The measurement that caused the change of weights. Under COCO this returned nothing, so
-        no detection could ever receive the 2.00 m hazard stopping distance and the bucket was dead
-        code that the safety argument nonetheless relied on."""
+    def test_the_hazard_bucket_is_unreachable_with_the_shipped_detector(self):
+        """A known and accepted limitation, asserted so that it cannot change unnoticed.
+
+        COCO has no word for a staircase, a ramp or a drop, so no detection ever receives the 2.00 m
+        hazard stopping distance and every obstacle is treated alike at 0.70 m. Open Images does have
+        the words, and swapping to it on 22 August 2026 made the bucket reachable for the first time.
+        It also stopped finding furniture: over the same 1412 recorded frames COCO found bed 453
+        times, tv 294, laptop 243 and chair 69, and Open Images found none of them, returning nothing
+        at all on 926 frames against 349. The swap was reverted the same day.
+
+        This test therefore records a state, not an aspiration. If it fails, either the detector has
+        changed or the ontology has, and section 10.12 of `HDSG_VERIFIED_GENERATION_POLICY.md` is
+        where the decision behind it is written down.
+        """
         reaching = [name for name in self.names
                     if self.mapper.map_label(name).ontology_class == "hazard"]
-        self.assertTrue(reaching, "no detector class reaches the hazard bucket")
+        self.assertEqual([], reaching)
+
+    def test_the_hazard_entries_are_not_dead_configuration(self):
+        """The other half of the test above. The hazard words stay in the ontology because a
+        detector that can emit them exists and may be adopted once the lab captures settle how the
+        hazard class should be found. They are unreachable today, not wrong."""
+        alternate = _class_names(ALTERNATE_WEIGHTS)
+        reaching = sorted(name for name in alternate
+                          if self.mapper.map_label(name).ontology_class == "hazard")
+        self.assertEqual(["Stairs", "Swimming pool"], reaching)
 
     def test_the_buckets_are_not_nearly_empty(self):
         """Four of COCO's eighty names reached a bucket. The threshold is deliberately low: it is
@@ -213,16 +246,19 @@ class DetectorVocabularyTests(unittest.TestCase):
         self.assertEqual("person", self.mapper.map_label("Person").ontology_class)
 
     def test_every_not_obstacle_entry_names_a_real_class(self):
-        """An entry that matches nothing the detector emits is dead configuration, and the file
-        gives no sign of it. Comparison is lowercased because the entries are written that way."""
-        emitted = {name.strip().lower() for name in self.names}
+        """An entry matching nothing either detector emits is dead configuration, and the file gives
+        no sign of it. Both vocabularies count, because the ontology is written to survive a change
+        of weights: most of this list names things only Open Images reports, such as `Human face`
+        and `Jeans`, and COCO has no word for them. Comparison is lowercased because the entries are
+        written that way."""
+        emitted = {name.strip().lower() for name in every_supported_class_name()}
         unmatched = sorted(self.mapper.not_obstacles - emitted)
         self.assertEqual([], unmatched)
 
     def test_every_synonym_names_a_real_class_or_a_canonical_name(self):
-        """A synonym key that the detector never emits, and that is not itself a canonical name, is
-        a mapping that can never fire."""
-        emitted = {name.strip().lower() for name in self.names}
+        """A synonym key that neither detector emits, and that is not itself a canonical name, is a
+        mapping that can never fire under either set of weights."""
+        emitted = {name.strip().lower() for name in every_supported_class_name()}
         known = emitted | set(self.mapper.ontology_buckets) | set(self.mapper.prompt_buckets)
         unmatched = sorted(key for key in self.mapper.synonyms if key not in known)
         self.assertEqual([], unmatched)
