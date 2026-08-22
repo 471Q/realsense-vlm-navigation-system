@@ -308,17 +308,24 @@ function draw(state) {
     const box = obj.bbox_xyxy;
     if (!box || box.length !== 4) return;
     const moving = obj.motion_state === 'MOVING';
-    ctx.strokeStyle = moving ? '#d94141' : '#4a9eff';
-    ctx.lineWidth = 2;
+    // A hazard stops the walker at 2.00 m where everything else stops it at 0.70 m, so it is drawn
+    // differently from an ordinary obstacle. The colours match the OpenCV window: magenta hazard,
+    // red moving, blue otherwise.
+    const hazard = obj.is_hazard === true;
+    ctx.strokeStyle = hazard ? '#ff3ddc' : (moving ? '#d94141' : '#4a9eff');
+    ctx.lineWidth = hazard ? 3 : 2;
     ctx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
     const distance = obj.distance_m == null ? '?' : obj.distance_m.toFixed(2) + 'm';
-    const label = `${obj.label || 'object'} ${distance}${moving ? ' MOVING' : ''}`;
+    // The bucket is shown for every object. A detection that mapped to unknown_obstacle when it
+    // should have mapped to a named class is otherwise invisible on screen.
+    const bucket = obj.ontology_class || 'unmapped';
+    const label = `${obj.label || 'object'} [${bucket}] ${distance}${moving ? ' MOVING' : ''}`;
     ctx.font = '600 14px "Segoe UI", sans-serif';
     const width = ctx.measureText(label).width;
     const ty = Math.max(16, box[1] - 6);
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(box[0], ty - 14, width + 8, 18);
-    ctx.fillStyle = moving ? '#ff8080' : '#8ec5ff';
+    ctx.fillStyle = hazard ? '#ff9df0' : (moving ? '#ff8080' : '#8ec5ff');
     ctx.fillText(label, box[0] + 4, ty);
   });
 }

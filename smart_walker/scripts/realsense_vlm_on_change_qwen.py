@@ -555,6 +555,33 @@ def _wrap_text(text: str, width: int = 70):
     return lines
 
 
+def _is_drawn(item: dict, args) -> bool:
+    """Whether one detection gets a bounding box.
+
+    Both display paths call this. The web interface and the OpenCV window applied the same condition
+    written out twice, so a change to one silently produced two different pictures of the same scene.
+
+    The default is objects confirmed as moving. Drawing every detection was tried on 22 August 2026
+    and reverted the same day: under the Open Images vocabulary a room yields many more detections
+    than under COCO, and a screen covered in boxes over stationary furniture hides the one box that
+    matters, which is the thing that moved. A stationary object still reaches the description and
+    still stops the walker; it simply is not outlined.
+
+    `--boxes all` draws every detection, which is what a detector or ontology problem needs, since a
+    label mapped to the wrong group is otherwise invisible. `--boxes none` draws nothing.
+
+    `--debug_objects` is the older spelling of `--boxes all` and still works.
+    """
+    mode = getattr(args, "boxes", "moving")
+    if getattr(args, "debug_objects", False):
+        mode = "all"
+    if mode == "none":
+        return False
+    if mode == "moving":
+        return bool(item.get("display_bounding_box"))
+    return item.get("bbox_xyxy") is not None
+
+
 def _parse_bool_argument(value: str | bool) -> bool:
     """Parses an explicit command-line Boolean value."""
     if isinstance(value, bool):
@@ -587,7 +614,7 @@ def main():
     ap.add_argument("--jpeg_quality", type=int, default=70)
     ap.add_argument("--encode", choices=["jpeg", "png"], default="jpeg")
     ap.add_argument("--process_hz", type=float, default=8.0)
-    ap.add_argument("--det_model", default="yolov8n.pt")
+    ap.add_argument("--det_model", default="yolov8n-oiv7.pt")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--half", action="store_true")
@@ -599,7 +626,13 @@ def main():
     ap.add_argument("--ui_host", default="127.0.0.1")
     ap.add_argument("--ui_port", type=int, default=8321)
     ap.add_argument("--debug_lanes", action="store_true")
-    ap.add_argument("--debug_objects", action="store_true")
+    ap.add_argument(
+        "--boxes", choices=["all", "moving", "none"], default="moving",
+        help="which detections are drawn: only those confirmed moving (the default), every one, "
+             "or none",
+    )
+    # The older spelling of `--boxes all`, retained so existing command lines keep working.
+    ap.add_argument("--debug_objects", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--mirror_view", action="store_true")
     ap.add_argument("--no_mirror_tag", action="store_true")
     ap.add_argument("--clear_threshold_m", type=float, default=1.8)
@@ -1859,9 +1892,14 @@ def main():
                             "bbox_xyxy": item.get("bbox_xyxy"),
                             "bearing": item.get("bearing"),
                             "motion_state": item.get("motion_state"),
+                            # Forwarded so the web interface can draw what the OpenCV window draws.
+                            # Without the bucket a test cannot tell a hazard from a chair on screen.
+                            "ontology_class": item.get("ontology_class"),
+                            "is_hazard": bool(item.get("is_hazard")),
+                            "raw_label": item.get("raw_label"),
                         }
                         for item in latest_objects
-                        if args.debug_objects or item.get("display_bounding_box")
+                        if _is_drawn(item, args)
                     ],
                     "controls_enabled": {
                         "more_detail": not reassessment_inflight and not pending_reassessment,
@@ -1889,17 +1927,27 @@ def main():
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 2, cv2.LINE_AA)
 
                 for item in latest_objects:
-                    if not (args.debug_objects or item.get("display_bounding_box")):
+                    if not _is_drawn(item, args):
                         continue
                     x1, y1, x2, y2 = map(int, item["bbox_xyxy"])
                     moving = item.get("motion_state") == "MOVING"
-                    colour = (0, 0, 255) if moving else (255, 255, 0)
-                    cv2.rectangle(vis, (x1, y1), (x2, y2), colour, 2)
+                    hazard = bool(item.get("is_hazard"))
+                    # A hazard stops the walker at 2.00 m where everything else stops it at 0.70 m,
+                    # so which detections are in that bucket is the thing being watched during a
+                    # test. Magenta for a hazard, red for a confirmed moving object, yellow
+                    # otherwise. The border is thicker for a hazard so it survives a screenshot.
+                    colour = (255, 0, 255) if hazard else ((0, 0, 255) if moving else (255, 255, 0))
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), colour, 3 if hazard else 2)
                     label = item.get("canonical_label") or item.get("raw_label") or "object"
                     distance = item.get("distance_m")
                     distance_text = "?" if distance is None else f"{distance:.2f}m"
                     suffix = " MOVING" if moving else f" {item.get('motion_state', 'UNCONFIRMED')}"
-                    cv2.putText(vis, f"{label} {distance_text}{suffix}", (x1, max(20, y1 - 6)),
+                    # The bucket is shown for every object, because a detection mapping to
+                    # unknown_obstacle when it should have mapped to a named class is invisible
+                    # otherwise and is the failure the Open Images swap is most likely to produce.
+                    bucket = item.get("ontology_class") or "unmapped"
+                    text = f"{label} [{bucket}] {distance_text}{suffix}"
+                    cv2.putText(vis, text, (x1, max(20, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2, cv2.LINE_AA)
 
                 with state_lock:
