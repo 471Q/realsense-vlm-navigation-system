@@ -125,9 +125,37 @@ class HomeEnvironmentTests(unittest.TestCase):
 
     def test_a_bag_left_out_is_not_filed_as_furniture(self):
         """Furniture is where it was yesterday and a bag in a hallway is not, so they are separated.
-        The group is also the one a person can do something about."""
-        self.assertEqual(("bag", "floor_object"),
+        The group is also the one a person can do something about.
+
+        `Backpack` keeps its own name rather than becoming "bag". It was a synonym onto `bag` until
+        23 August 2026, alongside `handbag`, so two different objects reached the description as one
+        word. The rename was written for Open Images, whose words need it; COCO's do not.
+        """
+        self.assertEqual(("backpack", "floor_object"),
                          tuple(self.mapper.map_label("Backpack").__dict__.values()))
+
+    def test_a_plain_detector_word_is_not_made_vaguer(self):
+        """The renames written for Open Images degraded COCO's words, which are already plain.
+
+        `vase` became "plant", which is false of an empty vase; `laptop` and `keyboard` both became
+        "computer"; `stop sign` became "post"; seven animals became "animal", in a file that argues
+        elsewhere that "a dog is ahead" is worth saying. Each is now canonical in its own group, so
+        it keeps its word and its group.
+        """
+        for name, group in (("vase", "furniture"), ("laptop", "appliance"),
+                            ("keyboard", "appliance"), ("stop sign", "furniture"),
+                            ("horse", "animal"), ("teddy bear", "floor_object")):
+            with self.subTest(name):
+                mapped = self.mapper.map_label(name)
+                self.assertEqual(name, mapped.canonical_class)
+                self.assertEqual(group, mapped.ontology_class)
+
+    def test_the_renames_that_earn_their_place_survive(self):
+        """Four COCO words genuinely read better renamed, and those are kept."""
+        for name, canonical in (("dining table", "table"), ("tv", "television"),
+                                ("refrigerator", "fridge"), ("cell phone", "telephone")):
+            with self.subTest(name):
+                self.assertEqual(canonical, self.mapper.map_label(name).canonical_class)
 
 
 class HazardBucketTests(unittest.TestCase):
@@ -158,17 +186,34 @@ class NotObstacleTests(unittest.TestCase):
     def setUp(self):
         self.mapper = OntologyMapper(CONFIG / "ontology.yaml")
 
-    def test_a_window_is_not_an_obstacle(self):
-        """Every Open Images model tested reports `Window` in all three recorded stair frames, more
-        confidently than it reports the staircase, because the stairwell is lit from behind by one.
-        A window is on a wall and cannot be walked into on the floor plane."""
-        self.assertTrue(self.mapper.is_not_obstacle("Window"))
+    def test_a_window_is_an_obstacle(self):
+        """Reversed on 23 August 2026, by decision.
+
+        A window was dropped because every Open Images model tested reported `Window` in all three
+        recorded stair frames more confidently than it reported the staircase. But a window sits in
+        a wall, and there is no `wall` class for the wall to be reported as, so discarding the
+        window reports nothing at all for a surface the walker can hit. The same argument covers
+        posters, picture frames, light switches and every building name.
+        """
+        self.assertFalse(self.mapper.is_not_obstacle("Window"))
+
+    def test_the_list_holds_only_what_the_running_detector_can_say(self):
+        """The rule that would have caught the stale list.
+
+        84 entries were added on 22 August 2026 for Open Images V7, the detector was reverted to
+        COCO the same day, and 82 survived as rules against words the loaded detector cannot say.
+        Since this list is the only mechanism that can make the walker ignore something the camera
+        saw, an entry in it must be checkable against the vocabulary actually loaded.
+        """
+        vocabulary = {name.strip().lower() for name in detector_class_names()}
+        listed = {str(name).lower() for name in self.mapper.not_obstacles}
+        self.assertEqual(set(), listed - vocabulary,
+                         "every dropped label must be one the loaded detector can emit")
 
     def test_a_part_of_a_person_is_not_a_separate_obstacle(self):
-        """Open Images labels body parts separately from `Person`, so one pedestrian yields several
-        detections at the same distance and fills the caption with one person described five times.
-        """
-        self.assertTrue(self.mapper.is_not_obstacle("Human face"))
+        """COCO reports `person` and `tie` as two detections of the same body at the same distance,
+        so without this the description names one visitor twice. It is the only entry left."""
+        self.assertTrue(self.mapper.is_not_obstacle("tie"))
 
     def test_a_chair_is_an_obstacle(self):
         self.assertFalse(self.mapper.is_not_obstacle("Chair"))
