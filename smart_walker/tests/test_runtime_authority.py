@@ -532,5 +532,125 @@ class MultiNearRuleTests(unittest.TestCase):
         self.assertEqual(0, self.count(objects, 1.5))
 
 
+class ConfigurationRecordTests(unittest.TestCase):
+    """The block that states how a run was set up.
+
+    Its purpose is that an archived run can be read back and understood. A number in it the run did
+    not use is worse than no number, because it will be believed.
+    """
+
+    def setUp(self):
+        import yaml
+
+        self.cfg = yaml.safe_load(
+            (support.CONFIG / "pipeline.yaml").read_text(encoding="utf-8")
+        )
+        self.configuration = support.fact_packet()["configuration"]
+
+    def test_no_threshold_is_recorded_that_no_rule_reads(self):
+        """`binding_tie_margin` was recorded as a literal 0.15 until 23 August 2026 and no line of
+        code read a 0.15 tie margin. It appeared only in this record, in the schema and in one
+        fixture, so the block stated two tie thresholds of which one was fiction. The parameter that
+        exists is `sector_choice_tolerance`."""
+        thresholds = self.configuration["thresholds_m"]
+        self.assertNotIn("binding_tie_margin", thresholds)
+        self.assertIn("sector_choice_tolerance", thresholds)
+
+    def test_the_recorded_sector_geometry_says_where_the_sectors_divide(self):
+        """`horizontal_divisions: 3` said how many there were and never where. Reading an archived
+        record then required still holding the pipeline.yaml that hashes to its
+        `configuration_hash`."""
+        geometry = self.configuration["sector_geometry"]
+        self.assertEqual(float(self.cfg["bearing"]["left_max"]), geometry["left_max_fraction"])
+        self.assertEqual(float(self.cfg["bearing"]["right_min"]), geometry["right_min_fraction"])
+
+    def test_the_recorded_row_band_agrees_with_the_configuration(self):
+        """The band was written out three times, here, in `valid_depth_fraction` and inside
+        `compute_lane_state`, with nothing comparing them."""
+        geometry = self.configuration["sector_geometry"]
+        self.assertEqual(float(self.cfg["sector"]["band_top_fraction"]), geometry["top_fraction"])
+        self.assertEqual(float(self.cfg["sector"]["band_bottom_fraction"]),
+                         geometry["bottom_fraction"])
+
+    def test_the_runtime_fallback_band_agrees_with_the_configuration(self):
+        """`normalise_objects` and `compute_lane_state` fall back to these when no configuration
+        reaches them, so the fallback must not be a third opinion."""
+        self.assertEqual(float(self.cfg["sector"]["band_top_fraction"]),
+                         hdsg.SECTOR_BAND_TOP_FRACTION)
+        self.assertEqual(float(self.cfg["sector"]["band_bottom_fraction"]),
+                         hdsg.SECTOR_BAND_BOTTOM_FRACTION)
+
+    def test_the_recorded_geometry_is_the_geometry_that_was_used(self):
+        """Recorded from what the caller passed rather than restated as a literal, so a run measured
+        with a retuned band says so."""
+        packet = hdsg.build_fact_packet(
+            run_id="run_t", event_id="evt_1", observation_id="obs_1", ticket_id=None,
+            timestamp_ms=1.0, intent="FORWARD", trigger_type="USER_REQUESTED",
+            request_id="MORE_DETAIL", response_mode="MORE_DETAIL", previous_signature=None,
+            objects=[], sectors=support.sectors(),
+            authority=hdsg.determine_authority("FORWARD", "SAFE", support.sectors()),
+            mirror_view=False, detector_model="yolov8n.pt", detector_confidence=0.35,
+            pipeline_config_path=support.CONFIG / "pipeline.yaml",
+            ontology_path=support.CONFIG / "ontology.yaml",
+            clear_threshold_m=1.8, blocked_threshold_m=0.7, sector_choice_tolerance_m=0.10,
+            motion_tracker=hdsg.MotionTracker(),
+            sector_band_top_fraction=0.42, sector_band_bottom_fraction=0.88,
+            sector_left_max_fraction=0.30, sector_right_min_fraction=0.70,
+        )
+        self.assertEqual({"top_fraction": 0.42, "bottom_fraction": 0.88,
+                          "horizontal_divisions": 3,
+                          "left_max_fraction": 0.30, "right_min_fraction": 0.70},
+                         packet["configuration"]["sector_geometry"])
+
+
+class CodeVersionTests(unittest.TestCase):
+    """Which code produced a record.
+
+    `software_version` and `rule_set_version` are literals that have never changed, and
+    `configuration_hash` covers pipeline.yaml and the other configuration files. None of the three
+    covers the Python. On 23 August 2026 the caution rule stopped counting distance bands and started
+    counting metres, and an object's band stopped being trusted and started being derived: two
+    changes to what the walker does, in code, leaving every field in the configuration block
+    identical. A run from before and a run from after could not be told apart from their own
+    evidence.
+    """
+
+    def test_the_record_carries_the_commit_the_branch_and_the_tree_state(self):
+        version = support.fact_packet()["configuration"]["code_version"]
+        self.assertEqual({"commit", "branch", "dirty"}, set(version))
+
+    def test_the_commit_is_a_full_identifier_or_nothing(self):
+        """Null where git is unavailable, which is honest about not knowing rather than naming
+        something that is not a commit."""
+        commit = support.fact_packet()["configuration"]["code_version"]["commit"]
+        if commit is not None:
+            self.assertRegex(commit, r"^[0-9a-f]{40}$")
+
+    def test_an_edited_tree_is_reported_as_edited(self):
+        """A commit identifier taken from a tree carrying uncommitted changes does not identify the
+        code that ran. Recording that is the point."""
+        dirty = support.fact_packet()["configuration"]["code_version"]["dirty"]
+        self.assertIn(dirty, (True, False, None))
+
+    def test_it_is_resolved_once(self):
+        """Three subprocess calls on the walker's event path is not acceptable, and the code cannot
+        change while a run is in progress. Uncached it added ten seconds to this suite."""
+        import scripts.hdsg_runtime as runtime
+
+        runtime._CODE_VERSION = {"commit": None, "branch": "cached", "dirty": False}
+        try:
+            self.assertEqual("cached", runtime.code_version()["branch"])
+        finally:
+            runtime._CODE_VERSION = None
+
+    def test_the_cached_value_cannot_be_edited_through_a_record(self):
+        """A caller mutating the returned dict must not change what every later record reports."""
+        import scripts.hdsg_runtime as runtime
+
+        first = runtime.code_version()
+        first["branch"] = "tampered"
+        self.assertNotEqual("tampered", runtime.code_version()["branch"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -107,7 +107,7 @@
     "system_prompt_id": "hdsg.composed_caption.v1",
     "system_prompt_hash": "sha256:a9d82e74c9914b6a6f7c015aecaa9b1938f74f85ee99395bc678cf865ae485f6",
     "constraint_id": "hdsg.vlm_caption.v1",
-    "constraint_hash": "sha256:7a36aba4ff5576d246d662e1690bbd854c152de52f2cb528dae871cb133e64ba"
+    "constraint_hash": "sha256:02a7cf737ab07ac543e21ff302db3846458a5daeb586693797e89c554b6708e7"
   },
   "expected_response_schema": "hdsg.vlm_caption.v1"
 }

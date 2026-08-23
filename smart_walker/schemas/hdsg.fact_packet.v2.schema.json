@@ -116,10 +116,8 @@
           "$ref": "#/definitions/scenario_id"
         },
         "source_mode": {
-          "enum": [
-            "LIVE",
-            "REPLAY"
-          ]
+          "description": "REPLAY was admitted here and nothing ever produced it. hdsg_replay reads archived fact packets and writes none, deliberately: section 5.6.1 scores the offline conditions against the same event's Full Fact Packet, and recomputing one would introduce detector nondeterminism between the condition being scored and the record it is scored against. There is therefore no site where a replayed packet is written. Narrowed to a constant on 23 August 2026; if a replay ever writes a packet, the value returns with a producer.",
+          "const": "LIVE"
         }
       }
     },
@@ -213,7 +211,7 @@
               "type": "null"
             }
           ],
-          "description": "The share of the reasoning band, rows 55 to 95 per cent of the frame, that carried a usable depth reading. Null where no depth frame was available. Added 23 August 2026 in place of a low-light flag that was written as False on every frame. Optional, so archives recorded before that date still validate."
+          "description": "The share of the reasoning band that carried a usable depth reading. The band is the rows named by sector_geometry in the configuration block, so a run that retuned it is read correctly. Null where no depth frame was available. Added 23 August 2026 in place of a low-light flag that was written as False on every frame. Optional, so archives recorded before that date still validate."
         }
       }
     },
@@ -297,7 +295,154 @@
           "minLength": 1,
           "maxLength": 512
         }
-      }
+      },
+      "description": "What the person did and what was asked of the model. Every field below was constrained on its own and none against the others until 23 August 2026, so six combinations the system cannot produce all validated: a REASSESS request with AUTOMATIC mode, an AUTO_GUIDANCE request with MORE_DETAIL mode, a SYSTEM or TYPED_QUESTION event naming a control that was pressed, an ONSCREEN_CONTROL event naming none, and a control_id disagreeing with its request_id. The runtime already refused the first two and would not build a prompt for them; the schema is what an archived record is read back against, so a wrong record validated and would be believed.",
+      "allOf": [
+        {
+          "description": "The request and the response mode are one decision recorded twice. build_prompt_packet reads PROFILE_LIMITS by response_mode and the runtime refuses a catalogue entry whose mode disagrees with the packet, so a record holding a mismatched pair describes an event that could not have generated anything.",
+          "if": {
+            "properties": {
+              "request_id": {
+                "const": "AUTO_GUIDANCE"
+              }
+            },
+            "required": [
+              "request_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "response_mode": {
+                "const": "AUTOMATIC"
+              }
+            }
+          }
+        },
+        {
+          "description": "The request and the response mode are one decision recorded twice. build_prompt_packet reads PROFILE_LIMITS by response_mode and the runtime refuses a catalogue entry whose mode disagrees with the packet, so a record holding a mismatched pair describes an event that could not have generated anything.",
+          "if": {
+            "properties": {
+              "request_id": {
+                "const": "MORE_DETAIL"
+              }
+            },
+            "required": [
+              "request_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "response_mode": {
+                "const": "MORE_DETAIL"
+              }
+            }
+          }
+        },
+        {
+          "description": "The request and the response mode are one decision recorded twice. build_prompt_packet reads PROFILE_LIMITS by response_mode and the runtime refuses a catalogue entry whose mode disagrees with the packet, so a record holding a mismatched pair describes an event that could not have generated anything.",
+          "if": {
+            "properties": {
+              "request_id": {
+                "const": "REASSESS"
+              }
+            },
+            "required": [
+              "request_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "response_mode": {
+                "const": "REASSESSMENT"
+              }
+            }
+          }
+        },
+        {
+          "description": "A control identifier names the on-screen control that was activated. An automatic event activates none, and neither does typing a question: control_id said MORE_DETAIL on every question until 23 August 2026, recording a button nobody pressed.",
+          "if": {
+            "properties": {
+              "input_method": {
+                "enum": [
+                  "SYSTEM",
+                  "TYPED_QUESTION"
+                ]
+              }
+            },
+            "required": [
+              "input_method"
+            ]
+          },
+          "then": {
+            "properties": {
+              "control_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "description": "A control was pressed, so it has a name, and the name is the request it raised. The two are set from the same value at all three sites that build such an event.",
+          "if": {
+            "properties": {
+              "input_method": {
+                "enum": [
+                  "ONSCREEN_CONTROL",
+                  "KEYBOARD_SHORTCUT"
+                ]
+              }
+            },
+            "required": [
+              "input_method"
+            ]
+          },
+          "then": {
+            "required": [
+              "control_id",
+              "request_id"
+            ],
+            "properties": {
+              "control_id": {
+                "type": "string"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "request_id": {
+                      "const": "MORE_DETAIL"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "control_id": {
+                      "const": "MORE_DETAIL"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "request_id": {
+                      "const": "REASSESS"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "control_id": {
+                      "const": "REASSESS"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     "object_fact": {
       "type": "object",
@@ -859,8 +1004,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "software_version",
-        "rule_set_version",
+        "code_version",
         "configuration_hash",
         "ontology_hash",
         "detector_model",
@@ -873,11 +1017,39 @@
         "timing_ms"
       ],
       "properties": {
-        "software_version": {
-          "$ref": "#/definitions/non_empty_string"
-        },
-        "rule_set_version": {
-          "$ref": "#/definitions/non_empty_string"
+        "code_version": {
+          "description": "Which code produced the record. Two literals stood here until 23 August 2026, software_version \"hdsg-v1\" and rule_set_version \"rules-v1\", and neither changed once through any rewrite, so they distinguished nothing. configuration_hash covers pipeline.yaml and the other configuration files and none of the Python. On the same day the caution rule stopped counting distance bands and started counting metres, and an object's band stopped being trusted and started being derived: two changes to what the walker does, in code, leaving every other field in this block identical. Every field is null where git is unavailable, which is honest about not knowing.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "branch",
+            "dirty"
+          ],
+          "properties": {
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "dirty": {
+              "description": "True where the working tree carried uncommitted changes, which makes the commit necessary but not sufficient to reproduce the run.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
         },
         "configuration_hash": {
           "type": "string",
@@ -904,7 +1076,6 @@
             "hazard_stop_at_or_below",
             "sector_blocked_below",
             "sector_clear_at_or_above",
-            "binding_tie_margin",
             "sector_choice_tolerance"
           ],
           "properties": {
@@ -928,14 +1099,11 @@
               "type": "number",
               "exclusiveMinimum": 0
             },
-            "binding_tie_margin": {
-              "type": "number",
-              "minimum": 0
-            },
             "sector_choice_tolerance": {
               "$ref": "#/definitions/nullable_non_negative_number"
             }
-          }
+          },
+          "description": "The distances in force for this event. binding_tie_margin was recorded here as a literal 0.15 until 23 August 2026 and no line of code read it: it appeared only in this record, in this schema and in one fixture, so the block stated two tie thresholds of which one was fiction. The parameter that exists is sector_choice_tolerance. Removed rather than nulled, by decision, the archive being development data that can be recorded again; records written before that date carry the field and no longer validate."
         },
         "post_reorientation_stable_observations": {
           "type": [
@@ -953,7 +1121,9 @@
           "required": [
             "top_fraction",
             "bottom_fraction",
-            "horizontal_divisions"
+            "horizontal_divisions",
+            "left_max_fraction",
+            "right_min_fraction"
           ],
           "properties": {
             "top_fraction": {
@@ -968,8 +1138,21 @@
             },
             "horizontal_divisions": {
               "const": 3
+            },
+            "left_max_fraction": {
+              "description": "A detection is left where the horizontal centre of its box is below this fraction of the frame width.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "right_min_fraction": {
+              "description": "A detection is right where that fraction is strictly above this one.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             }
-          }
+          },
+          "description": "The geometry the clearances were measured with. horizontal_divisions said how many sectors there were and never where they divided, so reading an archived record required still holding the pipeline.yaml that hashes to its configuration_hash. The two boundary fractions are recorded from 23 August 2026 so the block stands on its own."
         },
         "motion_tracking": {
           "type": "object",

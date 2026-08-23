@@ -38,6 +38,26 @@ STATUSES = ["CLEAR", "CONSTRAINED", "BLOCKED"]
 
 CAPTION = "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left."
 
+# The commit a fixture was generated from is not a property of the record's shape, and letting the
+# real one through makes every fixture carrying `code_version` change on every commit. Pinned for the
+# same reason the identifiers and timestamps are pinned. A real record carries the commit that
+# produced it; see `hdsg_runtime.code_version`.
+FIXTURE_CODE_VERSION = {"commit": "0" * 40, "branch": "fixture", "dirty": False}
+
+
+def pin_code_version(record):
+    """Replaces any `code_version` in a generated record with the fixed one, wherever it sits."""
+    if isinstance(record, dict):
+        for key, value in record.items():
+            if key == "code_version" and isinstance(value, dict):
+                record[key] = dict(FIXTURE_CODE_VERSION)
+            else:
+                pin_code_version(value)
+    elif isinstance(record, list):
+        for item in record:
+            pin_code_version(item)
+    return record
+
 
 def build_event():
     sectors = hdsg.sectors_from_lane_state({"depths": DEPTHS, "status": STATUSES})
@@ -53,9 +73,16 @@ def build_event():
         detector_model="yolov8n.pt", detector_confidence=0.35,
         pipeline_config_path=CONFIG / "pipeline.yaml",
         ontology_path=CONFIG / "ontology.yaml",
-        clear_threshold_m=2.0, blocked_threshold_m=0.7, sector_choice_tolerance_m=0.10,
+        # Read from the runtime's constants rather than written out. This said 2.0 until 23 August
+        # 2026 while the shipped clear distance was 1.8, so the frozen example of a well formed
+        # record stated a threshold no run used, which is the defect the thresholds work removed
+        # everywhere else.
+        clear_threshold_m=hdsg.SECTOR_CLEAR_AT_OR_ABOVE_M,
+        blocked_threshold_m=hdsg.OBJECT_STOP_BELOW_M,
+        sector_choice_tolerance_m=0.10,
         motion_tracker=hdsg.MotionTracker(),
     )
+    fact_packet["configuration"]["code_version"] = dict(FIXTURE_CODE_VERSION)
     catalogue = json.loads((CONFIG / "hdsg_request_catalogue.v1.json").read_text(encoding="utf-8"))
     prompt_packet = hdsg.build_prompt_packet(
         fact_packet, prompt_id="prompt_fixture", model_id="qwen3-vl-4b-instruct",
@@ -117,11 +144,12 @@ def main():
         ("hdsg.release.v2.json", release),
     ):
         path = VALID / name
-        path.write_bytes((json.dumps(freeze(record), indent=2) + "\n").encode("utf-8"))
+        path.write_bytes(
+            (json.dumps(pin_code_version(freeze(record)), indent=2) + "\n").encode("utf-8"))
         written.append(name)
     print("regenerated: " + ", ".join(written))
     print("hdsg.question_route.v1.json is left alone; it is a classifier reply, not a runtime record.")
-    print("Regenerate the manifest digests after this.")
+    print("Then: python scripts/generate_manifest.py")
 
 
 if __name__ == "__main__":

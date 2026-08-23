@@ -35,8 +35,72 @@ except ImportError:
     np = None
 
 
-SOFTWARE_VERSION = "hdsg-v1"
-RULE_SET_VERSION = "rules-v1"
+# SOFTWARE_VERSION and RULE_SET_VERSION were literals here, "hdsg-v1" and "rules-v1", removed on
+# 23 August 2026. Neither changed once through any rewrite, so a record carrying them named nothing
+# that distinguished it from any other record, in a block whose whole purpose is that its values can
+# be believed. `code_version` does their job from git rather than from a literal.
+
+# Which rows of the frame the sector clearances are measured across: below the horizon, above the
+# immediate foreground where the walker's own frame intrudes. Read from `sector` in
+# `config/pipeline.yaml`, which is where a retune belongs. These are the fallbacks used when no
+# configuration reaches the caller, and `tests/test_runtime_authority.py` fails if they disagree
+# with the file. The pair was written out three times until 23 August 2026, here, in
+# `valid_depth_fraction` and inside `compute_lane_state`, with nothing comparing them.
+SECTOR_BAND_TOP_FRACTION = 0.55
+SECTOR_BAND_BOTTOM_FRACTION = 0.95
+
+
+_CODE_VERSION: Optional[dict] = None
+
+
+def code_version() -> dict:
+    """Identifies the code that produced a record.
+
+    Resolved once and cached. It shells out to git three times, and a packet is built on every
+    event: uncached it added ten seconds to the test suite and would put three subprocess calls on
+    the walker's own event path. Caching is also correct rather than merely fast, since the code
+    that produced a run cannot change while the run is in progress.
+
+    `configuration_hash` covers `pipeline.yaml` and the other configuration files and none of the
+    Python. Two literals, `software_version` "hdsg-v1" and `rule_set_version` "rules-v1", claimed to
+    and did not: neither changed once through any rewrite, and both were removed on 23 August 2026. On 23 August 2026 the caution rule stopped counting distance bands and started
+    counting metres, and the object band stopped being trusted and started being derived: two changes
+    to what the walker does, in code, leaving every field in the record identical. A run from before
+    and a run from after could not be told apart from their own evidence.
+
+    The same defect was found for the model on 22 August, where the header recorded the name typed on
+    the command line rather than the weights the endpoint had loaded, and was fixed by asking the
+    endpoint. This asks git.
+
+    `dirty` is true where the working tree carries uncommitted changes, which makes the commit
+    identifier necessary but not sufficient to reproduce the run. Recording it is the point: a run
+    made from an edited tree should say so rather than name a commit that does not contain the edit.
+    Every field is None where git is unavailable, which is honest about not knowing rather than
+    silently naming nothing.
+    """
+    global _CODE_VERSION
+    if _CODE_VERSION is not None:
+        return dict(_CODE_VERSION)
+
+    import subprocess
+
+    def git(*arguments):
+        try:
+            result = subprocess.run(
+                ("git", *arguments), cwd=str(Path(__file__).resolve().parent),
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    status = git("status", "--porcelain")
+    _CODE_VERSION = {
+        "commit": git("rev-parse", "HEAD"),
+        "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+        "dirty": None if status is None else bool(status),
+    }
+    return dict(_CODE_VERSION)
 CONFIGURATION_ID = "hdsg_config.v1"
 # hdsg.schemas.v5. The record contracts have not changed since v2. v4 removed the templated
 # candidate from the set and v5 revived RG_SUBJECT_MISMATCH for the composed attribution check, so
@@ -763,6 +827,13 @@ def build_fact_packet(
     motion_tracker: MotionTracker,
     object_caution_below_m: float = OBJECT_CAUTION_BELOW_M,
     hazard_stop_at_or_below_m: float = HAZARD_STOP_AT_OR_BELOW_M,
+    # The geometry the sector clearances were measured with. Recorded rather than restated: the
+    # caller reads these from `pipeline.yaml` and passes the same values to `compute_lane_state`, so
+    # the record states the geometry that was used rather than the geometry that was intended.
+    sector_band_top_fraction: float = SECTOR_BAND_TOP_FRACTION,
+    sector_band_bottom_fraction: float = SECTOR_BAND_BOTTOM_FRACTION,
+    sector_left_max_fraction: float = 0.33,
+    sector_right_min_fraction: float = 0.66,
     depth_valid_fraction: Optional[float] = None,
     configuration_hash: Optional[str] = None,
     post_reorientation_stable_observations: int = 4,
@@ -841,27 +912,36 @@ def build_fact_packet(
         "sectors": sectors,
         "deterministic": {key: value for key, value in authority.items() if key != "moving_object_fact_ids"},
         "configuration": {
-            "software_version": SOFTWARE_VERSION,
-            "rule_set_version": RULE_SET_VERSION,
+            "code_version": code_version(),
             "configuration_hash": configuration_hash or sha256_file(pipeline_config_path),
             "ontology_hash": sha256_file(ontology_path),
             "detector_model": detector_model,
             "detector_confidence_threshold": float(detector_confidence),
+            # `binding_tie_margin` was recorded here as a literal 0.15 until 23 August 2026. No line
+            # of code read a 0.15 tie margin: it appeared only in this record, in the schema and in
+            # one fixture, so the block stated two tie thresholds of which one was fiction. The
+            # parameter that exists is `sector_choice_tolerance` below. Removed rather than nulled,
+            # by decision, the archive being development data that can be recorded again.
             "thresholds_m": {
                 "object_stop_below": float(blocked_threshold_m),
                 "object_caution_below": float(object_caution_below_m),
                 "hazard_stop_at_or_below": float(hazard_stop_at_or_below_m),
                 "sector_blocked_below": float(blocked_threshold_m),
                 "sector_clear_at_or_above": float(clear_threshold_m),
-                "binding_tie_margin": 0.15,
                 "sector_choice_tolerance": float(sector_choice_tolerance_m),
             },
             "post_reorientation_stable_observations": int(post_reorientation_stable_observations),
             "post_reorientation_max_variation_m": float(post_reorientation_max_variation_m),
+            # `horizontal_divisions: 3` said how many sectors there were and never where they were
+            # divided. The boundaries lived only in `pipeline.yaml`, so reading an archived record
+            # required still holding the file that hashes to its `configuration_hash`. They are
+            # recorded here as well, so the block stands on its own.
             "sector_geometry": {
-                "top_fraction": 0.55,
-                "bottom_fraction": 0.95,
+                "top_fraction": float(sector_band_top_fraction),
+                "bottom_fraction": float(sector_band_bottom_fraction),
                 "horizontal_divisions": 3,
+                "left_max_fraction": float(sector_left_max_fraction),
+                "right_min_fraction": float(sector_right_min_fraction),
             },
             "motion_tracking": {
                 "enabled": True,
@@ -1323,7 +1403,7 @@ def build_release(
                 "prompt_packet_schema": PROMPT_PACKET_SCHEMA,
                 "candidate_schema": CAPTION_SCHEMA,
                 "configuration_id": CONFIGURATION_ID,
-                "software_version": SOFTWARE_VERSION,
+                "code_version": code_version(),
             },
         }
 
@@ -1402,7 +1482,7 @@ def build_release(
             "prompt_packet_schema": PROMPT_PACKET_SCHEMA,
             "candidate_schema": CAPTION_SCHEMA,
             "configuration_id": CONFIGURATION_ID,
-            "software_version": SOFTWARE_VERSION,
+            "code_version": code_version(),
         },
     }
 

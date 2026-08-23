@@ -377,7 +377,7 @@
         "prompt_packet_schema",
         "candidate_schema",
         "configuration_id",
-        "software_version"
+        "code_version"
       ],
       "properties": {
         "release_mode": {
@@ -432,10 +432,38 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9._-]{1,127}$"
         },
-        "software_version": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+        "code_version": {
+          "description": "Which code produced the release. Replaced the literal software_version on 23 August 2026; see the same field in hdsg.fact_packet.v2.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "branch",
+            "dirty"
+          ],
+          "properties": {
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "dirty": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
         }
       },
       "allOf": [

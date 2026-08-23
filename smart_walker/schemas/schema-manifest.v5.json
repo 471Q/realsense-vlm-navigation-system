@@ -25,13 +25,17 @@
     "hdsg.vlm_caption.v1's stated_value described a tolerance removed when exactness on the written token replaced it. The description is corrected to state that the comparison is exact on the text as the deterministic renderer would display it, with no second acceptable spelling. No constraint changed; the schema validated the same documents before and after.",
     "proposed_label admitted a trailing space and a run of spaces in the schema and in the gate, and never in the grammar, which has always required single spaces between words. The label is rendered as \"Possible <label> is visible in the <bearing>\", so a trailing space reached the display as a double space. The decoder could not produce one, which is why it was never seen; the check meant to be authoritative was nonetheless looser than the constraint it backs up. Both are tightened to the grammar's shape and the 48 character limit is stated as maxLength, the pattern no longer carrying it. Found by the agreement test rather than by reading: the three statements of each field shape, in GBNF, in JSON Schema and in Python, are now probed with the same strings and must return the same verdict.",
     "Three value shapes in the caption grammar are named rules rather than inline expressions, so that the agreement test can reference them: visual-identifier, proposed-label and bearing-value. The language admitted is unchanged by the naming.",
-    "motion_decision no longer admits null. The release builder reads ACTION_TEMPLATES[(motion_decision, selected_sector)], a table with no null key, so a packet carrying null would raise KeyError rather than degrade: the schema admitted a value the runtime cannot survive. It was sought 1260 ways across every combination of intent, advisory, response mode, object presence and sector reading and never produced, and appears in no archived record, so narrowing the enum invalidates nothing already written."
+    "motion_decision no longer admits null. The release builder reads ACTION_TEMPLATES[(motion_decision, selected_sector)], a table with no null key, so a packet carrying null would raise KeyError rather than degrade: the schema admitted a value the runtime cannot survive. It was sought 1260 ways across every combination of intent, advisory, response mode, object presence and sector reading and never produced, and appears in no archived record, so narrowing the enum invalidates nothing already written.",
+    "The configuration block, audited 23 August 2026. binding_tie_margin is removed: recorded as a literal 0.15, read by no line of code, present only in this record, the schema and one fixture, so the block stated two tie thresholds of which one was fiction. Removed rather than nulled by decision, the archive being development data that can be recorded again; records written before this date carry the field and no longer validate.",
+    "code_version is added, carrying the commit, the branch and whether the working tree was edited. software_version and rule_set_version are literals that have never changed and configuration_hash covers only the configuration files, so nothing identified the Python. On the same day the caution rule stopped counting distance bands and started counting metres, and an object's band stopped being trusted and started being derived: two changes to what the walker does, leaving every field in the block identical. It is the same defect fixed for the model on 22 August, where the header named the model typed on the command line rather than the weights the endpoint had loaded. Resolved once and cached, three subprocess calls having no place on the event path. Every field is null where git is unavailable. The fixture pins a zero commit, a generated fixture that carried the live commit changing on every commit for no reason.",
+    "sector_geometry now records left_max_fraction and right_min_fraction, and takes its row band from what the caller measured with rather than restating literals. horizontal_divisions said how many sectors there were and never where they divided, so reading an archived record required still holding the pipeline.yaml that hashes to its configuration_hash. The row band moved to sector.band_top_fraction and band_bottom_fraction in pipeline.yaml, having been written out three times, in compute_lane_state, in valid_depth_fraction and in this record, with nothing comparing them.",
+    "The fact packet fixture recorded a sector clear distance of 2.0 while the shipped value was 1.8, so the frozen example of a well formed record stated a threshold no run used. The generator now reads the runtime constants."
   ],
   "files": [
     {
       "record_schema": "hdsg.fact_packet.v2",
       "path": "hdsg.fact_packet.v2.schema.json",
-      "sha256": "87414ca3344d730db94247462e3d4b780e7875d83f1f84b2772d57b591a3517d"
+      "sha256": "6ed182358087208684d80b2b99421e9694a9e834073a49ec11ac0605fa2a3b7f"
     },
     {
       "record_schema": "hdsg.prompt_packet.v2",
@@ -56,7 +60,7 @@
     {
       "record_schema": "hdsg.release.v2",
       "path": "hdsg.release.v2.schema.json",
-      "sha256": "2d4961823d9869a0311f5ee6ea91048786e8ae0a7490e845762b315422123828"
+      "sha256": "922fbc83c49dd4d2a966f76a43b004de7b94bcb942f85a91cb946627a251798c"
     },
     {
       "record_schema": "hdsg.vlm_caption.v1",

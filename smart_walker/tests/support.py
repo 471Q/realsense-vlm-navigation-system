@@ -60,6 +60,15 @@ def detected_object(track_id=3, label="chair", bearing="LEFT", distance_m=1.62,
     }])
 
 
+# The request each response mode belongs to. One decision, recorded in two fields, and
+# hdsg.fact_packet.v2 now refuses a packet whose two disagree.
+REQUEST_FOR_MODE = {
+    "AUTOMATIC": "AUTO_GUIDANCE",
+    "MORE_DETAIL": "MORE_DETAIL",
+    "REASSESSMENT": "REASSESS",
+}
+
+
 def fact_packet(intent="FORWARD", object_advisory="CAUTION", lane=None, objects=(),
                 response_mode="MORE_DETAIL", previous_selected_sector=None,
                 trigger_type="USER_REQUESTED", input_method=None, control_id=None):
@@ -69,11 +78,19 @@ def fact_packet(intent="FORWARD", object_advisory="CAUTION", lane=None, objects=
         previous_selected_sector=previous_selected_sector,
         sector_choice_tolerance_m=0.10,
     )
-    request_id = "AUTO_GUIDANCE" if response_mode == "AUTOMATIC" else "MORE_DETAIL"
+    # The request and the response mode are one decision recorded twice, and the runtime refuses a
+    # catalogue entry whose mode disagrees with the packet. This read
+    # `"AUTO_GUIDANCE" if response_mode == "AUTOMATIC" else "MORE_DETAIL"` until 23 August 2026, so a
+    # reassessment event was labelled a More detail request and no valid REASSESS packet could be
+    # built at all. Nothing failed, because nothing built one: the reassessment request had no
+    # coverage at this level, and the mislabelling is what hid that.
+    request_id = REQUEST_FOR_MODE[response_mode]
     extra = {}
     if input_method:
         extra["input_method"] = input_method
-    if control_id:
+    # Tested for None rather than for truth, so that a caller passing None to mean "no control was
+    # pressed" is distinguished from one that did not care. `if control_id:` collapsed the two.
+    if control_id is not None:
         extra["control_id"] = control_id
     return hdsg.build_fact_packet(
         run_id="run_t", event_id="evt_1", observation_id="obs_1", ticket_id=None,

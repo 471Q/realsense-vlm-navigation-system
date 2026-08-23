@@ -19,6 +19,7 @@
     "depth_aligned_to_rgb": true,
     "rgb_valid": true,
     "depth_valid": true,
+    "depth_valid_fraction": null,
     "measurement_state": "VALID",
     "validity_reason_codes": [],
     "rear_state": "UNOBSERVED"
@@ -93,10 +94,13 @@
     "scene_fact_required": false
   },
   "configuration": {
-    "software_version": "hdsg-v1",
-    "rule_set_version": "rules-v1",
-    "configuration_hash": "sha256:4aef88ce51714f446c08a6cb3b7636f18a2742afa3bacc2f650c64915bc59341",
-    "ontology_hash": "sha256:e84379380fa53d448d7b1bc0d930573226f3b0c429c861bc6e2a9184a028f0b1",
+    "code_version": {
+      "commit": "0000000000000000000000000000000000000000",
+      "branch": "fixture",
+      "dirty": false
+    },
+    "configuration_hash": "sha256:f74dbaf04062fab111fe9fa1432b32bfc2347701d14bbbd730e4b7cf1ac19070",
+    "ontology_hash": "sha256:c2a38779e60039681c60cf0a211232f9684b27ae1fcea718059b7ec710e5eddb",
     "detector_model": "yolov8n.pt",
     "detector_confidence_threshold": 0.35,
     "thresholds_m": {
@@ -104,8 +108,7 @@
       "object_caution_below": 1.5,
       "hazard_stop_at_or_below": 2.0,
       "sector_blocked_below": 0.7,
-      "sector_clear_at_or_above": 2.0,
-      "binding_tie_margin": 0.15,
+      "sector_clear_at_or_above": 1.8,
       "sector_choice_tolerance": 0.1
     },
     "post_reorientation_stable_observations": 4,
@@ -113,7 +116,9 @@
     "sector_geometry": {
       "top_fraction": 0.55,
       "bottom_fraction": 0.95,
-      "horizontal_divisions": 3
+      "horizontal_divisions": 3,
+      "left_max_fraction": 0.33,
+      "right_min_fraction": 0.66
     },
     "motion_tracking": {
       "enabled": true,

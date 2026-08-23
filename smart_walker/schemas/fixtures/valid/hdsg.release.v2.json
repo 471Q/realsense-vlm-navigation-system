@@ -57,6 +57,10 @@
     "prompt_packet_schema": "hdsg.prompt_packet.v2",
     "candidate_schema": "hdsg.vlm_caption.v1",
     "configuration_id": "hdsg_config.v1",
-    "software_version": "hdsg-v1"
+    "code_version": {
+      "commit": "0000000000000000000000000000000000000000",
+      "branch": "fixture",
+      "dirty": false
+    }
   }
 }

@@ -371,7 +371,9 @@ def identify_binding_fact(objects: Optional[list], lane_state: Optional[dict],
 
 def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
                        clear_t: float, blocked_t: float,
-                       left_max: float, right_min: float) -> Optional[dict]:
+                       left_max: float, right_min: float,
+                       top_fraction: float = hdsg.SECTOR_BAND_TOP_FRACTION,
+                       bottom_fraction: float = hdsg.SECTOR_BAND_BOTTOM_FRACTION) -> Optional[dict]:
     """Partition the lower field of view into three depth bands and classify each.
 
     The column boundaries come from `bearing` in pipeline.yaml, the same fractions
@@ -388,8 +390,11 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
     two of them applied the mirror correction once and one applied it twice, so
     under --mirror_view the badge and the caption named opposite directions.
 
-    Bands are read from rows 55% to 95% of the frame: below the horizon, above
-    the immediate foreground where the walker's own frame intrudes.
+    The row band comes from `sector.band_top_fraction` and `sector.band_bottom_fraction` in
+    pipeline.yaml: below the horizon, above the immediate foreground where the walker's own frame
+    intrudes. It was hardcoded here as 0.55 and 0.95 until 23 August 2026, and written out twice more,
+    in `valid_depth_fraction` and in the configuration record that states how a run was measured.
+    The three agreed and nothing compared them.
 
     Returns None when depth is unavailable. Otherwise a dict carrying the band
     geometry, the median depth per band, a three-way status per band, the
@@ -400,8 +405,8 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
         return None
     try:
         H, W = depth_m.shape[:2]
-        y1 = int(0.55 * H)
-        y2 = int(0.95 * H)
+        y1 = int(top_fraction * H)
+        y2 = int(bottom_fraction * H)
         # Derived from the predicate `bearing_from_bbox` applies, not from rounding the fraction.
         # A column is left where its fraction is below left_max, so the first centre column is
         # ceil(left_max * W); it is right where its fraction is strictly above right_min, so the
@@ -865,6 +870,13 @@ def main():
         sector_right_min = float(cfg["bearing"]["right_min"])
     except Exception:
         sector_left_max, sector_right_min = 1.0 / 3.0, 2.0 / 3.0
+    # Which rows the clearances are measured across. Hardcoded in three places until 23 August 2026.
+    try:
+        sector_band_top = float(cfg["sector"]["band_top_fraction"])
+        sector_band_bottom = float(cfg["sector"]["band_bottom_fraction"])
+    except Exception:
+        sector_band_top = hdsg.SECTOR_BAND_TOP_FRACTION
+        sector_band_bottom = hdsg.SECTOR_BAND_BOTTOM_FRACTION
     # The remaining motion thresholds, read from the configuration and passed to every consumer, so
     # the numbers a run is judged by are the numbers the run was configured with. The command line
     # can still override the sector clear distance for a one-off; nothing else takes an override,
@@ -1592,6 +1604,11 @@ def main():
             ontology_path=sw.ONTOLOGY_CFG,
             clear_threshold_m=args.clear_threshold_m,
             blocked_threshold_m=blocked_threshold_m,
+            # The geometry the clearances were actually measured with, not the intended geometry.
+            sector_band_top_fraction=sector_band_top,
+            sector_band_bottom_fraction=sector_band_bottom,
+            sector_left_max_fraction=sector_left_max,
+            sector_right_min_fraction=sector_right_min,
             sector_choice_tolerance_m=args.sector_choice_tolerance_m,
             motion_tracker=motion_tracker,
             object_caution_below_m=object_caution_below_m,
@@ -1840,7 +1857,13 @@ def main():
                     latest_authority,
                     # hdsg.fact_packet.v2 carries TYPED_QUESTION, so a question is recorded as
                     # what it is rather than as the button whose profile it borrows.
-                    input_method="TYPED_QUESTION", control_id="MORE_DETAIL",
+                    #
+                    # `control_id` names the on-screen control that was activated, and typing a
+                    # question activates none. It said "MORE_DETAIL" until 23 August 2026, so every
+                    # question event in the archive records a button nobody pressed. It was also
+                    # redundant: `request_id` already carries MORE_DETAIL, for the frozen-enumeration
+                    # reason given in the request catalogue.
+                    input_method="TYPED_QUESTION", control_id=None,
                 )
                 record("full_fact_packet", packet)
                 try:
@@ -1890,12 +1913,15 @@ def main():
                     blocked_t=blocked_threshold_m,
                     left_max=sector_left_max,
                     right_min=sector_right_min,
+                    top_fraction=sector_band_top,
+                    bottom_fraction=sector_band_bottom,
                 )
                 latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
                 # Recorded on every observation, whether or not it crosses the caution threshold.
                 # The threshold is provisional and set from seven frames; only the distribution the
                 # archive accumulates can settle it.
-                latest_depth_valid_fraction = sw.valid_depth_fraction(inference.depth_m)
+                latest_depth_valid_fraction = sw.valid_depth_fraction(
+                    inference.depth_m, sector_band_top, sector_band_bottom)
                 baseline_facts = {
                     "objects": inference.objects,
                     "free_space": {"corridor_min_width_m": None},

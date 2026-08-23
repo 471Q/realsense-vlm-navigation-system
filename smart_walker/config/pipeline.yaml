@@ -154,3 +154,17 @@ sector:
   # configured. Made consistent 23 August 2026; the value itself awaits a measurement at the
   # laboratory and is not settled.
   clear_at_or_above_m: 1.8
+
+  # Which rows of the frame the clearances are measured across, as fractions of the frame height.
+  # Below the horizon, above the immediate foreground where the walker's own frame intrudes.
+  #
+  # These two numbers were written out three times until 23 August 2026, in `compute_lane_state`, in
+  # `valid_depth_fraction`, and in the configuration record that states how a run was measured, with
+  # nothing comparing them. They agreed. Moved here, which is where a retune belongs, and the
+  # fallbacks in `hdsg_runtime.SECTOR_BAND_TOP_FRACTION` are compared against this file by
+  # `tests/test_runtime_authority.py`.
+  #
+  # Where the band should sit depends on the camera's height and tilt, which are unmeasured. They
+  # are item A3 of the laboratory checklist, so 0.55 and 0.95 are provisional.
+  band_top_fraction: 0.55
+  band_bottom_fraction: 0.95
