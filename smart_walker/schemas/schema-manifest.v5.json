@@ -17,7 +17,9 @@
     "The prompt packet recorded max_tokens from the templated budget while the composed call sent the caption budget, so the recorded value was 220 where 400 was sent. This is the third defect of that class, after the system prompt digest and the constraint digest, and all three came of a field being populated with the wrong value rather than left absent.",
     "build_release no longer takes a candidate. It renders the deterministic account for the idle state, the pending state and every rejection, and hdsg_composed.build_composed_release calls it for the authority block before substituting an accepted caption's content.",
     "hdsg.question_record.v1 added 23 August 2026. The telemetry record written for each typed question previously stamped itself hdsg.question_route.v1, the schema of the classifier's two-field reply, and failed validation against it. The reply schema is unchanged in shape; its enumeration went from eight topic tokens to three admission tokens when topic routing was withdrawn the same day, which is why its digest and the grammar's have moved.",
-    "observation.depth_valid_fraction added 23 August 2026, optional so archives recorded before that date still validate. It replaces a low-light flag that was written as False on every frame; the share of the reasoning band carrying a usable depth reading separated the backlit staircase captures from ordinary room frames where mean brightness did not, the backlit frames being the brighter of the two."
+    "observation.depth_valid_fraction added 23 August 2026, optional so archives recorded before that date still validate. It replaces a low-light flag that was written as False on every frame; the share of the reasoning band carrying a usable depth reading separated the backlit staircase captures from ordinary room frames where mean brightness did not, the backlit frames being the brighter of the two.",
+    "The request catalogue's recorded digest was reissued on 23 August 2026 without a schema-set bump. The edit touched only two _note fields, which no code reads: the question_answer note was cut from five sentences of withdrawn-feature history to the one fact a maintainer cannot get from the code, and the unconstrained_diagnostic note was corrected to say that the mode retains its safety system prompt and therefore measures the architecture against prompting alone rather than against a bare model. No prompt text, instruction or identifier changed, so no run's behaviour differs across the two digests. Provenance does not rest on this manifest in any case: the runtime hashes the catalogue itself into request_catalogue_hash on every run.",
+    "The `enabled` flag was removed from the three request profiles on 23 August 2026, and the digest reissued again. It was never set false in any revision of the catalogue, nothing wrote it, and the two blocks added later never carried it, so it described a capability the system did not have. Channels are switched with --answer_questions and --unconstrained, which the run header records. The startup check was extended in the same commit to cover the whole file rather than the three request profiles alone, and was extracted from main so that it can be tested; it could not be before, being one branch inside a function that opens a camera."
   ],
   "files": [
     {
@@ -63,7 +65,7 @@
     {
       "record_schema": "hdsg.request_catalogue.v1",
       "path": "../config/hdsg_request_catalogue.v1.json",
-      "sha256": "02f99625c5592d02b36d01338bc25d2f84b1297be0bbd891fdf86f7370489296"
+      "sha256": "895d435e564abc550716482cab6cb990109a6f70265c4c47a1be87f84f5f7c4b"
     }
   ]
 }

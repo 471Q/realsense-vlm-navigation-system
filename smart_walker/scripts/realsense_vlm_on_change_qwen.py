@@ -608,6 +608,57 @@ def _parse_bool_argument(value: str | bool) -> bool:
     raise argparse.ArgumentTypeError("expected true or false")
 
 
+# The blocks of the request catalogue that must be present and complete before a run may start, and
+# the fields each must carry. Every one of them is read on a live path with a bare subscript, so an
+# absent block is a crash rather than a degradation.
+REQUIRED_CATALOGUE_REQUESTS = ("AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS")
+REQUIRED_CATALOGUE_BLOCKS = {
+    "question_answer": ("prompt_profile_id", "fixed_instruction"),
+    "unconstrained_diagnostic": ("system_prompt", "fixed_instruction"),
+}
+
+
+def load_request_catalogue(path) -> dict:
+    """Reads the request catalogue and refuses an incomplete one before the run begins.
+
+    Until 23 August 2026 this check named only the three request profiles. It was written when
+    those three were the whole file: `unconstrained_diagnostic` arrived with the diagnostic mode
+    and `question_answer` was rewritten when the topic routing was withdrawn, and neither addition
+    extended the check. A catalogue missing either therefore started, ran, and failed on the first
+    typed question with a KeyError, part way through a session with the camera running.
+
+    Extracted from `main` at the same time so that the check can be tested. It could not be before,
+    being one branch inside a function that opens a camera.
+
+    Raises ValueError describing the first problem found. The caller wraps it with the path.
+    """
+    catalogue = json.loads(Path(path).read_text(encoding="utf-8"))
+    if catalogue.get("catalogue_version") != "hdsg.request_catalogue.v1":
+        raise ValueError("The catalogue version is not hdsg.request_catalogue.v1.")
+
+    requests = catalogue.get("requests")
+    if not isinstance(requests, dict) or not set(REQUIRED_CATALOGUE_REQUESTS).issubset(requests):
+        raise ValueError("The required evaluated request profiles are absent.")
+    for name in REQUIRED_CATALOGUE_REQUESTS:
+        entry = requests[name]
+        if not isinstance(entry, dict) or not all(
+                str(entry.get(field) or "").strip()
+                for field in ("response_mode", "prompt_profile_id", "fixed_instruction")):
+            raise ValueError(f"The request profile is incomplete: {name}")
+
+    for block, fields in REQUIRED_CATALOGUE_BLOCKS.items():
+        entry = catalogue.get(block)
+        if not isinstance(entry, dict) or not all(
+                str(entry.get(field) or "").strip() for field in fields):
+            raise ValueError(f"The catalogue block is absent or incomplete: {block}")
+
+    for field in ("composed_system_prompt", "composed_system_prompt_id"):
+        if not str(catalogue.get(field) or "").strip():
+            raise ValueError(f"The catalogue field is absent or empty: {field}")
+
+    return catalogue
+
+
 def main():
     """Runs the authoritative HDSG sensing, generation, validation, and display path."""
     ap = argparse.ArgumentParser(
@@ -744,11 +795,7 @@ def main():
                 f"The question admission constraint could not be loaded: {args.route_grammar}"
             ) from error
     try:
-        request_catalogue = json.loads(args.request_catalogue.read_text(encoding="utf-8"))
-        required_requests = {"AUTO_GUIDANCE", "MORE_DETAIL", "REASSESS"}
-        if (request_catalogue.get("catalogue_version") != "hdsg.request_catalogue.v1"
-                or not required_requests.issubset(request_catalogue.get("requests", {}))):
-            raise ValueError("The required evaluated request profiles are absent.")
+        request_catalogue = load_request_catalogue(args.request_catalogue)
         # The catalogue is the single source for the text sent to the model, so the digest the
         # prompt packet records cannot name text the model never received.
         composed_system = str(request_catalogue["composed_system_prompt"])
@@ -1340,8 +1387,13 @@ def main():
         prompt_id = allocate("prompt", "prompt")
         request_id = fact_packet["interaction"]["request_id"]
         catalogue_entry = request_catalogue["requests"].get(request_id)
-        if not catalogue_entry or not catalogue_entry.get("enabled"):
-            raise RuntimeError(f"The request profile is not enabled: {request_id}")
+        # An `enabled` flag was tested here until 23 August 2026. It was never once set false in any
+        # revision of the catalogue, nothing wrote it, and the two blocks added later never carried
+        # it, so it described a capability the system did not have. Channels are switched with the
+        # command line flags that are actually used, `--answer_questions` and `--unconstrained`, and
+        # those are recorded in the run header. The profile must still exist.
+        if not catalogue_entry:
+            raise RuntimeError(f"The request profile is absent from the catalogue: {request_id}")
         if catalogue_entry.get("response_mode") != fact_packet["interaction"]["response_mode"]:
             raise RuntimeError(f"The request profile mode does not match the Fact Packet: {request_id}")
         prompt_packet = hdsg.build_prompt_packet(
