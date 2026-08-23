@@ -627,10 +627,12 @@ class ConfigurationRecordTests(unittest.TestCase):
             motion_tracker=hdsg.MotionTracker(),
             sector_band_top_fraction=0.42, sector_band_bottom_fraction=0.88,
             sector_left_max_fraction=0.30, sector_right_min_fraction=0.70,
+            sector_min_measured_fraction=0.11,
         )
         self.assertEqual({"top_fraction": 0.42, "bottom_fraction": 0.88,
                           "horizontal_divisions": 3,
-                          "left_max_fraction": 0.30, "right_min_fraction": 0.70},
+                          "left_max_fraction": 0.30, "right_min_fraction": 0.70,
+                          "min_measured_fraction": 0.11},
                          packet["configuration"]["sector_geometry"])
 
 

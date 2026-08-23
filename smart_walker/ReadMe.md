@@ -23,7 +23,7 @@ Verify RTX usage:
 
 ## True VLM (vision-language) live demo — retired, archived
 
-Development history only. `scripts\vlm_realsense_live.py` was the stage 1 LLaVA-1.5 prototype
+Development history only. `scripts\archive\vlm_realsense_live.py` was the stage 1 LLaVA-1.5 prototype
 described in the thesis's Chapter 4 development-progression table; it is superseded by the
 canonical Qwen3-VL client below and moved to `scripts\archive\` on 19 August 2026.
 
@@ -58,36 +58,42 @@ Starting a local LLaVA (vision) server example:
 	-NGL 24 -Ctx 2048 -Threads 8 -Port 8080 -MainGpu 0 -Verbose
 ```
 
-# Test per frame detection and facts
-python per_frame_facts.py
+## Earlier stages, kept for the record
 
-# Test RealSense Bag File (run from root folder)
-python scripts/realsense_bag_player.py --bag data/outdoors.bag --realtime true --save_one_pair
+Every command in this section is historical. All of these scripts were moved to `scripts\archive\`
+on 24 August 2026: nothing imports them and the canonical client does not use them. They are listed
+so that a run described in an earlier notebook can still be located.
 
-# Test RealSense Depth Estimation
-python scripts\rgbd_facts_from_pair.py --rgb "outputs\bag_test\color.png" --depth "outputs\bag_test\depth_mm.png" --preset realsense_mm
+```powershell
+# Per frame detection and facts
+python scripts\archive\per_frame_facts.py
 
-# Test Real Sense Device
-python scripts/realsense_depth_test.py
+# RealSense bag file
+python scripts\archive\realsense_bag_player.py --bag data/outdoors.bag --realtime true --save_one_pair
 
-# Test RGBD mapping (offline)
-python scripts\rgbd_facts_with_mapping.py --rgb "outputs\bag_test\color.png" --depth "outputs\bag_test\depth_mm.png" --preset realsense_mm  
+# Depth estimation from a saved pair
+python scripts\archive\rgbd_facts_from_pair.py --rgb "outputs\bag_test\color.png" --depth "outputs\bag_test\depth_mm.png" --preset realsense_mm
 
-# Run RealSense live stream estimation + mapping
-python scripts\realsense_per_frame_facts.py --model yolov8n.pt --imgsz 640 --conf 0.25
+# Device check
+python scripts\archive\realsense_depth_test.py
 
-# Run RealSense live stream risk estimation
-# Historical. Retired, moved to scripts\archive\ on 19 August 2026.
+# RGBD mapping, offline
+python scripts\archive\rgbd_facts_with_mapping.py --rgb "outputs\bag_test\color.png" --depth "outputs\bag_test\depth_mm.png" --preset realsense_mm
+
+# Live stream estimation and mapping
+python scripts\archive\realsense_per_frame_facts.py --model yolov8n.pt --imgsz 640 --conf 0.25
+
+# Live stream risk estimation
 python scripts\archive\realsense_per_frame_with_risk.py --model yolov8n.pt --imgsz 640 --conf 0.25
 
-# Run RealSense live stream risk estimation + direction input + simple caption
-python scripts/only_realsense.py --model yolov8n.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty
+# Live stream risk estimation, direction input and a written caption
+python scripts\archive\only_realsense.py --model yolov8n.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty
+```
 
-# Run RealSense live stream risk estimation + direction input + LLM
-# Start the LLM server first (separate terminal) qwen
-# Example: & .\scripts\start_llama_server.ps1 -NGL 28 -Ctx 2048 -Threads 8 -Port 8080
-
-python scripts\realsense_shared_control.py --model yolov8n.pt --imgsz 640 --conf 0.25 --half --json_hz 10 --json_pretty --imu --llm --llm_endpoint http://localhost:8080 --llm_hz 2
+`realsense_shared_control.py` belonged on this list and is the one exception. It stays in
+`scripts\` because the canonical client imports it for the camera, the detector and the depth
+measurements, but it can no longer be run on its own: the standalone prototype it carried was
+removed on 24 August 2026, for the reasons its header gives.
 
 
 # llava-1.5-7b
@@ -480,3 +486,24 @@ In the same pass, `realsense_vlm_on_change_qwen.py`'s own retired direct-caption
 `main()`) was deleted rather than archived, since it was dead code inside the canonical
 file rather than a separate historical script. It remains in git history on the commit
 before this change.
+
+On 24 August 2026 the same pass was completed. Eight further scripts were moved to
+`scripts\archive\`, listed under "Earlier stages" above: `only_realsense.py`,
+`per_frame_facts.py`, `realsense_per_frame_facts.py`, `realsense_bag_player.py`,
+`realsense_depth_test.py`, `rgbd_facts_from_pair.py`, `rgbd_facts_with_mapping.py` and
+`llm_client_example.py`. Nothing imports any of them.
+
+`realsense_shared_control.py` was the same case in a harder shape, because one file held two
+things. The canonical client imports it for the camera, the detector and the depth
+measurements, and that half stays. The other half, 660 lines reachable only by running the file
+directly, was a standalone walker prototype with its own decision policy returning GO, SLOW or
+STOP, its own written captions, its own model client and its own display. It was deleted rather
+than archived, for the reason the legacy caption route was: dead code inside a live file. Two
+decision policies in the file the live system imports invite a reader to take the wrong one for
+what the walker does, and Chapter 3 describes one. Almost the same prototype survives in
+`scripts\archive\only_realsense.py`, which shares 709 lines with it.
+
+What remains in `scripts\` is the canonical client, the perception library it imports, the seven
+`hdsg_*` modules, the two lab and experiment tools (`capture_scenes.py`,
+`probe_question_compliance.py`) and the two generators the test suite runs
+(`generate_ontology.py`, `generate_manifest.py`).

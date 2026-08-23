@@ -168,3 +168,21 @@ sector:
   # are item A3 of the laboratory checklist, so 0.55 and 0.95 are provisional.
   band_top_fraction: 0.55
   band_bottom_fraction: 0.95
+
+  # How much of a sector strip must carry a depth reading before its clearance is reported at all.
+  # Below this the strip is recorded as having no reading, which the guidance policy already treats
+  # as not clear.
+  #
+  # A median does not care how many samples it has, so without a floor a strip in which almost
+  # nothing could be measured still produced a confident number. In the archived run of 22 August
+  # 2026 the centre strip of obs_000228 held 32,470 pixels of which 21 carried a reading, and the
+  # median of those 21, 54.65 m, was reported as the clearance and read as CLEAR.
+  #
+  # 0.05 chosen from that run's distribution, which separates cleanly: the median strip is 83 per
+  # cent measured while the lowest tenth are under 2.7 per cent. Of its 4,440 sector readings, 463
+  # fall below this floor and 218 of those had been called clear. Ten per cent would discard a
+  # further 193 readings to catch 27 more, which is where the return stops paying.
+  #
+  # Distinct from `risk_rules_baseline.caution.min_valid_depth_fraction`, which is a whole-frame
+  # measure of how much of the view could be seen. This one governs a single strip.
+  min_measured_fraction: 0.05

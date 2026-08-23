@@ -40,7 +40,7 @@
     {
       "record_schema": "hdsg.fact_packet.v2",
       "path": "hdsg.fact_packet.v2.schema.json",
-      "sha256": "6ed182358087208684d80b2b99421e9694a9e834073a49ec11ac0605fa2a3b7f"
+      "sha256": "cd369165c74e4c430c2b89f7eaa8cc94ea0ba7bace7e73064854b5d74a72bcbe"
     },
     {
       "record_schema": "hdsg.prompt_packet.v2",

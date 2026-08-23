@@ -373,7 +373,8 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
                        clear_t: float, blocked_t: float,
                        left_max: float, right_min: float,
                        top_fraction: float = hdsg.SECTOR_BAND_TOP_FRACTION,
-                       bottom_fraction: float = hdsg.SECTOR_BAND_BOTTOM_FRACTION) -> Optional[dict]:
+                       bottom_fraction: float = hdsg.SECTOR_BAND_BOTTOM_FRACTION,
+                       min_measured_fraction: float = 0.0) -> Optional[dict]:
     """Partition the lower field of view into three depth bands and classify each.
 
     The column boundaries come from `bearing` in pipeline.yaml, the same fractions
@@ -415,9 +416,14 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
         xL1, xL2 = 0, min(W, math.ceil(left_max * W))
         xC1, xC2 = xL2, min(W, math.floor(right_min * W) + 1)
         xR1, xR2 = max(xC2, xL2), W
-        d_L = sw.median_depth_in_box(depth_m, xL1, y1, xL2, y2)
-        d_C = sw.median_depth_in_box(depth_m, xC1, y1, xC2, y2)
-        d_R = sw.median_depth_in_box(depth_m, xR1, y1, xR2, y2)
+        # A strip too sparsely measured to describe returns nothing rather than the median of
+        # whatever few pixels came back. See `sector.min_measured_fraction` in pipeline.yaml.
+        d_L = sw.median_depth_in_box(depth_m, xL1, y1, xL2, y2,
+                                     min_coverage=min_measured_fraction)
+        d_C = sw.median_depth_in_box(depth_m, xC1, y1, xC2, y2,
+                                     min_coverage=min_measured_fraction)
+        d_R = sw.median_depth_in_box(depth_m, xR1, y1, xR2, y2,
+                                     min_coverage=min_measured_fraction)
         # Swapping here puts every downstream consumer in the user's frame of
         # reference. Do not mirror the derived token again later.
         if mirror_view:
@@ -924,6 +930,12 @@ def main():
     except Exception:
         sector_band_top = hdsg.SECTOR_BAND_TOP_FRACTION
         sector_band_bottom = hdsg.SECTOR_BAND_BOTTOM_FRACTION
+    # How much of a strip must be measurable before its clearance is reported. Raised from an
+    # implicit nothing on 24 August 2026; see `sector.min_measured_fraction` in pipeline.yaml.
+    try:
+        sector_min_measured = float(cfg["sector"]["min_measured_fraction"])
+    except Exception:
+        sector_min_measured = hdsg.SECTOR_MIN_MEASURED_FRACTION
     # The remaining motion thresholds, read from the configuration and passed to every consumer, so
     # the numbers a run is judged by are the numbers the run was configured with. The command line
     # can still override the sector clear distance for a one-off; nothing else takes an override,
@@ -1668,6 +1680,7 @@ def main():
             # The geometry the clearances were actually measured with, not the intended geometry.
             sector_band_top_fraction=sector_band_top,
             sector_band_bottom_fraction=sector_band_bottom,
+            sector_min_measured_fraction=sector_min_measured,
             sector_left_max_fraction=sector_left_max,
             sector_right_min_fraction=sector_right_min,
             sector_choice_tolerance_m=args.sector_choice_tolerance_m,
@@ -1976,6 +1989,7 @@ def main():
                     right_min=sector_right_min,
                     top_fraction=sector_band_top,
                     bottom_fraction=sector_band_bottom,
+                    min_measured_fraction=sector_min_measured,
                 )
                 latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
                 # Recorded on every observation, whether or not it crosses the caution threshold.

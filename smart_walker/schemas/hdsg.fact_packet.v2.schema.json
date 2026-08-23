@@ -1123,7 +1123,8 @@
             "bottom_fraction",
             "horizontal_divisions",
             "left_max_fraction",
-            "right_min_fraction"
+            "right_min_fraction",
+            "min_measured_fraction"
           ],
           "properties": {
             "top_fraction": {
@@ -1147,6 +1148,12 @@
             },
             "right_min_fraction": {
               "description": "A detection is right where that fraction is strictly above this one.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "min_measured_fraction": {
+              "description": "The share of a strip that had to carry a depth reading before its clearance was reported. Below it the strip is recorded as having no reading. Added 24 August 2026, before which a strip measured over 0.1 per cent of its area still produced a confident clearance.",
               "type": "number",
               "minimum": 0,
               "maximum": 1

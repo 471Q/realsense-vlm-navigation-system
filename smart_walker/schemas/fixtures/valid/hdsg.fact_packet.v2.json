@@ -99,7 +99,7 @@
       "branch": "fixture",
       "dirty": false
     },
-    "configuration_hash": "sha256:f74dbaf04062fab111fe9fa1432b32bfc2347701d14bbbd730e4b7cf1ac19070",
+    "configuration_hash": "sha256:34fd0c4d209a59c71880fae319cd09be6cf1b6fb22403b729c13979b3f6621d4",
     "ontology_hash": "sha256:c2a38779e60039681c60cf0a211232f9684b27ae1fcea718059b7ec710e5eddb",
     "detector_model": "yolov8n.pt",
     "detector_confidence_threshold": 0.35,
@@ -118,7 +118,8 @@
       "bottom_fraction": 0.95,
       "horizontal_divisions": 3,
       "left_max_fraction": 0.33,
-      "right_min_fraction": 0.66
+      "right_min_fraction": 0.66,
+      "min_measured_fraction": 0.05
     },
     "motion_tracking": {
       "enabled": true,

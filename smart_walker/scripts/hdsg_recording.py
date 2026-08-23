@@ -216,6 +216,10 @@ class ObservationReader:
                 f"{depth_path} must be a 16-bit single-channel PNG, got dtype={raw.dtype} "
                 f"shape={raw.shape}"
             )
+        # The 16-bit ceiling is a second way the sensor says it has no reading, and it was read as a
+        # distance of 65.535 m until 24 August 2026. See `capture_thread` for what that did.
+        raw = raw.copy()
+        raw[raw == UINT16_MAX] = 0
         depth_m = raw.astype(np.float32) / MILLIMETRES_PER_METRE
         return colour, depth_m
 

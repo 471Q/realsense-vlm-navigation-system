@@ -1,34 +1,46 @@
-# scripts/realsense_shared_control.py
+"""The perception layer: the camera, the detector, and the measurements taken from a frame.
+
+Imported by `realsense_vlm_on_change_qwen.py` as `sw`. Nothing here decides what the walker does or
+writes anything a person reads. It produces the measured facts that `hdsg_runtime` then reasons over:
+sector clearances, an object's distance and bearing, the detector's labels mapped onto the ontology,
+and the keyboard and IMU state.
+
+This file also carried a standalone walker prototype until 24 August 2026, 660 lines reachable only
+by running the file directly. It held a second decision policy returning GO, SLOW or STOP, a second
+caption writer producing sentences such as "Going forward as you intended.", its own model client and
+its own display. Nothing imported any of it, and it had drifted: its slow-down threshold was read
+from `depth.metric_bins_m.near`, a presentation band, which is the same fault removed from
+`_multi_near_count` on 23 August. Two decision policies in the file the live system imports invite a
+reader to take the wrong one for what the walker does, and Chapter 3 describes one. Removed. The
+prototype survives in the history and, almost identically, in `scripts/archive/only_realsense.py`.
+"""
+
 from __future__ import annotations
 import ctypes
-import argparse
-import json
 import os
-import sys
 import time
-import math
 import threading
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Optional, Dict, Any, List
-import requests
 
 import cv2
 import numpy as np
 import pyrealsense2 as rs
 import yaml
 from ultralytics import YOLO
-from rapidfuzz import process, fuzz
 
 # ----------------------------- Perf niceties -----------------------------
 try:
+    # Imported for the side effect alone. cuDNN picks the fastest convolution algorithm for a fixed
+    # input size on the first call and reuses it, which the detector benefits from because every
+    # frame is the same shape. A HAS_TORCH flag was set beside it and read nowhere.
     import torch
     torch.backends.cudnn.benchmark = True
-    HAS_TORCH = True
 except Exception:
-    HAS_TORCH = False
+    pass
 
 try:
     cv2.setUseOptimized(True)
@@ -43,9 +55,10 @@ CONFIG_DIR = Path(os.environ.get("SMART_WALKER_CONFIG_DIR", ROOT / "config"))
 PIPELINE_CFG = CONFIG_DIR / "pipeline.yaml"
 ONTOLOGY_CFG = CONFIG_DIR / "ontology.yaml"
 
-ACTIVE_KEY_WINDOW_MS = 150
-PRINT_HOLD_INTERVAL_MS = 250
-IMU_MAX_DRAIN_PER_LOOP = 8  # cap how many motion frames to drain per loop
+# How many IMU samples the capture thread may take from the queue in one pass. The motion stream
+# runs far faster than the frame loop, so without a cap a backlog is drained in full and the loop
+# stalls behind it.
+IMU_MAX_DRAIN_PER_LOOP = 8
 
 
 def load_yaml(p: Path) -> Dict[str, Any]:
@@ -57,9 +70,11 @@ def load_yaml(p: Path) -> Dict[str, Any]:
 
 # ----------------------------- Key Handling ------------------------------
 user32 = ctypes.windll.user32 if os.name == "nt" else None
+# The keys the walker reads. Y, N and P were removed on 24 August 2026: Y and N were the prototype's
+# yes and no confirmation and P its hold-to-print, and nothing has read any of the three since the
+# canonical client replaced that interaction.
 VK = {'W': 0x57, 'A': 0x41, 'S': 0x53, 'D': 0x44,
-      'SPACE': 0x20, 'Q': 0x51, 'P': 0x50,
-      'Y': 0x59, 'N': 0x4E, 'M': 0x4D, 'R': 0x52}
+      'SPACE': 0x20, 'Q': 0x51, 'M': 0x4D, 'R': 0x52}
 
 
 def key_down(vk: int) -> bool:
@@ -70,13 +85,17 @@ def key_down(vk: int) -> bool:
 
 @dataclass
 class IntentState:
+    """What the keyboard has been doing, as the client reads it once per frame.
+
+    A direction is reported as an edge and not as a level: `last_edge_dir` is the last direction
+    tapped and `last_press_ms` says when, and the client treats a changed timestamp as a fresh
+    expression of intent. A `level_dir` holding the direction currently held down sat here until
+    24 August 2026 and was read by nothing, as were `p_is_down` and the yes and no edges.
+    """
+
     last_edge_dir: str = "idle"
     last_press_ms: int = 0
-    level_dir: str = "idle"
-    p_is_down: bool = False
     quit_requested: bool = False
-    yes_edge: bool = False
-    no_edge: bool = False
     more_detail_edge: bool = False
     reassess_edge: bool = False
 
@@ -105,52 +124,41 @@ class KeyListener:
         self.prev[name] = isdn
         return (not was) and isdn
 
+    # The direction keys in the order they settle a tie, and the intent each expresses. Two pressed
+    # within the same tick is a contradiction rather than two requests, so one wins.
+    DIRECTION_KEYS = (("W", "forward"), ("S", "backward"), ("A", "left"), ("D", "right"),
+                      ("SPACE", "idle"))
+
     def _loop(self):
         while not self.stop_evt.is_set():
             now_ms = int(time.time() * 1000)
-
-            # Edge (tap)
-            if self._edge(VK['W'], 'W'):
-                self._set_edge("forward", now_ms)
-            elif self._edge(VK['S'], 'S'):
-                self._set_edge("backward", now_ms)
-            elif self._edge(VK['A'], 'A'):
-                self._set_edge("left", now_ms)
-            elif self._edge(VK['D'], 'D'):
-                self._set_edge("right", now_ms)
-            elif self._edge(VK['SPACE'], 'SPACE'):
-                self._set_edge("idle", now_ms)
-            elif self._edge(VK['Y'], 'Y'):
-                with self.lock:
-                    self.state.yes_edge = True
-            elif self._edge(VK['N'], 'N'):
-                with self.lock:
-                    self.state.no_edge = True
-            elif self._edge(VK['M'], 'M'):
-                with self.lock:
-                    self.state.more_detail_edge = True
-            elif self._edge(VK['R'], 'R'):
-                with self.lock:
-                    self.state.reassess_edge = True
-
-            # Level (held)
-            lvl = "idle"
-            if key_down(VK['W']):
-                lvl = "forward"
-            elif key_down(VK['S']):
-                lvl = "backward"
-            elif key_down(VK['A']):
-                lvl = "left"
-            elif key_down(VK['D']):
-                lvl = "right"
-
+            edges = self.edges()
+            for name, direction in self.DIRECTION_KEYS:
+                if edges[name]:
+                    self._set_edge(direction, now_ms)
+                    break
             with self.lock:
-                self.state.level_dir = lvl
-                self.state.p_is_down = key_down(VK['P'])
-                if self._edge(VK['Q'], 'Q'):
+                # Independent of the direction keys and of each other. Asking for more detail while
+                # expressing an intent is an ordinary thing to do.
+                if edges["M"]:
+                    self.state.more_detail_edge = True
+                if edges["R"]:
+                    self.state.reassess_edge = True
+                if edges["Q"]:
                     self.state.quit_requested = True
-
             time.sleep(self.dt)
+
+    def edges(self) -> Dict[str, bool]:
+        """Which keys have just gone down, reading every one of them.
+
+        `_edge` records the key's previous state as a side effect, so the keys have to be read
+        together. They were tested in a short-circuiting chain until 24 August 2026: a tick in which
+        a direction key fired left every key after it in the chain holding a stale state, and the
+        next press of one was then read as no change and lost. It took a release and a re-press
+        straddling one 8 ms tick, so it cost an occasional button press rather than producing a
+        wrong one.
+        """
+        return {name: self._edge(vk, name) for name, vk in VK.items()}
 
     def _set_edge(self, d, tms):
         with self.lock:
@@ -160,8 +168,6 @@ class KeyListener:
     def snapshot(self) -> IntentState:
         with self.lock:
             snapshot = IntentState(**self.state.__dict__)
-            self.state.yes_edge = False
-            self.state.no_edge = False
             self.state.more_detail_edge = False
             self.state.reassess_edge = False
             return snapshot
@@ -191,9 +197,11 @@ class OntologyMapper:
     Packet that the whole safety argument treats as authoritative. A label the ontology does not
     name is now `unknown_obstacle`, which is what it is.
 
-    A word appearing only in a bucket's `prompts` list yields the bucket and no canonical name, so
-    the detector's own word survives into the caption. Mapping it to the bucket's first canonical,
-    as the previous form did, turned every bench and desk into a chair.
+    A `prompts` list per bucket was read here until 24 August 2026, giving a word the bucket without
+    a canonical name so that the detector's own word survived into the caption. Since the ontology
+    became generated from `model.names` on 22 August 2026 no bucket carries one, and none can: the
+    generator emits `canonical` alone and `--check` fails on a hand edit. The branch could not be
+    reached and the loader read a key no file holds.
 
     The ontology's `not_obstacles` list is read here but not applied by `map_label`, which has no
     way to say "no object". `is_not_obstacle` reports it separately and the detection loop drops the
@@ -203,7 +211,6 @@ class OntologyMapper:
     def __init__(self, ontology_path: Path):
         cfg = load_yaml(ontology_path)
         self.ontology_buckets: dict[str, str] = {}
-        self.prompt_buckets: dict[str, str] = {}
         self.synonyms = {k.lower(): v.lower()
                          for k, v in cfg.get("synonyms_to_canonical", {}).items()}
         self.not_obstacles = {str(name).strip().lower()
@@ -212,8 +219,6 @@ class OntologyMapper:
             ont = bucket["name"]
             for c in bucket.get("canonical", []):
                 self.ontology_buckets[c.lower()] = ont
-            for p in bucket.get("prompts", []):
-                self.prompt_buckets.setdefault(p.lower(), ont)
 
     def is_not_obstacle(self, raw_label: str) -> bool:
         """True where the label names something that cannot be an obstacle on the floor plane.
@@ -231,9 +236,6 @@ class OntologyMapper:
         canonical = self.synonyms.get(s, s)
         if canonical in self.ontology_buckets:
             return Mapped(canonical, self.ontology_buckets[canonical])
-        bucket = self.prompt_buckets.get(s)
-        if bucket:
-            return Mapped(None, bucket)
         return Mapped(None, "unknown_obstacle")
 
 # ----------------------- Detection / Depth helpers ----------------------
@@ -316,7 +318,36 @@ def _median_nonzero(a: np.ndarray) -> Optional[float]:
     return float(np.median(vals))
 
 
-def median_depth_in_box(depth_m: np.ndarray, x1, y1, x2, y2, shrink_ratio=0.06, max_rand_samples=400):
+def median_depth_in_box(depth_m: np.ndarray, x1, y1, x2, y2, shrink_ratio=0.06,
+                        min_coverage: float = 0.0):
+    """The median depth inside a region, or None where the region has no usable reading.
+
+    The region is shrunk by `shrink_ratio` on every side first. An edge picks up whatever lies
+    behind the thing being measured, so the margin is excluded deliberately.
+
+    `min_coverage` is the share of the region that must carry a reading before a measurement is
+    reported. A median does not care how many samples it has, so without a floor a region in which
+    almost nothing could be measured still yields a confident number: in the archived run of
+    22 August 2026 a sector strip of 32,470 pixels carried 21 readings, and the median of those 21,
+    54.65 m, was reported as the clearance and read as CLEAR.
+
+    It defaults to zero, so a caller that has not chosen a floor is unaffected. The sector strips
+    pass `sector.min_measured_fraction`. Object boxes do not, there being seven object detections in
+    the archive, too few to choose a number from.
+
+    Two fallbacks stood below this until 24 August 2026 and both are gone.
+
+    The first read the single centre pixel. It sits inside the shrunk region at any shrink under a
+    half, so it could only be reached once that region was known to hold nothing, and it was then
+    one of those same absent readings. It could not fire.
+
+    The second sampled the unshrunk region, which is to say the margin the shrink had just excluded,
+    and returned its median as the measurement. That one did fire. Over the 1,480 archived frames of
+    22 August 2026 it decided a sector clearance 12 times, returning 8.29 m and 65.535 m among
+    others, and every such reading resolved to CLEAR. Reporting the background as the foreground's
+    distance is worse than reporting nothing, because the sector logic treats an absent reading as
+    not clear and treats a large number as room to move.
+    """
     H, W = depth_m.shape[:2]
     dx, dy = shrink_ratio * (x2 - x1), shrink_ratio * (y2 - y1)
     rx1, ry1, rx2, ry2 = x1 + dx, y1 + dy, x2 - dx, y2 - dy
@@ -324,28 +355,11 @@ def median_depth_in_box(depth_m: np.ndarray, x1, y1, x2, y2, shrink_ratio=0.06, 
     if rx2 <= rx1 or ry2 <= ry1:
         return None
     patch = depth_m[ry1:ry2, rx1:rx2]
-    m = _median_nonzero(patch)
-    if m is not None:
-        return m
-
-    # centre fallback
-    cx, cy = int((x1 + x2) * 0.5), int((y1 + y2) * 0.5)
-    cx = min(W - 1, max(0, cx))
-    cy = min(H - 1, max(0, cy))
-    v = depth_m[cy, cx]
-    if v > 0:
-        return float(v)
-
-    # random nonzero fallback
-    fx1, fy1, fx2, fy2 = _safe_int_bounds(x1, y1, x2, y2, W, H)
-    full = depth_m[fy1:fy2, fx1:fx2]
-    nz = np.transpose(np.nonzero(full))
-    if nz.shape[0] == 0:
-        return None
-    idx = np.random.choice(nz.shape[0], size=min(
-        max_rand_samples, nz.shape[0]), replace=False)
-    samples = full[nz[idx, 0], nz[idx, 1]]
-    return float(np.median(samples)) if samples.size else None
+    if min_coverage > 0.0:
+        measured = float(np.count_nonzero(np.isfinite(patch) & (patch > 0))) / float(patch.size)
+        if measured < min_coverage:
+            return None
+    return _median_nonzero(patch)
 
 
 def median_depth_lower_band(
@@ -356,46 +370,25 @@ def median_depth_lower_band(
     y2,
     band_frac: float = 0.33,
     horiz_shrink: float = 0.06,
-    max_rand_samples: int = 400,
 ) -> Optional[float]:
+    """An object's distance, measured from the bottom band of its box alone.
+
+    The bottom of a detection is where the object meets the floor, or is otherwise its nearest
+    visible part, so measuring there rather than over the whole box gives the shorter and safer
+    estimate. `band_frac` is the share of the box height used, and `horiz_shrink` trims the sides
+    for the reason `median_depth_in_box` shrinks its region.
+
+    A sparse random sample stood below this until 24 August 2026, described as a fallback for a band
+    holding no depth. It could not run: `_median_nonzero` returns None only when the patch has no
+    reading, and the sample then asked the same patch for its readings.
     """
-    Estimate object distance using only the lower portion of the bbox.
-
-    Rationale: the lower band of an object's bbox is typically closer to the
-    ground contact point (or closest visible point to the camera), producing a
-    more conservative and realistic distance estimate for navigation.
-
-    - band_frac: fraction of the bbox height used from the bottom (e.g. 0.33 = bottom third)
-    - horiz_shrink: shrink the band horizontally to avoid edge artifacts
-    """
-    try:
-        H, W = depth_m.shape[:2]
-        # Compute a band covering the bottom band_frac of the bbox
-        bh = max(1.0, float(y2 - y1))
-        band_h = max(1.0, band_frac * bh)
-        by1 = y2 - band_h
-        by2 = y2
-        # Horizontal shrink similar to median_depth_in_box
-        dx = horiz_shrink * (x2 - x1)
-        bx1, by1i, bx2, by2i = _safe_int_bounds(
-            x1 + dx, by1, x2 - dx, by2, W, H)
-        if bx2 <= bx1 or by2i <= by1i:
-            return None
-        patch = depth_m[by1i:by2i, bx1:bx2]
-        m = _median_nonzero(patch)
-        if m is not None:
-            return m
-
-        # If the band is entirely zeros (e.g., missing depth), try a sparse random sample
-        nz = np.transpose(np.nonzero(patch))
-        if nz.shape[0] == 0:
-            return None
-        idx = np.random.choice(nz.shape[0], size=min(
-            max_rand_samples, nz.shape[0]), replace=False)
-        samples = patch[nz[idx, 0], nz[idx, 1]]
-        return float(np.median(samples)) if samples.size else None
-    except Exception:
+    H, W = depth_m.shape[:2]
+    band_h = max(1.0, band_frac * max(1.0, float(y2 - y1)))
+    dx = horiz_shrink * (x2 - x1)
+    bx1, by1i, bx2, by2i = _safe_int_bounds(x1 + dx, y2 - band_h, x2 - dx, y2, W, H)
+    if bx2 <= bx1 or by2i <= by1i:
         return None
+    return _median_nonzero(depth_m[by1i:by2i, bx1:bx2])
 
 # --------------------------- Risk computation ---------------------------
 
@@ -460,71 +453,6 @@ def compute_baseline_risk(facts: dict, cfg: dict) -> dict:
         return {"risk": "caution", "rules_fired": rf}
     return {"risk": "safe", "rules_fired": []}
 
-# --------------------------- Decision & captions ------------------------
-
-
-def sector_for(bearing: str) -> str:
-    return "L" if bearing == "left" else ("R" if bearing == "right" else "C")
-
-
-def arbiter_decision(intent_raw: str, facts: dict, cfg: dict) -> tuple[str, str]:
-    # intent_raw is one of: forward/backward/left/right (we provide effective dir)
-    if facts.get("risk") == "stop":
-        return "STOP", "obstacle ahead"
-    sector = {"forward": "C", "backward": "C",
-              "left": "L", "right": "R"}.get(intent_raw, "C")
-    near_hi = cfg["depth"]["metric_bins_m"]["near"][1]
-    nearest_sector_m = math.inf
-    for o in facts.get("objects", []):
-        dm = o.get("distance_m")
-        if dm is None:
-            continue
-        if sector_for(o.get("bearing", "centre")) != sector:
-            continue
-        nearest_sector_m = min(nearest_sector_m, float(dm))
-    if nearest_sector_m < near_hi:
-        return "SLOW", "nearby obstacle"
-    return "GO", "clear"
-
-
-def _pretty_dir(d: str) -> str:
-    return {"left": "left", "right": "right", "forward": "forward", "backward": "backward"}.get(d, "forward")
-
-
-def make_user_caption(decision: str, intent_dir: str) -> str:
-    dir_word = _pretty_dir(intent_dir)
-    if decision == "GO":
-        return f"Going {dir_word} as you intended."
-    if decision == "SLOW":
-        return f"Please be cautious going {dir_word} as you intended, as there are obstacles."
-    # STOP
-    return "We are stopping as there are obstacles nearby."
-
-
-def draw_overlay(img, objects, risk, user_caption, intent_line, decision):
-    vis = img.copy()
-    color = (0, 255, 0) if decision == "GO" else (
-        (0, 255, 255) if decision == "SLOW" else (0, 0, 255))
-    cv2.rectangle(vis, (0, 0), (vis.shape[1], 90), (0, 0, 0), -1)
-    cv2.putText(vis, f"RISK: {risk.upper()}   DECISION: {decision}", (10, 24),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
-    cv2.putText(vis, intent_line[:100], (10, 48),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2, cv2.LINE_AA)
-    cv2.putText(vis, user_caption[:95], (10, 72),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
-    for o in objects:
-        x1, y1, x2, y2 = map(int, o["bbox_xyxy"])
-        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-        dist_txt = "?" if o["distance_m"] is None else f"{o['distance_m']:.2f}m"
-        role = o.get("ontology_class") or "unknown"
-        base = o.get("display_label") or o.get("raw_label")
-        canon = o.get("canonical_class") or base
-        label = f"{canon} [{role}] {o['conf']:.2f} {o['bearing']} {dist_txt} ({o['distance_bin']})"
-        cv2.putText(vis, label, (x1, max(20, y1-8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
-    cv2.putText(vis, f"Objects: {len(objects)}", (vis.shape[1]-170, 24),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 2, cv2.LINE_AA)
-    return vis
 
 # ------------------------------- Packets --------------------------------
 
@@ -544,239 +472,7 @@ class InferPacket:
     objects: List[Dict[str, Any]]
     hazards: List[int]
 
-# ---------------------- Shared JSON snapshot (threadsafe) ----------------
 
-
-class JsonSnapshot:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.payload: Dict[str, Any] = {}
-
-    def set(self, data: Dict[str, Any]):
-        with self.lock:
-            self.payload = data
-
-    def get(self) -> Dict[str, Any]:
-        with self.lock:
-            return dict(self.payload)
-
-
-def json_streamer(snapshot: JsonSnapshot, stop_evt: threading.Event, hz: float, pretty: bool):
-    if hz <= 0:
-        return
-    period = 1.0 / float(hz)
-    dumps_kwargs = {"ensure_ascii": False}
-    if pretty:
-        dumps_kwargs["indent"] = 2
-    else:
-        dumps_kwargs["separators"] = (",", ":")  # compact NDJSON
-    try:
-        while not stop_evt.is_set():
-            data = snapshot.get()
-            if data:
-                s = json.dumps(data, **dumps_kwargs)
-                if not pretty:
-                    # NDJSON: one line per record
-                    sys.stdout.write(s + "\n")
-                else:
-                    # pretty: add a blank line between updates for readability
-                    sys.stdout.write(s + "\n\n")
-                sys.stdout.flush()
-            time.sleep(period)
-    except Exception as e:
-        print("[json_streamer] ERROR:", repr(e))
-        traceback.print_exc()
-
-# --------------------------- Worker Threads -----------------------------
-
-
-# --------------------------- LLM Integration ----------------------------
-
-
-def _safe_min_distance(objects: List[Dict[str, Any]]) -> Optional[float]:
-    dists = [o.get("distance_m")
-             for o in objects if o.get("distance_m") is not None]
-    if not dists:
-        return None
-    try:
-        return float(min(dists))
-    except Exception:
-        return None
-
-
-def build_scene_summary(payload: Dict[str, Any]) -> str:
-    """Create a compact textual summary for the LLM.
-
-    Keep this short to improve latency and stability.
-    """
-    intent = payload.get("intent", {})
-    eff = intent.get("effective", "idle")
-    objs = payload.get("objects", [])
-    hazards = payload.get("hazards", [])
-    motion = payload.get("motion") or {}
-    yaw = motion.get("yaw_rate_deg_s")
-    accel_g = motion.get("accel_norm_g")
-    nearest = _safe_min_distance(objs)
-    parts = [
-        f"intent: {eff}",
-        f"decision: {payload.get('decision', '')}",
-        f"risk: {payload.get('risk', '')}",
-        f"objects: {len(objs)}",
-        f"hazards: {len(hazards)}",
-    ]
-    if nearest is not None:
-        parts.append(f"nearest: {nearest:.2f}m")
-    if yaw is not None:
-        parts.append(f"yaw_rate: {yaw} deg/s")
-    if accel_g is not None:
-        parts.append(f"accel: {accel_g} g")
-    # Dialog context (if any)
-    dlg = payload.get("dialog") or {}
-    if dlg.get("pending") and dlg.get("proposed_dir"):
-        parts.append(f"ask: take {dlg['proposed_dir']}?")
-    lr = dlg.get("last_reply")
-    if lr:
-        parts.append(f"user_reply: {lr}")
-    return "; ".join(parts)
-
-
-def call_llm_openai(
-    endpoint: str,
-    system_prompt: str,
-    user_content: str,
-    grammar: Optional[str],
-    model_name: str = "qwen2.5-7b-instruct",
-    temperature: float = 0.2,
-    top_p: float = 0.9,
-    max_tokens: int = 128,
-    stop: Optional[List[str]] = None,
-    timeout: int = 30,
-):
-    url = endpoint.rstrip("/") + "/v1/chat/completions"
-    base = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": temperature,
-        "top_p": top_p,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }
-    if stop:
-        base["stop"] = stop
-
-    attempts: List[Dict[str, Any]] = []
-    if grammar is not None:
-        p1 = dict(base)
-        p1["grammar"] = {"type": "gbnf", "value": grammar}
-        attempts.append(p1)
-        p2 = dict(base)
-        p2["grammar"] = grammar
-        attempts.append(p2)
-    attempts.append(dict(base))
-
-    last_err = None
-    for pl in attempts:
-        try:
-            r = requests.post(url, json=pl, timeout=timeout)
-            if r.status_code < 400:
-                j = r.json()
-                return j["choices"][0]["message"]["content"]
-            # Keep trying alternate payload formats if server rejects grammar field
-            last_err = f"{r.status_code} {r.text[:200]}"
-        except Exception as e:
-            last_err = str(e)
-    raise RuntimeError(f"LLM call failed: {last_err}")
-
-
-def llm_worker(snapshot: JsonSnapshot, out_state: Dict[str, Any], out_lock: threading.Lock,
-               stop_evt: threading.Event,
-               hz: float,
-               endpoint: str,
-               system_path: Path,
-               grammar_path: Optional[Path],
-               model_name: str,
-               temperature: float,
-               top_p: float,
-               max_tokens: int,
-               no_grammar: bool):
-    # Rate control
-    period = 1.0 / float(hz) if hz and hz > 0 else 0.5
-
-    # Load prompts/grammar
-    system_prompt = (
-        system_path.read_text(encoding="utf-8")
-        if system_path and system_path.exists()
-        else "You are a helpful assistant. Output JSON."
-    )
-    grammar = None
-    if not no_grammar and grammar_path and grammar_path.exists():
-        grammar = grammar_path.read_text(encoding="utf-8")
-
-    last_payload_ts: Optional[int] = None
-    while not stop_evt.is_set():
-        try:
-            data = snapshot.get()
-            if not data:
-                time.sleep(period)
-                continue
-
-            # Build compact context and invoke the LLM
-            ts = data.get("timestamp_ms")
-            scene = build_scene_summary(data)
-            content = call_llm_openai(
-                endpoint=endpoint,
-                system_prompt=system_prompt,
-                user_content=scene,
-                grammar=grammar,
-                model_name=model_name,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-            )
-
-            # Parse JSON content with a safe fallback
-            try:
-                parsed = json.loads(content)
-            except Exception:
-                parsed = {
-                    "advisory": "caution",
-                    "reason": "_unparsed_",
-                    "suggestion": None,
-                    "escalation": 1,
-                    "speak": "Proceed with caution.",
-                }
-
-            # Safety guard: never contradict STOP from pipeline
-            try:
-                if str((data.get("risk") or "")).lower() == "stop" or str((data.get("decision") or "")).upper() == "STOP":
-                    if parsed.get("advisory") != "stop":
-                        parsed.update({
-                            "advisory": "stop",
-                            "reason": parsed.get("reason") or "Blocked path (safety guard)",
-                            "escalation": max(1, int(parsed.get("escalation", 1))),
-                        })
-            except Exception:
-                pass
-
-            # Only accept responses for the latest snapshot timestamp
-            if ts is None or last_payload_ts is None or int(ts) >= int(last_payload_ts):
-                with out_lock:
-                    out_state.clear()
-                    out_state.update(parsed)
-                    out_state["ts_ms"] = int(time.time() * 1000)
-                    if ts is not None:
-                        out_state["source_ts"] = int(ts)
-                last_payload_ts = int(
-                    ts) if ts is not None else last_payload_ts
-
-        except Exception:
-            # soft-fail and retry
-            pass
-
-        time.sleep(period)
 
 
 @dataclass
@@ -816,6 +512,23 @@ def capture_thread(pipe, align, depth_scale, out_q: Queue, stop_evt: threading.E
                 continue
             color_np = np.asanyarray(c.get_data())
             depth_u16 = np.asanyarray(d.get_data())
+            # A depth pixel holds millimetres, and the sensor has two ways of saying it has no
+            # reading: zero, which every consumer already treats as absent, and the 16-bit ceiling.
+            # The second was read as a distance of 65.535 m until 24 August 2026, which is fifty
+            # times anything the D455f measures and always resolved to CLEAR.
+            #
+            # Measured over the 1,480 archived frames of 22 August 2026: 36 per cent of frames carry
+            # at least one such pixel, and taking the median of a sector strip left 90 of 4,440
+            # sector readings with the wrong status. Every one of the 90 erred the same way, calling
+            # a strip clear when it was constrained or unmeasurable, once reporting clear where the
+            # true clearance was 0.93 m. It also inflated the depth-coverage figure by up to 14
+            # points on the frames where that figure matters most.
+            #
+            # Voided here, where the sensor's numbers become metres, rather than in each consumer:
+            # the sector clearances, the object distances and the coverage figure all read from this
+            # array. A voided pixel is indistinguishable from an unmeasurable one, and the sector
+            # logic already treats a strip it cannot measure as not clear.
+            depth_u16 = np.where(depth_u16 == 65535, 0, depth_u16)
             depth_m = depth_u16.astype(np.float32) * depth_scale
             pkt = FramePacket(color=color_np, depth_m=depth_m,
                               ts_ms=int(time.time()*1000))
@@ -948,401 +661,3 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
         print("[inference_thread] ERROR:", repr(e))
         traceback.print_exc()
 
-# ---------------------------------- Main --------------------------------
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    # COCO, after `yolov8n-oiv7.pt` was tried and reverted on 22 August 2026. Open Images has the
-    # vocabulary COCO lacks, including Stairs, and swapping to it made `hazard` reachable for the
-    # first time. It also stopped finding furniture. Run over the same 1412 recorded frames, COCO
-    # found bed 453 times, tv 294, laptop 243 and chair 69, and Open Images found none of them: its
-    # detections were `Man`, `Human face`, `Clothing` and `Glasses`, and 926 frames of 1412 came
-    # back empty against 349. Open Images nano scores 18.4 mAP against COCO nano's 37.3, spread over
-    # 601 classes instead of 80.
-    #
-    # A caption cannot describe what the detector does not report, so the swap traded the furniture
-    # a walker has to avoid for a hazard class that had never fired in a real run. Section 10.12 of
-    # `HDSG_VERIFIED_GENERATION_POLICY.md` records the measurement. How the hazard class is detected
-    # returns to being open, and is settled by the lab captures rather than by a change of weights.
-    ap.add_argument("--model", default="yolov8n.pt")
-    ap.add_argument("--imgsz", type=int, default=640)
-    ap.add_argument("--conf", type=float, default=0.25)
-    ap.add_argument("--width", type=int, default=640)
-    ap.add_argument("--height", type=int, default=480)
-    ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--print_json_every", type=int, default=0,
-                    help="Legacy: print every N frames (0=off)")
-    ap.add_argument("--json_hz", type=float, default=10.0,
-                    help="If >0, stream JSON to stdout at this rate")
-    ap.add_argument("--json_pretty", action="store_true",
-                    help="Pretty multi-line JSON instead of compact NDJSON")
-    ap.add_argument("--tracker", default="bytetrack.yaml",
-                    help="Ultralytics tracker config (e.g., bytetrack.yaml)")
-    ap.add_argument("--half", action="store_true",
-                    help="Run model in FP16 if CUDA is available")
-    ap.add_argument("--track", action="store_true",
-                    help="Use model.track() (IDs). Default off = predict()")
-    ap.add_argument("--imu", action="store_true",
-                    help="Enable IMU (gyro/accel) ingestion if the device supports it")
-    ap.add_argument("--imu_max_drain", type=int, default=IMU_MAX_DRAIN_PER_LOOP,
-                    help="Max motion frames to drain per loop to update IMU state")
-    ap.add_argument("--imu_yaw_axis", choices=["x", "y", "z"], default="z",
-                    help="Which IMU gyro axis to treat as yaw (depends on camera mounting)")
-    ap.add_argument("--imu_yaw_sign", type=int, choices=[-1, 1], default=1,
-                    help="+1 or -1 to flip yaw direction if needed")
-    # LLM integration
-    ap.add_argument("--llm", action="store_true",
-                    help="Enable LLM advisory via llama.cpp server")
-    ap.add_argument("--llm_endpoint", default="http://localhost:8080",
-                    help="llama.cpp server endpoint")
-    ap.add_argument("--llm_hz", type=float, default=2.0,
-                    help="Call LLM at this rate (Hz)")
-    ap.add_argument("--llm_model_name", default="qwen2.5-7b-instruct",
-                    help="Model name label for server")
-    ap.add_argument("--llm_system", default=str(ROOT / "models" / "llm" /
-                    "qwen2.5-7b-instruct" / "prompt_system.txt"), help="System prompt file path")
-    ap.add_argument("--llm_grammar", default=str(ROOT / "models" / "llm" /
-                    "qwen2.5-7b-instruct" / "grammar.gbnf"), help="GBNF grammar file path")
-    ap.add_argument("--llm_no_grammar", action="store_true",
-                    help="Disable grammar enforcement")
-    ap.add_argument("--llm_max_tokens", type=int, default=128)
-    ap.add_argument("--llm_temperature", type=float, default=0.2)
-    ap.add_argument("--llm_top_p", type=float, default=0.9)
-    args = ap.parse_args()
-
-    cfg = load_yaml(PIPELINE_CFG)
-    mapper = OntologyMapper(ONTOLOGY_CFG)
-
-    # RealSense init (align depth -> color)
-    pipe = rs.pipeline()
-    rs_cfg = rs.config()
-    rs_cfg.enable_stream(rs.stream.color, args.width,
-                         args.height, rs.format.bgr8, args.fps)
-    rs_cfg.enable_stream(rs.stream.depth, args.width,
-                         args.height, rs.format.z16, args.fps)
-    imu_enabled = False
-    if args.imu:
-        try:
-            rs_cfg.enable_stream(rs.stream.gyro)
-            rs_cfg.enable_stream(rs.stream.accel)
-            imu_enabled = True
-        except Exception:
-            imu_enabled = False
-    profile = pipe.start(rs_cfg)
-    depth_scale = float(profile.get_device(
-    ).first_depth_sensor().get_depth_scale())
-    align = rs.align(rs.stream.color)
-    print(f"[smart_walker] depth_scale = {depth_scale:.6f} m/unit")
-    print("Hold W/A/S/D to issue intent. SPACE=idle. P=print JSON. Q=quit.")
-    if imu_enabled:
-        print("IMU enabled: summarizing gyro/accel into JSON motion block.")
-    else:
-        print("IMU disabled or unavailable. Run with --imu on D435i/D455 to enable motion cues.")
-
-    model = YOLO(args.model)
-
-    # Queues & workers
-    cap_q = Queue(maxsize=1)
-    inf_in = Queue(maxsize=1)
-    inf_out = Queue(maxsize=1)
-    stop_evt = threading.Event()
-
-    imu_state = IMUState.create() if imu_enabled else None
-    threading.Thread(target=capture_thread, args=(
-        pipe, align, depth_scale, cap_q, stop_evt, imu_enabled, imu_state, args.imu_max_drain), daemon=True).start()
-    threading.Thread(
-        target=inference_thread,
-        args=(cfg, mapper, model, inf_in, inf_out, stop_evt,
-              args.imgsz, args.conf, (args.half and HAS_TORCH), None,
-              args.track, args.tracker),
-        daemon=True
-    ).start()
-
-    # JSON snapshot + streamer
-    snapshot = JsonSnapshot()
-    threading.Thread(target=json_streamer, args=(
-        snapshot, stop_evt, args.json_hz, args.json_pretty), daemon=True).start()
-
-    # LLM worker state
-    llm_state: Dict[str, Any] = {}
-    llm_lock = threading.Lock()
-    if args.llm:
-        threading.Thread(
-            target=llm_worker,
-            args=(
-                snapshot,
-                llm_state,
-                llm_lock,
-                stop_evt,
-                args.llm_hz,
-                args.llm_endpoint,
-                Path(args.llm_system),
-                Path(args.llm_grammar) if not args.llm_no_grammar else None,
-                args.llm_model_name,
-                args.llm_temperature,
-                args.llm_top_p,
-                args.llm_max_tokens,
-                args.llm_no_grammar,
-            ),
-            daemon=True,
-        ).start()
-
-    WIN = "smart_walker — shared control (robust)"
-    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN, 960, 720)
-
-    kbd = KeyListener(poll_hz=120).start()
-
-    frame_idx = 0
-    last_manual_print_ms = 0
-    last_json_print = -1
-    latest_color = None
-
-    # Persist last known inference + UI state
-    last_objects: List[Dict[str, Any]] = []
-    last_risk: str = "safe"
-    last_decision: str = "GO"
-    last_caption: str = "Going forward as you intended."
-    last_intent_line: str = "Intent (level): idle   |   Intent (edge): idle"
-    last_hazards: List[int] = []
-
-    # remember last non-idle direction for captions when idle
-    last_non_idle_dir: str = "forward"
-
-    # Simple dialog state to support Y/N confirmation
-    dialog = {
-        "pending": False,
-        "question": None,
-        "proposed_dir": None,
-        "since_ms": 0,
-        "last_reply": None,  # 'yes' | 'no' | None
-    }
-
-    def _compute_clear_side(objs: List[Dict[str, Any]]) -> Optional[str]:
-        """Return 'left' or 'right' with more clearance based on nearest object distance."""
-        try:
-            left_near = 0.0
-            right_near = 0.0
-            left_found = False
-            right_found = False
-            for o in objs:
-                d = o.get("distance_m")
-                b = o.get("bearing")
-                if d is None or b is None:
-                    continue
-                side = str(b[0] if isinstance(b, (list, tuple)) else b).lower()
-                if "left" in side:
-                    left_near = d if not left_found else max(left_near, d)
-                    left_found = True
-                elif "right" in side:
-                    right_near = d if not right_found else max(right_near, d)
-                    right_found = True
-            if not left_found and not right_found:
-                return None
-            if not left_found:
-                return "right"
-            if not right_found:
-                return "left"
-            return "left" if left_near >= right_near else "right"
-        except Exception:
-            return None
-
-    try:
-        while True:
-            # UI pump
-            if hasattr(cv2, "pollKey"):
-                cv2.pollKey()
-            else:
-                cv2.waitKey(1)
-
-            # Pull freshest capture → push to inference
-            try:
-                pkt: FramePacket = cap_q.get_nowait()
-                latest_color = pkt.color
-                while not inf_in.empty():
-                    try:
-                        inf_in.get_nowait()
-                    except Empty:
-                        break
-                inf_in.put(pkt)
-            except Empty:
-                pass
-
-            # Keys
-            s = kbd.snapshot()
-            if s.quit_requested:
-                break
-            now_ms = int(time.time() * 1000)
-            active = (now_ms - s.last_press_ms) <= ACTIVE_KEY_WINDOW_MS
-
-            if s.last_edge_dir != "idle":
-                last_non_idle_dir = s.last_edge_dir
-
-            # Choose effective direction (always one of L/R/F/B)
-            intent_for_caption = s.last_edge_dir if active else "idle"
-            effective_dir = intent_for_caption if intent_for_caption != "idle" else last_non_idle_dir
-            intent_line = f"Intent (level): {s.level_dir}   |   Intent (edge): {s.last_edge_dir}"
-
-            # Try to consume a new inference result (non-blocking)
-            got_new = False
-            try:
-                out: InferPacket = inf_out.get_nowait()
-                got_new = True
-
-                facts = {
-                    "frame_id": frame_idx,
-                    "timestamp_ms": out.ts_ms,
-                    "objects": out.objects,
-                    "free_space": {"corridor_min_width_m": None, "nearest_obstacle_m": None},
-                    "hazards": out.hazards,
-                    "uncertainty": {"depth_std": None, "low_light": False},
-                    "source_depth": "rgbd",
-                    "explain": {"rules_fired": [], "min_distance_m": None, "class_counts": {}}
-                }
-
-                r = compute_baseline_risk(facts, cfg)
-                risk = r["risk"]
-                decision, _ = arbiter_decision(
-                    effective_dir, {"risk": risk, **facts}, cfg)
-                caption = make_user_caption(decision, effective_dir)
-
-                # Update persisted state
-                last_objects = out.objects
-                last_hazards = out.hazards
-                last_risk = risk
-                last_decision = decision
-                last_caption = caption
-                last_intent_line = intent_line
-
-            except Empty:
-                pass
-
-            # Dialogue: if user keeps pushing into STOP, propose a side and ask for Y/N
-            try:
-                if active and last_decision.upper() == "STOP" and s.level_dir != "idle":
-                    if not dialog["pending"]:
-                        side = _compute_clear_side(last_objects)
-                        if side is not None:
-                            dialog.update({
-                                "pending": True,
-                                "question": f"Path blocked. Take {side}? [Y/N]",
-                                "proposed_dir": side,
-                                "since_ms": now_ms,
-                                "last_reply": None,
-                            })
-                # Capture Y/N answers (edge)
-                if dialog["pending"] and (s.yes_edge or s.no_edge):
-                    dialog["last_reply"] = "yes" if s.yes_edge else "no"
-                    # Keep pending so LLM can see reply for one cycle; we'll clear it later
-                # Auto-clear stale dialog after 6 seconds without interaction
-                if dialog["pending"] and now_ms - dialog.get("since_ms", now_ms) > 6000:
-                    dialog.update(
-                        {"pending": False, "question": None, "proposed_dir": None, "last_reply": None})
-            except Exception:
-                pass
-
-            # Render with latest known state
-            if latest_color is not None:
-                vis = draw_overlay(
-                    latest_color, last_objects, last_risk, last_caption, intent_line, last_decision)
-                # Optional LLM advisory line
-                if args.llm:
-                    try:
-                        with llm_lock:
-                            adv = llm_state.get("advisory")
-                            reason = llm_state.get("reason")
-                        if adv or reason:
-                            # extend header area
-                            cv2.rectangle(
-                                vis, (0, 90), (vis.shape[1], 120), (0, 0, 0), -1)
-                            txt = f"LLM: {adv or ''} - {reason or ''}"
-                            cv2.putText(
-                                vis, txt[:110], (10, 114), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 220, 255), 2, cv2.LINE_AA)
-                    except Exception:
-                        pass
-                # Dialog prompt line (below LLM)
-                try:
-                    if dialog["pending"] and dialog.get("question"):
-                        cv2.rectangle(
-                            vis, (0, 120), (vis.shape[1], 148), (0, 0, 0), -1)
-                        qtxt = dialog["question"]
-                        if dialog.get("last_reply"):
-                            qtxt += f"  (You pressed {dialog['last_reply'].upper()})"
-                            # clear after showing reply once
-                            dialog.update(
-                                {"pending": False, "question": None, "proposed_dir": None})
-                        cv2.putText(
-                            vis, qtxt[:120], (10, 142), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 255, 180), 2, cv2.LINE_AA)
-                except Exception:
-                    pass
-                cv2.imshow(WIN, vis)
-
-            # --------- Build JSON snapshot every frame (for streamer & optional prints) ----------
-            motion_block = None
-            try:
-                if imu_enabled and imu_state is not None:
-                    with imu_state.lock:
-                        ts_imu = imu_state.ts_ms
-                        if ts_imu > 0:
-                            axis_map = {"x": 0, "y": 1, "z": 2}
-                            yaw_idx = axis_map.get(args.imu_yaw_axis, 2)
-                            yaw_rate_deg_s = float(
-                                args.imu_yaw_sign * imu_state.gyro[yaw_idx] * (180.0 / math.pi))
-                            accel_norm_g = float(
-                                np.linalg.norm(imu_state.accel) / 9.80665)
-                            motion_block = {
-                                "ts_ms": ts_imu,
-                                "yaw_rate_deg_s": round(yaw_rate_deg_s, 2),
-                                "accel_norm_g": round(accel_norm_g, 2),
-                                "gyro_rad_s": [float(imu_state.gyro[0]), float(imu_state.gyro[1]), float(imu_state.gyro[2])],
-                                "accel_m_s2": [float(imu_state.accel[0]), float(imu_state.accel[1]), float(imu_state.accel[2])]
-                            }
-            except Exception:
-                motion_block = None
-
-            payload = {
-                "frame_id": frame_idx,
-                "timestamp_ms": int(time.time() * 1000),
-                "intent": {
-                    "edge": s.last_edge_dir,
-                    "level": s.level_dir,
-                    "active": active,
-                    "effective": effective_dir
-                },
-                "caption": last_caption,
-                "decision": last_decision,
-                "risk": last_risk,
-                "hazards": last_hazards,
-                "objects": last_objects,
-                "motion": motion_block,
-                "llm": (lambda: (llm_state.copy() if args.llm else None))()
-            }
-            # attach dialog state so LLM gets user reply context
-            payload["dialog"] = dialog.copy()
-            snapshot.set(payload)
-
-            # Manual/periodic prints use same pretty/compact style as streamer
-            if s.p_is_down and (now_ms - last_manual_print_ms) >= PRINT_HOLD_INTERVAL_MS:
-                print(json.dumps(payload, indent=2) if args.json_pretty else json.dumps(
-                    payload, separators=(",", ":"), ensure_ascii=False))
-                last_manual_print_ms = now_ms
-            if args.print_json_every > 0 and frame_idx % args.print_json_every == 0 and frame_idx != last_json_print:
-                print(json.dumps(payload, indent=2) if args.json_pretty else json.dumps(
-                    payload, separators=(",", ":"), ensure_ascii=False))
-                last_json_print = frame_idx
-
-            frame_idx += 1
-
-    finally:
-        stop_evt.set()
-        kbd.stop()
-        try:
-            pipe.stop()
-        except:
-            pass
-        cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    main()

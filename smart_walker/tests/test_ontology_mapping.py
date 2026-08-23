@@ -111,6 +111,27 @@ class MapperTests(unittest.TestCase):
     def test_matching_ignores_case(self):
         self.assertEqual("chair", self.mapper.map_label("Chair").ontology_class)
 
+    def test_matching_ignores_surrounding_space(self):
+        self.assertEqual("chair", self.mapper.map_label("  chair  ").ontology_class)
+
+    def test_the_mapper_reads_every_key_the_generator_writes_and_no_others(self):
+        """A reader for a key the generator does not emit is a branch that cannot run.
+
+        The mapper read a `prompts` list per bucket until 24 August 2026, giving a word its bucket
+        without a canonical name. No generated bucket has ever carried one and none can, the
+        generator emitting `canonical` alone and `--check` failing on a hand edit, so the branch was
+        unreachable and the loader read a key no file holds.
+
+        Asserted over the file rather than over the mapper, because the direction that matters is
+        the generator adding a key the mapper then ignores in silence.
+        """
+        import yaml
+
+        ontology = yaml.safe_load((CONFIG / "ontology.yaml").read_text(encoding="utf-8"))
+        keys = {key for bucket in ontology["ontology"] for key in bucket}
+        self.assertEqual({"name", "canonical"}, keys)
+        self.assertEqual({"ontology", "synonyms_to_canonical", "not_obstacles"}, set(ontology))
+
     def test_an_unlisted_label_is_an_unknown_obstacle_and_not_a_guess(self):
         """Approximate matching mapped `stop sign` to `stairs_up`, so the walker stopped for a road
         sign and recorded a staircase. An unrecognised label is now what it is."""

@@ -48,6 +48,9 @@ except ImportError:
 # `valid_depth_fraction` and inside `compute_lane_state`, with nothing comparing them.
 SECTOR_BAND_TOP_FRACTION = 0.55
 SECTOR_BAND_BOTTOM_FRACTION = 0.95
+# The fallback for `sector.min_measured_fraction`, used only where the configuration cannot be read.
+# A strip measured over less of its area than this reports no clearance at all.
+SECTOR_MIN_MEASURED_FRACTION = 0.05
 
 
 _CODE_VERSION: Optional[dict] = None
@@ -873,6 +876,7 @@ def build_fact_packet(
     # the record states the geometry that was used rather than the geometry that was intended.
     sector_band_top_fraction: float = SECTOR_BAND_TOP_FRACTION,
     sector_band_bottom_fraction: float = SECTOR_BAND_BOTTOM_FRACTION,
+    sector_min_measured_fraction: float = SECTOR_MIN_MEASURED_FRACTION,
     sector_left_max_fraction: float = 0.33,
     sector_right_min_fraction: float = 0.66,
     depth_valid_fraction: Optional[float] = None,
@@ -983,6 +987,7 @@ def build_fact_packet(
                 "horizontal_divisions": 3,
                 "left_max_fraction": float(sector_left_max_fraction),
                 "right_min_fraction": float(sector_right_min_fraction),
+                "min_measured_fraction": float(sector_min_measured_fraction),
             },
             "motion_tracking": {
                 "enabled": True,
