@@ -1,16 +1,106 @@
 {
   "schema_version": "hdsg.prompt_packet.v2",
   "routing": {
-    "response_mode": "AUTOMATIC"
+    "prompt_id": "prompt_fixture",
+    "event_id": "evt_fixture",
+    "observation_id": "obs_fixture",
+    "request_id": "AUTO_GUIDANCE",
+    "response_mode": "AUTOMATIC",
+    "prompt_profile_id": "guidance_reason.v1"
   },
-  "image": {},
-  "requirements": [],
-  "permitted_facts": [],
+  "image": {
+    "included": true,
+    "observation_id": "obs_fixture",
+    "rgb_ref": "memory://obs_fixture/rgb",
+    "transform": {
+      "longest_side_px": 448,
+      "preserve_aspect_ratio": true,
+      "encoding": "jpeg",
+      "jpeg_quality": 70
+    }
+  },
+  "requirements": [
+    {
+      "requirement_id": "action_reason",
+      "role": "ACTION_BINDING",
+      "match": "ALL_OF",
+      "fact_ids": [
+        "sector:centre",
+        "sector:left"
+      ]
+    },
+    {
+      "requirement_id": "detail_sector_2",
+      "role": "SCENE_BINDING",
+      "match": "ANY_OF",
+      "fact_ids": [
+        "sector:right"
+      ]
+    }
+  ],
+  "permitted_facts": [
+    {
+      "fact_id": "sector:centre",
+      "fact_type": "SECTOR",
+      "name": "centre sector",
+      "state": "CONSTRAINED",
+      "bearing": null,
+      "grounding": null,
+      "motion_state": null,
+      "supporting_fact_ids": [],
+      "measurement": {
+        "measurement_id": "m:sector:centre:clearance",
+        "unit": "metre",
+        "source_pointer": "/sectors/centre/clearance_m"
+      }
+    },
+    {
+      "fact_id": "sector:left",
+      "fact_type": "SECTOR",
+      "name": "left sector",
+      "state": "CLEAR",
+      "bearing": null,
+      "grounding": null,
+      "motion_state": null,
+      "supporting_fact_ids": [],
+      "measurement": {
+        "measurement_id": "m:sector:left:clearance",
+        "unit": "metre",
+        "source_pointer": "/sectors/left/clearance_m"
+      }
+    },
+    {
+      "fact_id": "sector:right",
+      "fact_type": "SECTOR",
+      "name": "right sector",
+      "state": "BLOCKED",
+      "bearing": null,
+      "grounding": null,
+      "motion_state": null,
+      "supporting_fact_ids": [],
+      "measurement": {
+        "measurement_id": "m:sector:right:clearance",
+        "unit": "metre",
+        "source_pointer": "/sectors/right/clearance_m"
+      }
+    }
+  ],
   "response_constraints": {
     "visual_only_observations_allowed": true,
-    "max_reason_clauses": 4,
-    "max_visual_observations": 2
+    "max_visual_observations": 2,
+    "max_text_chars": null
   },
-  "generation": {},
+  "generation": {
+    "model_id": "qwen3-vl-4b-instruct",
+    "model_hash": "sha256:9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+    "quantisation": "Q4_K_M",
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "max_tokens": 400,
+    "system_prompt_id": "hdsg.composed_caption.v1",
+    "system_prompt_hash": "sha256:a9d82e74c9914b6a6f7c015aecaa9b1938f74f85ee99395bc678cf865ae485f6",
+    "constraint_id": "hdsg.vlm_caption.v1",
+    "constraint_hash": "sha256:02a7cf737ab07ac543e21ff302db3846458a5daeb586693797e89c554b6708e7"
+  },
   "expected_response_schema": "hdsg.vlm_caption.v1"
 }

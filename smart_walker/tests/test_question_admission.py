@@ -9,7 +9,10 @@ tested where it is enforced, in test_composed_gate.py.
 from __future__ import annotations
 
 import json
+import re
 import unittest
+
+import jsonschema
 
 from support import SCHEMAS, fact_packet, sectors  # noqa: E402
 from scripts import hdsg_questions as questions  # noqa: E402
@@ -118,7 +121,6 @@ class TelemetryRecord(unittest.TestCase):
             "  what is   on my left? ", "IN_SCOPE", "ADMISSION_CLASSIFIER", True
         )
         self.assertEqual(record["question_text"], "what is on my left?")
-        self.assertEqual(record["question_chars"], len("what is on my left?"))
         self.assertTrue(record["question_text_sha256"].startswith("sha256:"))
         self.assertTrue(record["reached_generation"])
 
@@ -141,23 +143,50 @@ class TelemetryRecord(unittest.TestCase):
         self.assertNotEqual(record["schema_version"], questions.ROUTE_SCHEMA)
 
     def test_every_stage_the_runtime_names_is_representable(self):
-        """The runtime settles a question at five places and each must produce a valid record.
+        """Each place a question can be settled must produce a record the schema accepts.
 
         Two of them, the disabled channel and the full queue, answered the person and wrote nothing
         at all until 23 August 2026, so a run's records did not account for every question asked.
+
+        The stages are read out of the interactive script rather than listed here. This test did
+        list them, and comparing the schema against a list written beside it is a comparison of two
+        documents that agree by construction. The diagnostic mode wrote `UNCONSTRAINED` from the day
+        it was added and neither the list nor the schema knew, so every question asked with
+        `--unconstrained` produced a record the schema refused, on this field and on `route`.
         """
         schema = json.loads(
             (SCHEMAS / "hdsg.question_record.v1.schema.json").read_text(encoding="utf-8")
         )
-        stages = schema["properties"]["resolved_by"]["enum"]
-        self.assertEqual(sorted(stages), sorted([
-            "ADMISSION_CLASSIFIER", "CHANNEL_DISABLED", "KEYWORD_FILTER",
-            "MEASUREMENT_PRECHECK", "QUEUE_FULL",
-        ]))
-        for stage in stages:
+        stages = set(schema["properties"]["resolved_by"]["enum"])
+        source = (SCHEMAS.parent / "scripts" / "realsense_vlm_on_change_qwen.py").read_text(
+            encoding="utf-8")
+        # The literals passed as `resolved_by`, which the runtime writes at one site each. Comment
+        # lines are dropped first: the comments record what a field used to hold, so scanning them
+        # would report a retired value as still written.
+        code = "\n".join(line for line in source.splitlines()
+                         if not line.lstrip().startswith("#"))
+        written = set(re.findall(
+            r'"(MEASUREMENT_PRECHECK|KEYWORD_FILTER|ADMISSION_CLASSIFIER|CHANNEL_DISABLED'
+            r'|QUEUE_FULL|UNCONSTRAINED[A-Z_]*)"', code))
+        self.assertEqual(set(), written - stages,
+                         "the runtime writes a stage the schema does not admit")
+        self.assertEqual(set(), stages - written,
+                         "the schema admits a stage the runtime never writes")
+        for stage in sorted(stages):
             with self.subTest(stage=stage):
                 record = questions.build_route_record("anything ahead", None, stage, False)
-                self.assertIn(record["resolved_by"], stages)
+                self.assertEqual([], [error.message for error in
+                                      jsonschema.Draft7Validator(schema).iter_errors(record)])
+
+    def test_the_diagnostic_mode_records_no_classification(self):
+        """`--unconstrained` bypasses admission entirely, so nothing classified the question and
+        `route` is null. It carried the literal `UNCONSTRAINED` until 24 August 2026, in a field
+        admitting only the three classifier outcomes or null."""
+        source = (SCHEMAS.parent / "scripts" / "realsense_vlm_on_change_qwen.py").read_text(
+            encoding="utf-8")
+        self.assertIn('return str(raw).strip(), None, "UNCONSTRAINED_DIAGNOSTIC", True, "UNGATED"',
+                      source)
+        self.assertNotIn('"UNCONSTRAINED", "UNCONSTRAINED"', source)
 
 
 class DeterministicFallback(unittest.TestCase):

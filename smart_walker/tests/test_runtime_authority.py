@@ -188,6 +188,37 @@ class IntentTests(unittest.TestCase):
         self.assertIn("condition:no_clear_sector",
                       authority["action_binding"]["accepted_fact_ids"])
 
+    def test_no_intent_withholds_the_decision_rather_than_assuming_forward(self):
+        """An unexpressed intent was read as CENTRE until 24 August 2026, so the whole guidance
+        policy ran against a direction nobody had asked for.
+
+        The scene used here is the one that made it visible: the centre is blocked and the two sides
+        are comparably clear, which is the case the policy cannot settle on its own. It reached
+        AWAITING_SECTOR_CHOICE and listed both sides, and the browser page unhides its two choice
+        buttons from that list, so a person who had pressed nothing was asked to pick a side.
+
+        What is still reported is the measured scene. The advisories and the clear-sector list are
+        what the sector display draws and do not depend on an intent.
+        """
+        authority = hdsg.determine_authority(
+            "NONE", "SAFE", support.sectors(3.20, 0.40, 3.20, ("CLEAR", "BLOCKED", "CLEAR")),
+            sector_choice_tolerance_m=0.10,
+        )
+        self.assertEqual("IDLE_NO_INTENT", authority["interaction_state"])
+        self.assertEqual([], authority["selection_options"])
+        self.assertEqual("NONE", authority["selected_sector"])
+        self.assertEqual(["LEFT", "RIGHT"], authority["clear_sectors"])
+
+    def test_the_same_scene_still_asks_for_a_choice_once_an_intent_is_expressed(self):
+        """The guard on the test above. Withholding the decision when nothing was asked is only
+        correct if the decision still happens when something was."""
+        authority = hdsg.determine_authority(
+            "FORWARD", "SAFE", support.sectors(3.20, 0.40, 3.20, ("CLEAR", "BLOCKED", "CLEAR")),
+            sector_choice_tolerance_m=0.10,
+        )
+        self.assertEqual("AWAITING_SECTOR_CHOICE", authority["interaction_state"])
+        self.assertEqual(["LEFT", "RIGHT"], authority["selection_options"])
+
     def test_every_intent_produces_an_admissible_decision(self):
         for intent in ("FORWARD", "LEFT", "RIGHT", "BACKWARD", "NONE"):
             with self.subTest(intent=intent):

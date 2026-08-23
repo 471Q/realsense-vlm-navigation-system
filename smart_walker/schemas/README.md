@@ -49,25 +49,32 @@ The generative layer is now the composed contract alone. The model writes the ca
 words with the measured values in the prose, declares each value it stated, and the gate compares
 every declaration against the Fact Packet.
 
-## What is retained although nothing emits it
+## What was retained for the archive, and why none of it is retained now
 
-Records archived before 21 August 2026 carry the retired identifiers, and a frozen schema that
-cannot validate its own archive is of no use as evidence. So the set keeps, and documents:
+The set carried three retired things so that records archived before 21 August 2026 would still
+validate, a frozen schema that cannot validate its own archive being of no use as evidence:
 
 - `hdsg.vlm_candidate.v1` in `expected_response_schema`, `constraint_id` and `candidate_schema`;
 - `approved_text_templates` on a permitted fact, as an optional property;
-- seven reason codes that screened a sentence the runtime had written:
+- six reason codes that screened a sentence the runtime had written:
   `RG_CLAUSE_FORMAT_INVALID`, `RG_REQUIRED_FACT_MISSING`, `RG_PLACEHOLDER_INVALID`,
-  `RG_MOVEMENT_FACT_REQUIRED`, `RG_SUBJECT_MISMATCH`, `RG_STATE_EXPRESSION_MISMATCH` and
-  `RG_NEGATION_DETECTED`.
+  `RG_MOVEMENT_FACT_REQUIRED`, `RG_STATE_EXPRESSION_MISMATCH` and `RG_NEGATION_DETECTED`.
+
+Those archives were deleted on 23 August 2026. The first two were removed from the set the same day
+and the six codes on 24 August, the reason for keeping any of them having expired with the records
+they were kept for. The one surviving run is from 22 August and contains no occurrence of any.
+
+A seventh code, `RG_SUBJECT_MISMATCH`, was retired with the six and revived on 22 August 2026 for
+the composed contract, where it means a clause states a number without naming the fact the number
+was declared against. It stays.
 
 `RG_REQUIRED_FACT_MISSING` has no composed equivalent by design. Establishing that free prose
 covered a required fact would need the linguistic inference the architecture excludes from the
 safety boundary, which is the same reason the model declares its values rather than the gate
 parsing them out.
 
-The freeze tests bind this in both directions: every code the runtime can emit must appear in the
-enumeration, and the retired identifier must remain in it.
+The freeze test binds the remaining direction: every code the runtime can emit must appear in the
+enumeration.
 
 ## Two defects found while issuing v4
 

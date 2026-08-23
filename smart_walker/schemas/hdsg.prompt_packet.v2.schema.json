@@ -74,9 +74,6 @@
               "visual_only_observations_allowed": {
                 "const": false
               },
-              "max_reason_clauses": {
-                "const": 3
-              },
               "max_visual_observations": {
                 "const": 0
               }
@@ -104,9 +101,6 @@
               "visual_only_observations_allowed": {
                 "const": true
               },
-              "max_reason_clauses": {
-                "const": 4
-              },
               "max_visual_observations": {
                 "const": 2
               }
@@ -133,9 +127,6 @@
             "properties": {
               "visual_only_observations_allowed": {
                 "const": true
-              },
-              "max_reason_clauses": {
-                "const": 3
               },
               "max_visual_observations": {
                 "const": 2

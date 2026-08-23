@@ -101,7 +101,8 @@ def code_version() -> dict:
         "dirty": None if status is None else bool(status),
     }
     return dict(_CODE_VERSION)
-CONFIGURATION_ID = "hdsg_config.v1"
+
+
 # hdsg.schemas.v5. The record contracts have not changed since v2. v4 removed the templated
 # candidate from the set and v5 revived RG_SUBJECT_MISMATCH for the composed attribution check, so
 # both are changes to what the set describes rather than to the shape of any record. The retired
@@ -154,6 +155,12 @@ REASON_CODE_ORDER = (
     "RG_FACT_REFERENCE_INVALID",
     "RG_MEASUREMENT_REFERENCE_INVALID",
     "RG_OBJECT_REFERENCE_INVALID",
+    # A clause states a number without naming the fact the number was declared against. Placed with
+    # the reference failures because that is what it is: the number resolves and the subject does
+    # not. It was absent from this ordering until 24 August 2026, and an unlisted code sorts last,
+    # so a caption failing this and anything else reported the other as its primary reason. It sorted
+    # behind RG_INTERNAL_GATE_ERROR, which exists to be last.
+    "RG_SUBJECT_MISMATCH",
     # A declared value disagrees with the measurement it names. The central failure mode of the
     # composed-caption design and the one code it adds beyond the frozen v1 enumeration, which
     # hdsg.schemas.v4 must therefore carry.
@@ -627,6 +634,40 @@ def determine_authority(
             "source": source,
             "scoreable": bool(fact_ids),
             "unscoreable_reason": None if fact_ids else "No measured binding fact was available.",
+        }
+
+    if intent == "NONE":
+        # No intent has been expressed, so there is no direction to assess and nothing to decide.
+        #
+        # This branch was absent until 24 August 2026, and the effect was not confined to the record.
+        # An unexpressed intent fell through to the substitution below, which reads a missing intent
+        # as CENTRE, and the whole guidance policy then ran against a direction the person had not
+        # asked for. In front of a blocked centre with two comparably clear sides it reached
+        # AWAITING_SECTOR_CHOICE and listed both, and the browser page unhides its two choice
+        # buttons from that list, so a person who had pressed nothing was asked to pick a side. The
+        # release said the opposite in the same breath, carrying IDLE_NO_INTENT alongside the two
+        # options, which the release schema refuses.
+        #
+        # The scene is still measured and still reported: the advisories and the clear-sector list
+        # are what the sector display draws, and they do not depend on an intent. Only the decision
+        # is withheld.
+        return {
+            "object_advisory": object_advisory,
+            "sector_advisory": sector_advisory,
+            "composite_advisory": scene_advisory,
+            "scene_advisory": scene_advisory,
+            "motion_decision": "STOP",
+            "selected_sector": "NONE",
+            "interaction_state": "IDLE_NO_INTENT",
+            "clear_sectors": clear,
+            "selection_status": "UNAVAILABLE",
+            "selection_options": [],
+            "rules_fired": rules,
+            # Stated as NONE rather than left to be derived. The source is otherwise worked out from
+            # the fact identifiers, and an empty list reads as SECTOR.
+            "scene_binding": binding([], "NONE"),
+            "action_binding": binding([], "NONE"),
+            "scene_fact_required": False,
         }
 
     if intent == "BACKWARD":
@@ -1271,10 +1312,23 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
         intended = next((item for item in action_ids if _fact_from_packet(fact_packet, item) and _fact_from_packet(fact_packet, item).get("status") != "CLEAR"), "sector:centre")
         return f"The {intended.split(':')[1]} sector is blocked, while the left and right sectors are similarly clear.", action_ids, scene_ids, substitutions
     if decision == "STOP" and "condition:no_clear_sector" in action_ids:
-        valid = [sector["clearance_m"] for sector in fact_packet["sectors"].values() if sector.get("clearance_m") is not None]
+        # The widest sector is named by its own measurement, not by a description of its role.
+        #
+        # This recorded `m:sector:best:clearance` until 24 August 2026. No sector is called best, so
+        # the identifier resolved to nothing: the number shown was correct and the evidence behind it
+        # could not be checked against the packet. It also distorted the contribution comparison,
+        # which counts a measurement as named by matching identifiers between conditions. The model
+        # can only declare identifiers it was offered, so the same clearance appeared under two
+        # different names and was counted as two facts.
+        valid = [(name, sector["clearance_m"]) for name, sector in fact_packet["sectors"].items()
+                 if sector.get("clearance_m") is not None]
         if valid:
-            value = max(valid)
-            substitutions.append({"measurement_id": "m:sector:best:clearance", "formatted_value": _format_measurement(value)})
+            # Ties settle on the sector order rather than on dictionary order, so the same scene
+            # names the same sector on every run.
+            widest = max(valid, key=lambda item: (item[1], -SECTORS.index(item[0].upper())))
+            value = widest[1]
+            substitutions.append({"measurement_id": f"m:sector:{widest[0]}:clearance",
+                                  "formatted_value": _format_measurement(value)})
             return f"No forward sector is currently clear. The greatest measured clearance is {_format_measurement(value)}.", action_ids, scene_ids, substitutions
         return "Reliable depth measurements are not currently available.", action_ids, scene_ids, substitutions
 
@@ -1385,7 +1439,13 @@ def build_release(
                 "motion_decision": deterministic["motion_decision"],
                 "selected_sector": deterministic["selected_sector"],
                 "interaction_state": "IDLE_NO_INTENT",
-                "selection_options": deterministic["selection_options"],
+                # Empty because this builder is what declares the state idle, and an idle release
+                # offering a choice contradicts itself. It carried the packet's list until
+                # 24 August 2026, which the release schema refuses. `determine_authority` now
+                # withholds the decision when no intent has been expressed, so the list reaching
+                # here is already empty on the live path; clearing it keeps the two fields agreeing
+                # whatever is passed.
+                "selection_options": [],
                 "action_template_id": action_template_id,
             },
             "content": {
@@ -1411,7 +1471,6 @@ def build_release(
                 "fact_packet_schema": FACT_PACKET_SCHEMA,
                 "prompt_packet_schema": PROMPT_PACKET_SCHEMA,
                 "candidate_schema": CAPTION_SCHEMA,
-                "configuration_id": CONFIGURATION_ID,
                 "code_version": code_version(),
             },
         }
@@ -1490,7 +1549,6 @@ def build_release(
             "fact_packet_schema": FACT_PACKET_SCHEMA,
             "prompt_packet_schema": PROMPT_PACKET_SCHEMA,
             "candidate_schema": CAPTION_SCHEMA,
-            "configuration_id": CONFIGURATION_ID,
             "code_version": code_version(),
         },
     }

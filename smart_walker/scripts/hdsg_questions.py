@@ -347,7 +347,10 @@ def build_route_record(
 
     `resolved_by` records which stage settled the outcome, so the keyword filter's hit rate against
     the classifier can be measured directly. Its values are MEASUREMENT_PRECHECK, KEYWORD_FILTER,
-    ADMISSION_CLASSIFIER, CHANNEL_DISABLED and QUEUE_FULL.
+    ADMISSION_CLASSIFIER, CHANNEL_DISABLED, QUEUE_FULL and UNCONSTRAINED_DIAGNOSTIC.
+
+    `question_chars` stood alongside the text until 24 August 2026. It held `len(question_text)`,
+    which is in the same record, and nothing read it.
 
     `route` carries the classifier's outcome when one was reached and None otherwise, so a record
     with a route of None and a resolved_by of ADMISSION_CLASSIFIER is a reply that could not be read.
@@ -360,7 +363,6 @@ def build_route_record(
         "schema_version": QUESTION_RECORD_SCHEMA,
         "question_text": normalised,
         "question_text_sha256": hdsg.sha256_text(normalised),
-        "question_chars": len(normalised),
         "resolved_by": resolved_by,
         "route": route,
         "reached_generation": bool(reached_generation),

@@ -1,9 +1,49 @@
 {
   "schema_version": "hdsg.release.v2",
-  "identity": {},
-  "authority": {},
-  "content": {},
-  "evidence": {},
+  "identity": {
+    "release_id": "release_fixture",
+    "event_id": "evt_fixture",
+    "observation_id": "obs_fixture",
+    "ticket_id": null,
+    "request_id": "MORE_DETAIL",
+    "released_at_utc": "2026-08-21T00:00:00Z"
+  },
+  "authority": {
+    "scene_advisory": "CAUTION",
+    "motion_decision": "REDIRECT",
+    "selected_sector": "LEFT",
+    "interaction_state": "GUIDANCE_ACTIVE",
+    "selection_options": [],
+    "action_template_id": "redirect_left.v1"
+  },
+  "content": {
+    "action_text": "Change direction and continue towards the left.",
+    "reason_text": "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left.",
+    "interaction_text": null,
+    "additional_detail_texts": [],
+    "caption_text": "Change direction and continue towards the left. The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left."
+  },
+  "evidence": {
+    "action_binding_fact_ids": [
+      "sector:centre",
+      "sector:left"
+    ],
+    "scene_binding_fact_ids": [
+      "sector:centre",
+      "sector:left"
+    ],
+    "measurement_substitutions": [
+      {
+        "measurement_id": "m:sector:centre:clearance",
+        "formatted_value": "1.74 metres"
+      },
+      {
+        "measurement_id": "m:sector:left:clearance",
+        "formatted_value": "3.13 metres"
+      }
+    ],
+    "released_visual_observation_ids": []
+  },
   "verification": {
     "release_mode": "VLM_ACCEPTED",
     "candidate_status": "ACCEPTED",
@@ -11,6 +51,15 @@
     "primary_reason_code": "RG_ACTION_LANGUAGE_DETECTED",
     "reason_codes": [
       "RG_ACTION_LANGUAGE_DETECTED"
-    ]
+    ],
+    "guidance_signature": "CAUTION|REDIRECT|LEFT|sector:right|sector:centre,sector:left|VALID|",
+    "fact_packet_schema": "hdsg.fact_packet.v2",
+    "prompt_packet_schema": "hdsg.prompt_packet.v2",
+    "candidate_schema": "hdsg.vlm_caption.v1",
+    "code_version": {
+      "commit": "0000000000000000000000000000000000000000",
+      "branch": "fixture",
+      "dirty": false
+    }
   }
 }

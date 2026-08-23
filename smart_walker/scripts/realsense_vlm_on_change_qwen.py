@@ -1308,8 +1308,8 @@ def main():
                 )
             except Exception as error:
                 print(f"[hdsg] unconstrained answer failed: {error}")
-                return (f"The model did not answer: {error}", "UNCONSTRAINED", "UNCONSTRAINED", False,
-                        "UNGATED_FAILED")
+                return (f"The model did not answer: {error}", None, "UNCONSTRAINED_DIAGNOSTIC",
+                        False, "UNGATED_FAILED")
             finally:
                 if hasattr(args, "_user_txt_for_payload"):
                     delattr(args, "_user_txt_for_payload")
@@ -1320,7 +1320,13 @@ def main():
                 "raw_response": raw,
                 "gated": False,
             })
-            return str(raw).strip(), "UNCONSTRAINED", "UNCONSTRAINED", True, "UNGATED"
+            # The route is null and the stage is the diagnostic mode itself, because no stage ran:
+            # admission, the permitted-fact packet and the gate are all bypassed here. Both fields
+            # carried the literal "UNCONSTRAINED" until 24 August 2026, which
+            # hdsg.question_record.v1 admits in neither, so every question asked in this mode wrote
+            # a record the frozen schema refused. The mode exists for the evaluation comparison, so
+            # those are exactly the records a claim would rest on.
+            return str(raw).strip(), None, "UNCONSTRAINED_DIAGNOSTIC", True, "UNGATED"
 
         # The admission classifier. Reached unless the keyword filter already recognised a request
         # for a fresh look. The grammar admits three tokens and nothing else, so a crafted question

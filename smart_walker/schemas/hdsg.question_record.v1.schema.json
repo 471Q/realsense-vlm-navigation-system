@@ -9,7 +9,6 @@
     "schema_version",
     "question_text",
     "question_text_sha256",
-    "question_chars",
     "resolved_by",
     "route",
     "reached_generation"
@@ -22,22 +21,23 @@
       "description": "The question as asked, normalised and truncated. Stored in the clear because whether an admission decision or an answer was correct cannot be judged without reading it. The release record, which is the path that reaches the user, carries only the hash."
     },
     "question_text_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "question_chars": {"type": "integer", "minimum": 0, "maximum": 200},
     "resolved_by": {
       "enum": [
         "MEASUREMENT_PRECHECK",
         "KEYWORD_FILTER",
         "ADMISSION_CLASSIFIER",
         "CHANNEL_DISABLED",
-        "QUEUE_FULL"
-      ]
+        "QUEUE_FULL",
+        "UNCONSTRAINED_DIAGNOSTIC"
+      ],
+      "description": "Which stage settled the outcome, so that the keyword filter's hit rate against the classifier can be read off directly. UNCONSTRAINED_DIAGNOSTIC is the --unconstrained mode, where no stage ran: admission, the permitted-fact packet and the gate are all bypassed and the model answers the raw question. It was written as UNCONSTRAINED and admitted here from 24 August 2026, before which every question asked in that mode produced a record this schema refused, on this field and on route."
     },
     "route": {
       "oneOf": [
         {"enum": ["IN_SCOPE", "REASSESS", "OUT_OF_SCOPE"]},
         {"type": "null"}
       ],
-      "description": "The classifier's outcome, or null where no classification was reached. A null route with resolved_by ADMISSION_CLASSIFIER is a reply that could not be read."
+      "description": "The classifier's outcome, or null where no classification was reached. A null route with resolved_by ADMISSION_CLASSIFIER is a reply that could not be read, and with UNCONSTRAINED_DIAGNOSTIC it is a mode in which the classifier is not run at all."
     },
     "reached_generation": {"type": "boolean"}
   }

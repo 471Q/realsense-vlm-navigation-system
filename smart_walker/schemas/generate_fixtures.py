@@ -6,8 +6,13 @@ prompt packet fixture then carried `approved_text_templates` and named the templ
 day after the runtime stopped producing either. Generating the fixtures removes the gap between what
 the frozen set is checked against and what the system writes.
 
-The invalid fixtures stay hand-written. Each exists to be rejected for one specific reason, which is
-a property of the schema rather than of the runtime, and a generator cannot express it.
+The invalid fixtures are generated too, since 24 August 2026, each by injecting one named fault into
+a valid record. Written by hand they were skeletons: the block under test carried the fault and every
+other block was an empty object, so four of the six were refused for dozens of missing required
+properties and the named fault was one line in the noise. A schema loosened to admit that fault would
+have gone on rejecting them, and the freeze test would have gone on passing. Deriving each from a
+record that validates means the only reason it fails is the fault it is named for, which
+`tests/test_schema_fixtures.py` now asserts individually.
 
     python schemas/generate_fixtures.py
 
@@ -17,6 +22,7 @@ file and the manifest digests do not churn.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import sys
@@ -25,9 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts import hdsg_composed as composed  # noqa: E402
+from scripts import hdsg_questions as questions  # noqa: E402
 from scripts import hdsg_runtime as hdsg  # noqa: E402
 
 VALID = Path(__file__).resolve().parent / "fixtures" / "valid"
+INVALID = Path(__file__).resolve().parent / "fixtures" / "invalid"
 CONFIG = ROOT / "config"
 
 # One scene, carried through every record, so the fixtures form a consistent event rather than four
@@ -134,6 +142,62 @@ def freeze(value):
     return value
 
 
+
+def with_object(fact_packet):
+    """The fixture scene holds no detections, and one fault is about an object, so it gets one."""
+    packet = copy.deepcopy(fact_packet)
+    packet["objects"] = hdsg.normalise_objects([{
+        "id": 0, "track_id": 3, "raw_label": "chair", "canonical_class": "chair",
+        "ontology_class": "chair", "conf": 0.8, "bbox_xyxy": [10, 10, 90, 200],
+        "bearing": "LEFT", "distance_m": 1.62,
+        "distance_method": "D455F_LOWER_BBOX_MEDIAN",
+    }])
+    return packet
+
+
+def build_faults(fact_packet, prompt_packet, candidate, release):
+    """One valid record per entry, with exactly one thing wrong with it.
+
+    Each fault is a rule the schema states across fields, which is the kind a loosened schema stops
+    enforcing without any single field looking wrong. The route reply is the exception: it is a
+    two-field object, so a bad value in one field is the whole of it.
+    """
+    stationary = with_object(fact_packet)
+    # A stationary object is not drawn, so claiming both at once contradicts the display rule.
+    stationary["objects"][0]["motion_state"] = "STATIONARY"
+    stationary["objects"][0]["display_bounding_box"] = True
+
+    # The automatic profile permits no visual observations, so allowing them contradicts the mode.
+    automatic_visuals = copy.deepcopy(prompt_packet)
+    automatic_visuals["routing"]["request_id"] = "AUTO_GUIDANCE"
+    automatic_visuals["routing"]["response_mode"] = "AUTOMATIC"
+    automatic_visuals["routing"]["prompt_profile_id"] = "guidance_reason.v1"
+
+    # A released caption cannot be both accepted and carry the reason it was refused for.
+    accepted_fallback_code = copy.deepcopy(release)
+    accepted_fallback_code["verification"]["primary_reason_code"] = "RG_ACTION_LANGUAGE_DETECTED"
+    accepted_fallback_code["verification"]["reason_codes"] = ["RG_ACTION_LANGUAGE_DETECTED"]
+
+    # The caption carries only what the model may write. A motion decision is the runtime's.
+    extra_action = copy.deepcopy(candidate)
+    extra_action["motion_decision"] = "PROCEED"
+
+    unknown_stage = questions.build_route_record(
+        "what is on my left?", "IN_SCOPE", "ADMISSION_CLASSIFIER", True)
+    unknown_stage["resolved_by"] = "TIER_0_KEYWORD"
+
+    unknown_route = {"schema_version": questions.ROUTE_SCHEMA, "route": "OBJECT_QUERY"}
+
+    return (
+        ("hdsg.fact_packet.v2.stationary_box.json", stationary),
+        ("hdsg.prompt_packet.v2.automatic_visuals.json", automatic_visuals),
+        ("hdsg.question_record.v1.unknown_stage.json", unknown_stage),
+        ("hdsg.question_route.v1.unknown_route.json", unknown_route),
+        ("hdsg.release.v2.accepted_fallback_code.json", accepted_fallback_code),
+        ("hdsg.vlm_caption.v1.extra_action.json", extra_action),
+    )
+
+
 def main():
     fact_packet, prompt_packet, candidate, release = build_event()
     written = []
@@ -142,12 +206,23 @@ def main():
         ("hdsg.prompt_packet.v2.json", prompt_packet),
         ("hdsg.vlm_caption.v1.json", candidate),
         ("hdsg.release.v2.json", release),
+        # Generated for the same reason as the rest. It was hand-written, and so still carried
+        # question_chars for a moment after the runtime stopped writing it on 24 August 2026.
+        ("hdsg.question_record.v1.json",
+         questions.build_route_record("what is on my left?", "IN_SCOPE",
+                                      "ADMISSION_CLASSIFIER", True)),
     ):
         path = VALID / name
         path.write_bytes(
             (json.dumps(pin_code_version(freeze(record)), indent=2) + "\n").encode("utf-8"))
         written.append(name)
+    faults = []
+    for name, record in build_faults(fact_packet, prompt_packet, candidate, release):
+        (INVALID / name).write_bytes(
+            (json.dumps(pin_code_version(freeze(record)), indent=2) + chr(10)).encode("utf-8"))
+        faults.append(name)
     print("regenerated: " + ", ".join(written))
+    print("regenerated with one fault each: " + ", ".join(faults))
     print("hdsg.question_route.v1.json is left alone; it is a classifier reply, not a runtime record.")
     print("Then: python scripts/generate_manifest.py")
 

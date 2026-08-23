@@ -2,7 +2,6 @@
   "schema_version": "hdsg.question_record.v1",
   "question_text": "what is on my left?",
   "question_text_sha256": "sha256:71c82266bd1c92cb581feb3a142f65cb8df7b723b6bdbd3c2e04030602046472",
-  "question_chars": 19,
   "resolved_by": "TIER_0_KEYWORD",
   "route": "IN_SCOPE",
   "reached_generation": true

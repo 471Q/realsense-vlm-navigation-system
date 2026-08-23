@@ -43,7 +43,7 @@
       "pattern": "^m:[a-z][a-z0-9._-]*(?::[a-z0-9._-]+)+$"
     },
     "reason_code": {
-      "description": "Six members are no longer reachable: RG_CLAUSE_FORMAT_INVALID, RG_REQUIRED_FACT_MISSING, RG_PLACEHOLDER_INVALID, RG_MOVEMENT_FACT_REQUIRED, RG_STATE_EXPRESSION_MISMATCH and RG_NEGATION_DETECTED. Each screened a controlled sentence chosen from the runtime's own list, and all went with the templated contract on 21 August 2026. RG_REQUIRED_FACT_MISSING has no composed equivalent by design, since establishing that free prose covered a required fact would need the linguistic inference the architecture excludes from the safety boundary. They are retained so releases archived before that date continue to validate; the schema conformance test asserts the reverse direction, that every code the runtime can emit appears here. RG_SUBJECT_MISMATCH was retired with the other six and revived on 22 August 2026 for the composed contract, where it means a clause states a number without naming the fact the number was declared against. The failure is the one the code always named, read off a sentence the model composed rather than one the runtime wrote.",
+      "description": "Every code the runtime can emit, and no others. Six went with the templated contract on 21 August 2026 and were removed from this list on 24 August 2026, their only remaining purpose having been to validate archives that were deleted the day before: RG_CLAUSE_FORMAT_INVALID, RG_REQUIRED_FACT_MISSING, RG_PLACEHOLDER_INVALID, RG_MOVEMENT_FACT_REQUIRED, RG_STATE_EXPRESSION_MISMATCH and RG_NEGATION_DETECTED. Each screened a controlled sentence chosen from the runtime's own list. RG_REQUIRED_FACT_MISSING has no composed equivalent by design, since establishing that free prose covered a required fact would need the linguistic inference the architecture excludes from the safety boundary. RG_SUBJECT_MISMATCH was retired with them and revived on 22 August 2026 for the composed contract, where it means a clause states a number without naming the fact the number was declared against.",
       "enum": [
         "RG_ACCEPTED",
         "RG_NO_INTENT_EXPRESSED",
@@ -56,18 +56,12 @@
         "RG_PARSE_FAILURE",
         "RG_SCHEMA_FAILURE",
         "RG_PROFILE_LIMIT_EXCEEDED",
-        "RG_CLAUSE_FORMAT_INVALID",
-        "RG_REQUIRED_FACT_MISSING",
         "RG_FACT_REFERENCE_INVALID",
         "RG_MEASUREMENT_REFERENCE_INVALID",
-        "RG_PLACEHOLDER_INVALID",
         "RG_OBJECT_REFERENCE_INVALID",
-        "RG_MOVEMENT_FACT_REQUIRED",
         "RG_SUBJECT_MISMATCH",
-        "RG_STATE_EXPRESSION_MISMATCH",
         "RG_STATED_VALUE_MISMATCH",
         "RG_NO_MEASUREMENT_STATED",
-        "RG_NEGATION_DETECTED",
         "RG_ACTION_LANGUAGE_DETECTED",
         "RG_DIRECT_NUMBER_DETECTED",
         "RG_VISIBLE_TEXT_CONTENT_DETECTED",
@@ -278,7 +272,7 @@
         "reason_text": {
           "type": "string",
           "maxLength": 2000,
-          "description": "Empty in the IDLE_NO_INTENT and GENERATION_PENDING states, where no reason has been established or released yet."
+          "description": "Empty in the IDLE_NO_INTENT and GENERATION_PENDING states, where no reason has been established or released yet. On an accepted release this is the model's caption exactly as written, which is why it can differ from the corresponding stretch of caption_text by a leading capital and a closing full stop: the shown text is sentence-cased on the way to the screen and this field is evidence of what the model produced."
         },
         "interaction_text": {
           "type": [
@@ -376,7 +370,6 @@
         "fact_packet_schema",
         "prompt_packet_schema",
         "candidate_schema",
-        "configuration_id",
         "code_version"
       ],
       "properties": {
@@ -422,14 +415,10 @@
           "const": "hdsg.prompt_packet.v2"
         },
         "candidate_schema": {
-          "description": "Retained until 23 August 2026 so that records written before the templated contract was removed on 21 August 2026 would still validate. Those archives were deleted that day; the one surviving run is from 22 August and contains no occurrence of either identifier.",
+          "description": "The contract the caption was validated against, named so that a release can be read back without knowing which schema set was current. The retired second value was removed on 23 August 2026 with the templated contract it belonged to.",
           "enum": [
             "hdsg.vlm_caption.v1"
           ]
-        },
-        "configuration_id": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
         },
         "code_version": {
           "description": "Which code produced the release. Replaced the literal software_version on 23 August 2026; see the same field in hdsg.fact_packet.v2.",

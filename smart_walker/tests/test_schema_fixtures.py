@@ -27,6 +27,24 @@ from support import SCHEMAS  # noqa: F401
 VALID = SCHEMAS / "fixtures" / "valid"
 INVALID = SCHEMAS / "fixtures" / "invalid"
 
+# Where each invalid fixture is expected to fail, as a set of paths into the record. Two of the
+# faults break a rule stated over a pair of fields and so land in both.
+FAULT_LOCATIONS = {
+    # A stationary object is not drawn, so a record claiming both contradicts itself.
+    "hdsg.fact_packet.v2.stationary_box.json": {"objects/0/display_bounding_box"},
+    # The automatic profile permits no visual observations.
+    "hdsg.prompt_packet.v2.automatic_visuals.json": {
+        "response_constraints/visual_only_observations_allowed",
+        "response_constraints/max_visual_observations"},
+    "hdsg.question_record.v1.unknown_stage.json": {"resolved_by"},
+    "hdsg.question_route.v1.unknown_route.json": {"route"},
+    # An accepted release cannot carry the reason a caption was refused.
+    "hdsg.release.v2.accepted_fallback_code.json": {
+        "verification/primary_reason_code", "verification/reason_codes/0"},
+    # The caption carries what the model may write, and a motion decision is the runtime's.
+    "hdsg.vlm_caption.v1.extra_action.json": {"(root)"},
+}
+
 
 def schema_for(fixture_name: str):
     """The schema a fixture belongs to, taken from its own name.
@@ -86,6 +104,32 @@ class FixtureTests(unittest.TestCase):
                     validator(schema_for(fixture.name)).iter_errors(
                         json.loads(fixture.read_text(encoding="utf-8"))),
                     f"{fixture.name} was accepted and exists to be rejected")
+
+    def test_every_invalid_fixture_is_rejected_for_its_own_fault(self):
+        """The test above is satisfied by any failure at all, which is not what a fixture is for.
+
+        Until 24 August 2026 four of the six were skeletons: the block under test carried the fault
+        and every other block was an empty object, so they were refused for dozens of missing
+        required properties. A schema loosened to admit the named fault would have gone on rejecting
+        them, and the test above would have gone on passing while defending nothing.
+
+        Each is now a valid record with one thing wrong with it, and the places it may be wrong are
+        named here. A fault that stops being caught leaves the fixture accepted, and a fault that
+        starts catching something else changes where the error lands.
+        """
+        for fixture in sorted(INVALID.glob("*.json")):
+            with self.subTest(fixture.name):
+                expected = FAULT_LOCATIONS[fixture.name]
+                errors = validator(schema_for(fixture.name)).iter_errors(
+                    json.loads(fixture.read_text(encoding="utf-8")))
+                where = {"/".join(str(part) for part in error.absolute_path) or "(root)"
+                         for error in errors}
+                self.assertEqual(expected, where)
+
+    def test_the_named_faults_cover_the_directory(self):
+        """A guard on the table above. A fixture added without an entry would otherwise raise a
+        KeyError inside a subTest and be reported as an error in one case rather than as a gap."""
+        self.assertEqual(set(FAULT_LOCATIONS), {path.name for path in INVALID.glob("*.json")})
 
 
 if __name__ == "__main__":
