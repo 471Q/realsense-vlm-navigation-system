@@ -86,16 +86,9 @@
     }
   ],
   "response_constraints": {
-    "reason_only": true,
-    "action_instruction_allowed": false,
-    "authoritative_numbers_allowed": false,
-    "measurement_placeholders_required": true,
-    "unlisted_fact_mentions_allowed": false,
     "visual_only_observations_allowed": true,
-    "max_reason_clauses": 4,
     "max_visual_observations": 2,
-    "max_text_chars": null,
-    "language": "en-GB"
+    "max_text_chars": null
   },
   "generation": {
     "model_id": "qwen3-vl-4b-instruct",

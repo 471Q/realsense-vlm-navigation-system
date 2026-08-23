@@ -1197,17 +1197,26 @@ def _finish_prompt_packet(
         },
         "requirements": requirements,
         "permitted_facts": permitted,
+        # Only what something reads. Seven further flags stood here until 23 August 2026 and no code
+        # consulted any of them: the gate applies its own checks and the prompt text is written as
+        # prose in `_COMPOSED_INSTRUCTION` rather than assembled from flags.
+        #
+        # Two of the seven were not merely inert. `authoritative_numbers_allowed: False` and
+        # `measurement_placeholders_required: True` describe the templated contract removed on
+        # 21 August 2026, under which the runtime wrote the sentences and a measurement appeared as a
+        # placeholder the renderer filled in afterwards. The composed contract is the opposite: the
+        # model writes the measured value into the prose and declares it, and no placeholder exists
+        # anywhere in the system. Every prompt packet in the archive therefore states two rules that
+        # were false of the run that wrote them.
+        #
+        # The other five were true of the design and read by nothing: `reason_only`,
+        # `action_instruction_allowed`, `unlisted_fact_mentions_allowed`, `language` "en-GB", and
+        # `max_reason_clauses`, whose name was wrong as well: it held the cap on requirements, and
+        # nothing anywhere counts clauses.
         "response_constraints": {
-            "reason_only": True,
-            "action_instruction_allowed": False,
-            "authoritative_numbers_allowed": False,
-            "measurement_placeholders_required": True,
-            "unlisted_fact_mentions_allowed": False,
             "visual_only_observations_allowed": allow_visuals,
-            "max_reason_clauses": max_reasons,
             "max_visual_observations": max_visuals,
             "max_text_chars": None,
-            "language": "en-GB",
         },
         "generation": {
             "model_id": model_id,

@@ -147,7 +147,7 @@ python scripts\realsense_vlm_on_change_qwen.py `
   --model qwen3-vl-4b-instruct `
   --model_hash sha256:66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a `
   --width 640 --height 480 --fps 15 `
-  --image_size 448 --encode jpeg --jpeg_quality 70 `
+  --image_size 448 --jpeg_quality 70 `
   --det_model yolov8n.pt --imgsz 448 --conf 0.25 --half `
   --process_hz 8 `
   --max_tokens 220 `

@@ -422,9 +422,8 @@
           "const": "hdsg.prompt_packet.v2"
         },
         "candidate_schema": {
-          "description": "hdsg.vlm_candidate.v1 is the retired templated contract, removed from the runtime on 21 August 2026. The value is retained here so records archived before that date continue to validate against the frozen set; nothing emits it.",
+          "description": "Retained until 23 August 2026 so that records written before the templated contract was removed on 21 August 2026 would still validate. Those archives were deleted that day; the one surviving run is from 22 August and contains no occurrence of either identifier.",
           "enum": [
-            "hdsg.vlm_candidate.v1",
             "hdsg.vlm_caption.v1"
           ]
         },

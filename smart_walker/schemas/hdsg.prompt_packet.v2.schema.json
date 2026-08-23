@@ -28,7 +28,8 @@
     "requirements": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 3,
+      "maxItems": 4,
+      "_note": "Four is the ceiling the builder can reach, not a policy choice. A More detail packet admits four clauses, every requirement costs at least one clause, and the two unguarded requirements (action binding and scene binding) cost at most two between them. This said three until 23 August 2026, so a packet naming an action, a scene binding and two further details was refused by the frozen schema although the runtime produced it.",
       "items": {
         "$ref": "#/definitions/requirement"
       }
@@ -47,9 +48,8 @@
       "$ref": "#/definitions/generation"
     },
     "expected_response_schema": {
-      "description": "hdsg.vlm_candidate.v1 is the retired templated contract, removed from the runtime on 21 August 2026. The value is retained here so records archived before that date continue to validate against the frozen set; nothing emits it.",
+      "description": "Names the caption contract, which the grammar and the response schema share: the decoder is constrained by hdsg.vlm_caption.v1.gbnf and the reply is validated against hdsg.vlm_caption.v1. `constraint_hash` is the digest of the grammar file, so the pair records which contract applied and which bytes expressed it. The retired second value was removed on 23 August 2026 with the templated contract it belonged to.",
       "enum": [
-        "hdsg.vlm_candidate.v1",
         "hdsg.vlm_caption.v1"
       ]
     }
@@ -328,11 +328,10 @@
           "pattern": "^[a-z][a-z0-9._-]{1,127}$"
         },
         "role": {
+          "_note": "REDIRECT_INTENDED and REDIRECT_SELECTED were removed on 23 August 2026. Nothing wrote either after the enumeration was frozen in 2da969c, and neither appears in the archive.",
           "enum": [
             "ACTION_BINDING",
             "SCENE_BINDING",
-            "REDIRECT_INTENDED",
-            "REDIRECT_SELECTED",
             "MOVING_OBJECT_ALERT"
           ]
         },
@@ -441,15 +440,6 @@
         },
         "measurement": {
           "$ref": "#/definitions/measurement"
-        },
-        "approved_text_templates": {
-          "description": "The controlled sentences a fact could be described by under the retired templated contract. The runtime stopped emitting this field on 21 August 2026, when the model ceased selecting among sentences the runtime had written. It remains optional here so packets archived before that date continue to validate. Every prompt packet emitted under hdsg.schemas.v1 and v2 carried it while the schema forbade it, and nothing detected the disagreement because the fixture was written by hand to match the schema rather than generated from the runtime.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 512
-          }
         }
       },
       "allOf": [
@@ -571,40 +561,13 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "reason_only",
-        "action_instruction_allowed",
-        "authoritative_numbers_allowed",
-        "measurement_placeholders_required",
-        "unlisted_fact_mentions_allowed",
         "visual_only_observations_allowed",
-        "max_reason_clauses",
         "max_visual_observations",
-        "max_text_chars",
-        "language"
+        "max_text_chars"
       ],
       "properties": {
-        "reason_only": {
-          "const": true
-        },
-        "action_instruction_allowed": {
-          "const": false
-        },
-        "authoritative_numbers_allowed": {
-          "const": false
-        },
-        "measurement_placeholders_required": {
-          "const": true
-        },
-        "unlisted_fact_mentions_allowed": {
-          "const": false
-        },
         "visual_only_observations_allowed": {
           "type": "boolean"
-        },
-        "max_reason_clauses": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 4
         },
         "max_visual_observations": {
           "type": "integer",
@@ -617,11 +580,9 @@
             "null"
           ],
           "minimum": 1
-        },
-        "language": {
-          "const": "en-GB"
         }
-      }
+      },
+      "description": "What the reply may contain, limited to what something reads. Seven further flags stood here until 23 August 2026 and no code consulted any of them: the gate applies its own checks and the prompt text is written as prose rather than assembled from flags. Two were false as well. authoritative_numbers_allowed false and measurement_placeholders_required true describe the templated contract removed on 21 August 2026, under which the runtime wrote the sentences and a measurement appeared as a placeholder the renderer filled in; the composed contract has the model write the measured value into the prose and declare it, and no placeholder exists. Every prompt packet in the archive states two rules that were false of the run that wrote them. The other five were true and inert: reason_only, action_instruction_allowed, unlisted_fact_mentions_allowed, language, and max_reason_clauses, whose name was wrong too, holding the cap on requirements where nothing counts clauses."
     },
     "generation": {
       "type": "object",
@@ -678,9 +639,8 @@
           "pattern": "^sha256:[A-Fa-f0-9]{64}$"
         },
         "constraint_id": {
-          "description": "hdsg.vlm_candidate.v1 is the retired templated contract, removed from the runtime on 21 August 2026. The value is retained here so records archived before that date continue to validate against the frozen set; nothing emits it.",
+          "description": "Retained until 23 August 2026 so that records written before the templated contract was removed on 21 August 2026 would still validate. Those archives were deleted that day; the one surviving run is from 22 August and contains no occurrence of either identifier.",
           "enum": [
-            "hdsg.vlm_candidate.v1",
             "hdsg.vlm_caption.v1"
           ]
         },

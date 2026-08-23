@@ -489,18 +489,48 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
         return None
 
 
+# The encoding the image is sent in. JPEG at the configured quality is what the model receives, and
+# it is not a command line choice. `--encode jpeg|png` stood here until 23 August 2026 and was never
+# given a value other than its default: the two formats are not alternatives to be compared but a
+# preferred encoding and a recovery one, and PNG remains available to `_call_vlm_with_fallbacks` for
+# exactly that purpose.
+PRIMARY_ENCODING = "jpeg"
+
+
+def _image_transform(encoding: str, jpeg_quality: int, longest_side_px: int) -> dict:
+    """How the image sent to the model was prepared, as the prompt packet records it.
+
+    Takes the attempt that succeeded rather than reading the command line, because the two can
+    differ: a rejected image is retried at a lower quality and then at a smaller size, and until
+    23 August 2026 the packet stated the first attempt whichever one the model actually answered.
+
+    `jpeg_quality` is null for a PNG. The frozen schema requires that, and the runtime wrote the
+    configured number under either encoding, so a PNG attempt produced a packet the schema refuses.
+    """
+    return {
+        "longest_side_px": int(longest_side_px),
+        "encoding": str(encoding),
+        "jpeg_quality": int(jpeg_quality) if encoding == "jpeg" else None,
+    }
+
+
 def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
                              system: Optional[str] = None, unconstrained: bool = False,
                              max_tokens: Optional[int] = None,
                              grammar: Optional[str] = None,
-                             timeout_s: Optional[float] = None) -> str:
-    """Try multiple encodings/sizes when server says 'failed to process image'."""
+                             timeout_s: Optional[float] = None) -> tuple[str, dict]:
+    """Try multiple encodings/sizes when server says 'failed to process image'.
+
+    Returns the reply and a description of the attempt that produced it, in the shape the prompt
+    packet's `image.transform` takes. The second value exists because a fallback changes both the
+    encoding and, in the last case, the resolution, and the record must state the image the model
+    answered rather than the one first offered.
+    """
     attempts: list[tuple[str, int, int]] = []  # (fmt, quality, size)
     # Longest side; Qwen3-VL handles non-square input natively
     size0 = int(getattr(args, 'image_size', 448) or 448)
-    # Primary attempt: user choice
-    attempts.append((str(getattr(args, 'encode', 'jpeg') or 'jpeg'), int(
-        getattr(args, 'jpeg_quality', 70) or 70), size0))
+    # Primary attempt: the preferred encoding at the configured quality.
+    attempts.append((PRIMARY_ENCODING, int(getattr(args, 'jpeg_quality', 70) or 70), size0))
     # Fallbacks: png same size, then jpeg qualities, then smaller size png
     attempts.extend([
         ('png', 0, size0),
@@ -527,7 +557,10 @@ def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
             if desc != '':
                 print(
                     f"[vlm_on_change_qwen] VLM accepted image encoding: {desc}")
-            return content
+            if (fmt, q, sz) != attempts[0]:
+                print(f"[vlm_on_change_qwen] the first encoding was refused; the model answered on "
+                      f"{fmt}/q{q}/sz{sz}, and the prompt packet records that.")
+            return content, _image_transform(fmt, q, sz)
         except Exception as e:
             last_err = e
             msg = str(e).lower()
@@ -682,7 +715,6 @@ def main():
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--image_size", type=int, default=448)
     ap.add_argument("--jpeg_quality", type=int, default=70)
-    ap.add_argument("--encode", choices=["jpeg", "png"], default="jpeg")
     ap.add_argument("--process_hz", type=float, default=8.0)
     ap.add_argument("--det_model", default="yolov8n.pt")
     ap.add_argument("--imgsz", type=int, default=640)
@@ -810,10 +842,6 @@ def main():
         raise RuntimeError(
             f"The approved request catalogue could not be loaded: {args.request_catalogue}"
         ) from error
-    if not args.model_hash:
-        args.model_hash = hdsg.sha256_text(f"unverified-model:{args.model}")
-        print("[hdsg] warning: --model_hash was not supplied; telemetry marks a deterministic unverified-model digest.")
-
     # Which weights the endpoint has actually loaded, asked of the endpoint rather than taken from
     # the command line.
     #
@@ -848,6 +876,25 @@ def main():
             endpoint_model_hash = hdsg.sha256_file(_candidate)
         print(f"[hdsg] endpoint model: {endpoint_model_path}")
         print("[hdsg] confirm this is the intended model before treating the run as evidence.")
+
+    # `generation.model_hash` reaches every prompt packet in the run and is read as the fingerprint
+    # of the weights that answered. It is therefore taken from the file the endpoint reported, when
+    # that file is on this machine, in preference to anything supplied on the command line.
+    #
+    # The remaining two cases are worse and are marked as such. A digest given with --model_hash is
+    # an assertion by the person starting the run, and if none is given the field falls back to a
+    # digest of the model's name, which has the shape of a fingerprint and the content of a label.
+    # Both were silent until 23 August 2026. The run header keeps `model_hash` and
+    # `endpoint_model_sha256` separately so the two can still be compared.
+    if endpoint_model_hash:
+        args.model_hash = endpoint_model_hash
+    elif args.model_hash:
+        print("[hdsg] warning: the model digest is the one supplied on the command line. The "
+              "endpoint's own weights were not readable from this machine, so nothing checked it.")
+    else:
+        args.model_hash = hdsg.sha256_text(f"unverified-model:{args.model}")
+        print("[hdsg] warning: no model digest is available. The records carry a digest of the "
+              "model's name, not of its weights, and cannot attribute the run to a set of weights.")
 
     cfg = sw.load_yaml(sw.PIPELINE_CFG)
     mapper = sw.OntologyMapper(sw.ONTOLOGY_CFG)
@@ -1083,6 +1130,10 @@ def main():
 
         Returns the candidate, its reason codes, the raw reply and the scored assertions. Both call
         sites share this so the generation path has one implementation.
+
+        The prompt packet's `image.transform` is corrected here, in place, to the attempt the model
+        actually answered on. Both callers therefore record the packet after this returns, not
+        before, so that a run in which an image was refused and retried says so.
         """
         raw_response: Optional[str] = None
         scored: list[dict] = []
@@ -1092,13 +1143,14 @@ def main():
             args._user_txt_for_payload = hdsg_composed.build_composed_prompt(
                 prompt_packet, fact_packet, fixed_instruction
             )
-            raw_response = _call_vlm_with_fallbacks(
+            raw_response, sent_transform = _call_vlm_with_fallbacks(
                 args.endpoint, image, args,
                 system=composed_system,
                 grammar=caption_grammar_text,
                 max_tokens=args.caption_max_tokens,
                 timeout_s=args.caption_timeout_s,
             )
+            prompt_packet["image"]["transform"].update(sent_transform)
             candidate, codes = hdsg_composed.parse_caption_candidate(raw_response)
             if candidate is None and not str(raw_response).rstrip().endswith("}"):
                 # A grammar-constrained reply that stops before its closing brace ran out of
@@ -1164,6 +1216,12 @@ def main():
                 str(catalogue_entry["fixed_instruction"]),
             )
             responded_ms = hdsg.monotonic_time_ms()
+            # Recorded here rather than when the request was queued, so that `image.transform`
+            # states the encoding and size the model answered on. `generate_candidate` corrects it
+            # in place, and the packet is the same object the main loop built. A request dropped
+            # from a full queue is now not recorded at all, which is the accurate outcome: no
+            # generation was attempted on it.
+            record("restricted_prompt_packet", prompt_packet)
             # Recorded whenever the gate scored anything, which now includes a caption that
             # declared no measurement and named an object the detector had not reported. That case
             # previously wrote nothing at all, so the evidence for it existed only as a reason code
@@ -1240,7 +1298,9 @@ def main():
                 args._user_txt_for_payload = (
                     f"{entry['fixed_instruction']}\n\nThe person asked: {question}"
                 )
-                raw = _call_vlm_with_fallbacks(
+                # The diagnostic mode builds no prompt packet, so the attempt that succeeded has
+                # nowhere to be recorded and is discarded.
+                raw, _ = _call_vlm_with_fallbacks(
                     args.endpoint, request["image"], args,
                     system=str(entry["system_prompt"]),
                     unconstrained=True,
@@ -1328,12 +1388,8 @@ def main():
             system_prompt_id=composed_system_id,
             expected_response_schema=hdsg.CAPTION_SCHEMA,
         )
-        prompt_packet["image"]["transform"].update({
-            "longest_side_px": int(args.image_size),
-            "encoding": str(args.encode),
-            "jpeg_quality": int(args.jpeg_quality),
-        })
-        record("restricted_prompt_packet", prompt_packet)
+        prompt_packet["image"]["transform"].update(
+            _image_transform(PRIMARY_ENCODING, args.jpeg_quality, args.image_size))
 
         candidate, failure_codes, raw_response, scored_assertions = generate_candidate(
             fact_packet, prompt_packet, request["image"],
@@ -1341,6 +1397,9 @@ def main():
                 question, str(answer_entry["fixed_instruction"])
             ),
         )
+        # Recorded after the call, so that `image.transform` states the encoding and size the model
+        # answered on rather than the first one offered. See `generate_candidate`.
+        record("restricted_prompt_packet", prompt_packet)
         if scored_assertions:
             record("declared_assertions", {
                 "event_id": fact_packet["identity"]["event_id"],
@@ -1436,11 +1495,8 @@ def main():
             system_prompt_id=composed_system_id,
             expected_response_schema=hdsg.CAPTION_SCHEMA,
         )
-        prompt_packet["image"]["transform"].update({
-            "longest_side_px": int(args.image_size),
-            "encoding": str(args.encode),
-            "jpeg_quality": int(args.jpeg_quality),
-        })
+        prompt_packet["image"]["transform"].update(
+            _image_transform(PRIMARY_ENCODING, args.jpeg_quality, args.image_size))
         immediate_release_id = allocate("release", "release")
         final_release_id = allocate("release", "release")
         request_key = (
@@ -1451,7 +1507,6 @@ def main():
         with state_lock:
             active_request_key = request_key
         record("full_fact_packet", fact_packet)
-        record("restricted_prompt_packet", prompt_packet)
 
         immediate = hdsg.build_release(
             fact_packet,
