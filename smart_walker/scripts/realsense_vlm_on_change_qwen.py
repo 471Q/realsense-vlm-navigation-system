@@ -256,13 +256,15 @@ def identify_binding_fact(objects: Optional[list], lane_state: Optional[dict],
     advisory to a path that did not produce it would be a fabricated cause, and
     the metric is better served by marking the record unscoreable.
 
-    Two object rules are not threshold tests on the nearest distance and are
-    therefore not fully described by the element returned here. 'caution:multi_near'
-    is caused by a count rather than by any single object, and 'caution:uncertainty'
-    is caused by the low-light flag rather than by an object at all. The rules that
-    fired are recorded alongside this result in advisory_sources, and scoring
-    consults them: when uncertainty is the only rule fired, the causal fact is the
-    uncertainty flag and no object name can be correct.
+    One object rule is not a threshold test on the nearest distance and is therefore
+    not described by the element returned here. 'caution:depth_coverage' is caused by
+    how much of the frame could be measured rather than by an object at all. The rules
+    that fired are recorded alongside this result in advisory_sources, and scoring
+    consults them: when depth coverage is the only rule fired, the causal fact is the
+    coverage measurement and no object name can be correct.
+
+    'caution:multi_near', a count rather than a single object, was the other such rule.
+    It was removed on 24 August 2026.
     """
     result = {
         'kind': 'none',
@@ -2002,7 +2004,6 @@ def main():
                     "free_space": {"corridor_min_width_m": None},
                     "hazards": inference.hazards,
                     "uncertainty": {"valid_depth_fraction": latest_depth_valid_fraction},
-                    "explain": {},
                 }
                 object_result = sw.compute_baseline_risk(baseline_facts, cfg)
                 latest_authority = hdsg.determine_authority(

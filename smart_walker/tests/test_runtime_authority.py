@@ -357,7 +357,7 @@ class DepthCoverageTests(unittest.TestCase):
 
     def facts(self, valid_fraction):
         return {"objects": [], "free_space": {"corridor_min_width_m": None}, "hazards": [],
-                "uncertainty": {"valid_depth_fraction": valid_fraction}, "explain": {}}
+                "uncertainty": {"valid_depth_fraction": valid_fraction}}
 
     def test_coverage_below_the_threshold_raises_caution(self):
         result = self.sw.compute_baseline_risk(self.facts(0.35), self.cfg)
@@ -380,7 +380,7 @@ class DepthCoverageTests(unittest.TestCase):
         cfg = {"risk_rules_baseline": {
             "stop": {"nearest_obstacle_m_lt": 0.7, "corridor_min_width_m_lt": 0.6,
                      "hazard_within_m_lte": 2.0},
-            "caution": {"nearest_obstacle_m_lt": 1.5, "multi_near_objects_count_gte": 2},
+            "caution": {"nearest_obstacle_m_lt": 1.5},
         }}
         result = self.sw.compute_baseline_risk(self.facts(0.05), cfg)
         self.assertEqual("safe", result["risk"])
@@ -522,45 +522,50 @@ class DistanceBandTests(unittest.TestCase):
         self.assertEqual("UNKNOWN", objects[0]["distance_bin"])
 
 
-class MultiNearRuleTests(unittest.TestCase):
-    """The caution rule that fires on two or more objects close by.
+class CrowdedSceneTests(unittest.TestCase):
+    """What the advisory says about a scene holding several objects, none of them close.
 
-    It counted objects whose band was very_close or near until 23 August 2026, which is a rule
-    deciding motion reading a word that describes a measurement rather than the measurement. The
-    count is unchanged: very_close and near together are everything below 1.50 m, which is the
-    caution distance itself. What changed is that the rule now computes its own answer.
+    A `caution:multi_near` rule was removed on 24 August 2026. It raised caution on two or more
+    objects below 1.50 m, which is the distance at which the rule above it already raises caution
+    for one object, so it could add a label to the list but never change the risk level:
+
+        [1.2]        caution  ['caution:nearest_obstacle']
+        [1.2, 1.3]   caution  ['caution:nearest_obstacle', 'caution:multi_near']
+        [2.0, 2.1]   safe     []
+
+    The third row is the case the rule was written for and the one it never covered. Answering it
+    needs a larger distance of its own, which the archive's seven object detections cannot supply.
+    Owned in `LAB_SESSION_CHECKLIST.md`, section D. These tests record what the walker does in the
+    meantime rather than asserting that it is the wanted behaviour.
     """
 
     def setUp(self):
+        import yaml
         from scripts import realsense_shared_control as sw
 
-        self.count = sw._multi_near_count
+        self.sw = sw
+        self.cfg = yaml.safe_load(
+            (support.CONFIG / "pipeline.yaml").read_text(encoding="utf-8"))
 
-    def test_objects_below_the_caution_distance_are_counted(self):
-        objects = [{"distance_m": 0.5}, {"distance_m": 1.2}, {"distance_m": 1.49}]
-        self.assertEqual(3, self.count(objects, 1.5))
+    def risk(self, distances):
+        facts = {"objects": [{"distance_m": d} for d in distances]}
+        return self.sw.compute_baseline_risk(facts, self.cfg)
 
-    def test_an_object_at_the_caution_distance_is_not_counted(self):
-        """The comparison is strictly less than, matching `nearest_obstacle_m_lt`."""
-        self.assertEqual(0, self.count([{"distance_m": 1.5}], 1.5))
+    def test_several_objects_beyond_the_caution_distance_read_as_safe(self):
+        """Four objects between 1.9 and 2.4 m, which is the deferred case."""
+        self.assertEqual("safe", self.risk([2.0, 2.2, 1.9, 2.4])["risk"])
 
-    def test_objects_beyond_the_caution_distance_are_not_counted(self):
-        self.assertEqual(0, self.count([{"distance_m": 2.0}, {"distance_m": 3.4}], 1.5))
+    def test_one_object_inside_the_caution_distance_raises_caution(self):
+        self.assertEqual("caution", self.risk([1.2])["risk"])
 
-    def test_an_object_with_no_measurement_is_not_counted(self):
-        """An object the depth image gave no reading for is not evidence of a crowded scene. It was
-        previously counted whenever its band said so, and a band with no distance behind it is the
-        case this rule should be most careful with."""
-        for value in (None, "near", float("nan")):
-            with self.subTest(value):
-                self.assertEqual(0, self.count([{"distance_m": value}], 1.5))
+    def test_a_second_close_object_adds_nothing(self):
+        """The rule's redundancy, asserted so that reinstating it at the same distance fails here."""
+        self.assertEqual(self.risk([1.2])["rules_fired"], self.risk([1.2, 1.3])["rules_fired"])
 
-    def test_the_bands_are_ignored_entirely(self):
-        """A detector insisting an object is near, with a measurement saying otherwise, no longer
-        moves the walker."""
-        objects = [{"distance_m": 4.0, "distance_bin": "very_close"},
-                   {"distance_m": 5.0, "distance_bin": "near"}]
-        self.assertEqual(0, self.count(objects, 1.5))
+    def test_the_removed_threshold_is_not_in_the_configuration(self):
+        """A threshold no rule reads is worse than no threshold, because it will be believed."""
+        self.assertNotIn("multi_near_objects_count_gte",
+                         self.cfg["risk_rules_baseline"]["caution"])
 
 
 class ConfigurationRecordTests(unittest.TestCase):

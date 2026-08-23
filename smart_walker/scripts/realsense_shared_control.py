@@ -9,8 +9,8 @@ This file also carried a standalone walker prototype until 24 August 2026, 660 l
 by running the file directly. It held a second decision policy returning GO, SLOW or STOP, a second
 caption writer producing sentences such as "Going forward as you intended.", its own model client and
 its own display. Nothing imported any of it, and it had drifted: its slow-down threshold was read
-from `depth.metric_bins_m.near`, a presentation band, which is the same fault removed from
-`_multi_near_count` on 23 August. Two decision policies in the file the live system imports invite a
+from `depth.metric_bins_m.near`, a presentation band, which is the same fault removed from the
+`caution:multi_near` rule on 23 August. Two decision policies in the file the live system imports invite a
 reader to take the wrong one for what the walker does, and Chapter 3 describes one. Removed. The
 prototype survives in the history and, almost identically, in `scripts/archive/only_realsense.py`.
 """
@@ -399,30 +399,31 @@ def _nearest_obstacle_m(objs):
     return min(ds) if ds else None
 
 
-def _multi_near_count(objs, caution_below_m):
-    """Counts objects measured closer than the caution distance.
-
-    Counted as `distance_bin in ("very_close", "near")` until 23 August 2026, which read a word
-    describing the measurement rather than the measurement. The two agree, the label being derived
-    from the same number by `distance_bin_from_m` moments earlier, and the count is unchanged:
-    very_close and near together are everything below 1.50 m, which is the caution distance itself.
-
-    The change is that a rule deciding motion no longer depends on a label it did not compute. It
-    also makes the statement in `pipeline.yaml` true, that the distance bands are for presentation
-    and nothing deciding motion reads them. That statement was written on 23 August 2026 and was
-    false when written, this rule being the exception.
-    """
-    return sum(1 for o in objs
-               if isinstance(o.get("distance_m"), (int, float))
-               and o["distance_m"] < caution_below_m)
-
-
 def compute_baseline_risk(facts: dict, cfg: dict) -> dict:
+    """The scene-level advisory: safe, caution or stop, before any intent is considered.
+
+    Direction is not its business. It answers whether the scene as a whole warrants care, and
+    `determine_authority` then decides what to do about the way the person wants to go.
+
+    Two of its four rules cannot fire as the system stands, both for reasons recorded as open
+    decisions rather than defects. `stop:corridor_narrow` reads a free-space width the only caller
+    passes as None, and `stop:hazard_nearby` needs an object in the hazard bucket, which is empty
+    because the shipped detector cannot emit stairs or a drop-off.
+
+    A fifth rule, `caution:multi_near`, was removed on 24 August 2026. It raised caution on two or
+    more objects below `caution.nearest_obstacle_m_lt`, the same 1.50 m at which one object already
+    raises caution on its own, so it could add a label but never change the risk level. Its intent,
+    that a crowded scene warrants care even when nothing in it is individually close, requires a
+    larger distance of its own, and choosing that distance needs recorded scenes the archive does
+    not yet contain. Owned in `LAB_SESSION_CHECKLIST.md`, section D.
+
+    It wrote `facts["explain"]["min_distance_m"]` into the caller's dictionary until 24 August 2026.
+    Nothing read it, and it obliged every caller to supply an `explain` key for the write to land in.
+    """
     rf = []
     rules = cfg["risk_rules_baseline"]
     objs = facts.get("objects", [])
     nearest_m = _nearest_obstacle_m(objs)
-    facts["explain"]["min_distance_m"] = nearest_m
 
     stop = rules["stop"]
     if nearest_m is not None and nearest_m < stop["nearest_obstacle_m_lt"]:
@@ -439,8 +440,6 @@ def compute_baseline_risk(facts: dict, cfg: dict) -> dict:
     caut = rules["caution"]
     if nearest_m is not None and nearest_m < caut["nearest_obstacle_m_lt"]:
         rf.append("caution:nearest_obstacle")
-    if _multi_near_count(objs, caut["nearest_obstacle_m_lt"]) >= caut["multi_near_objects_count_gte"]:
-        rf.append("caution:multi_near")
     # Depth coverage. `min_valid_depth_fraction` is absent from an older configuration, in which
     # case the rule is skipped rather than defaulted, so replaying an archived run does not apply a
     # rule that run was never subject to.

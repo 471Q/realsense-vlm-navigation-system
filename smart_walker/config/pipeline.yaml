@@ -23,8 +23,7 @@
 
 depth:
   # Distance bands. Every detected object is labelled with the band its measured distance falls in,
-  # so a caption can say "near" without reciting a number, and so `_multi_near_count` can ask how
-  # many objects are close without a second threshold.
+  # so a caption can say "near" without reciting a number.
   #
   # These are presentation bands. They are not safety thresholds, and nothing that decides motion
   # reads them. Two things did, and both were corrected on 23 August 2026.
@@ -35,11 +34,9 @@ depth:
   # means it.
   #
   # The `caution:multi_near` rule counted objects whose band was very_close or near, which is a rule
-  # deciding motion reading a word that describes a measurement rather than the measurement. It now
-  # counts objects measured below `risk_rules_baseline.caution.nearest_obstacle_m_lt`. The count is
-  # unchanged, very_close and near together being everything below 1.50 m, which is that same
-  # distance. The sentence above was written earlier the same day and was false when written; this
-  # rule was the exception to it.
+  # deciding motion reading a word that describes a measurement rather than the measurement. It was
+  # changed to count measurements on 23 August 2026 and removed entirely on 24 August, so the
+  # sentence above now holds without exception. See `risk_rules_baseline.caution` below.
   #
   # The bands are still repeated in `hdsg_runtime.DISTANCE_BANDS_M`, which derives an object's band
   # from its measured distance rather than accepting the label the detector supplied.
@@ -105,7 +102,7 @@ risk_rules_baseline:
   # `determine_authority` as the object side of the decision. The sector side is computed
   # separately from the depth image.
   #
-  # Two of the six rules below cannot fire as the system stands, and are kept because the
+  # Two of the five rules below cannot fire as the system stands, and are kept because the
   # measurements they need are wanted rather than abandoned:
   #   `corridor_min_width_m_lt`  needs free_space above, which is not implemented.
   #   `hazard_within_m_lte`      needs an object mapped to ontology_class hazard. No COCO class
@@ -114,15 +111,22 @@ risk_rules_baseline:
   # Both are owned: see `LAB_SESSION_CHECKLIST.md`, sections A and D. A third, `high_uncertainty`,
   # was replaced by `min_valid_depth_fraction` on 23 August 2026 and now fires.
   #
-  # What runs today is: stop under 0.70 m; caution under 1.50 m, or with two or more objects
-  # nearby, or with less than half the reasoning band carrying a depth reading.
+  # A fourth, `caution:multi_near`, was removed on 24 August 2026 along with its
+  # `multi_near_objects_count_gte: 2`. It counted objects below `caution.nearest_obstacle_m_lt`,
+  # the same 1.50 m at which the rule above it already raises caution for a single object, so no
+  # scene existed in which it changed the risk level. Making it mean what its name says needs a
+  # larger distance of its own, on the order of 2 to 3 m, and that distance cannot be chosen from
+  # an archive holding seven object detections in total. Owned in `LAB_SESSION_CHECKLIST.md`,
+  # section D.
+  #
+  # What runs today is: stop under 0.70 m; caution under 1.50 m, or with less than half the
+  # reasoning band carrying a depth reading.
   stop:
     nearest_obstacle_m_lt: 0.70
     corridor_min_width_m_lt: 0.60
     hazard_within_m_lte: 2.0
   caution:
     nearest_obstacle_m_lt: 1.50
-    multi_near_objects_count_gte: 2
     # Caution when less than half the reasoning band carries a usable depth reading.
     #
     # This replaced `high_uncertainty` on 23 August 2026, which tested a low-light flag written as
