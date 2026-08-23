@@ -1034,7 +1034,7 @@ def main():
     half_flag = bool(args.half and use_cuda)
     threading.Thread(
         target=sw.capture_thread,
-        args=(pipe, align, depth_scale, cap_q, stop_evt, False, None, sw.IMU_MAX_DRAIN_PER_LOOP),
+        args=(pipe, align, depth_scale, cap_q, stop_evt),
         daemon=True,
     ).start()
     threading.Thread(

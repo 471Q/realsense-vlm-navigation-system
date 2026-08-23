@@ -28,7 +28,6 @@ from typing import Optional, Dict, Any, List
 
 import cv2
 import numpy as np
-import pyrealsense2 as rs
 import yaml
 from ultralytics import YOLO
 
@@ -54,12 +53,6 @@ ROOT = SCRIPT_DIR.parent
 CONFIG_DIR = Path(os.environ.get("SMART_WALKER_CONFIG_DIR", ROOT / "config"))
 PIPELINE_CFG = CONFIG_DIR / "pipeline.yaml"
 ONTOLOGY_CFG = CONFIG_DIR / "ontology.yaml"
-
-# How many IMU samples the capture thread may take from the queue in one pass. The motion stream
-# runs far faster than the frame loop, so without a cap a backlog is drained in full and the loop
-# stalls behind it.
-IMU_MAX_DRAIN_PER_LOOP = 8
-
 
 def load_yaml(p: Path) -> Dict[str, Any]:
     if not p.exists():
@@ -474,33 +467,40 @@ class InferPacket:
 
 
 
-@dataclass
-class IMUState:
-    gyro: np.ndarray  # rad/s, shape (3,)
-    accel: np.ndarray  # m/s^2, shape (3,)
-    ts_ms: int
-    lock: threading.Lock
+def _thread_failed(name: str, error: BaseException, stop_evt: threading.Event) -> None:
+    """Ends the run when a sensing thread dies, rather than leaving it apparently running.
 
-    @staticmethod
-    def create():
-        return IMUState(gyro=np.zeros(3, dtype=np.float32),
-                        accel=np.zeros(3, dtype=np.float32),
-                        ts_ms=0,
-                        lock=threading.Lock())
+    Both threads print a traceback and return when they fail. Until 24 August 2026 that was all they
+    did: the stop event was never set, so the main loop went on finding its queue empty, taking the
+    `except Empty` branch and looping. The window stayed up showing the last frame and the keys still
+    answered, while no observation was recorded and no fact packet written. The traceback was the
+    only sign, on a console behind the window with the OpenCV sink and nowhere at all with the web
+    sink.
 
-    def update_from_motion_frame(self, f: rs.frame):
-        md = f.as_motion_frame().get_motion_data()
-        now_ms = int(time.time() * 1000)
-        with self.lock:
-            if f.get_profile().stream_type() == rs.stream.gyro:
-                self.gyro[:] = (md.x, md.y, md.z)
-            elif f.get_profile().stream_type() == rs.stream.accel:
-                self.accel[:] = (md.x, md.y, md.z)
-            self.ts_ms = now_ms
+    The data lost is the same either way, the rest of the session. What changes is whether that is
+    apparent at the time, when the run can be restarted.
+    """
+    print(f"[{name}] the run has stopped: {error!r}")
+    traceback.print_exc()
+    stop_evt.set()
 
 
-def capture_thread(pipe, align, depth_scale, out_q: Queue, stop_evt: threading.Event,
-                   imu_enabled: bool, imu_state: Optional[IMUState], imu_max_drain: int):
+def capture_thread(pipe, align, depth_scale, out_q: Queue, stop_evt: threading.Event):
+    """Reads the camera and publishes the newest colour and depth frame.
+
+    Only the newest frame is kept. The queue is emptied before each put, so a slow detector makes
+    the walker's picture older rather than making it fall further behind with every frame.
+
+    The camera's motion sensor was read here until 24 August 2026, behind an `imu_enabled` flag the
+    only caller passed as False with no state object to write into, so none of it ran in any
+    recorded run. It also worked in a way that would have surprised whoever switched it on: after
+    publishing a frame it polled the camera for further framesets looking for motion readings and
+    discarded every frameset that was not one, colour and depth frames included. Enabling the motion
+    sensor would therefore have started dropping camera frames. Whether the walker's own movement is
+    wanted as a fact is open, and if it is, it belongs in a reader on its own stream rather than
+    inside the frame loop. Recorded in `LAB_SESSION_CHECKLIST.md`, section D. Movement is currently
+    inferred from how the scene changes, by `hdsg_runtime.MotionTracker`, which needs no such sensor.
+    """
     try:
         while not stop_evt.is_set():
             frames = pipe.wait_for_frames()
@@ -537,30 +537,8 @@ def capture_thread(pipe, align, depth_scale, out_q: Queue, stop_evt: threading.E
                 except Empty:
                     break
             out_q.put(pkt)
-
-            # Update IMU from this frameset if motion frames are included
-            if imu_enabled and imu_state is not None:
-                try:
-                    for f in frames:
-                        if f.is_motion_frame():
-                            imu_state.update_from_motion_frame(f)
-                except Exception:
-                    pass
-
-            # Drain a few IMU motion frames if enabled
-            if imu_enabled and imu_state is not None:
-                drained = 0
-                while drained < max(1, imu_max_drain):
-                    fs = pipe.poll_for_frames()
-                    if not fs:
-                        break
-                    for f in fs:
-                        if f.is_motion_frame():
-                            imu_state.update_from_motion_frame(f)
-                            drained += 1
-    except Exception as e:
-        print("[capture_thread] ERROR:", repr(e))
-        traceback.print_exc()
+    except Exception as error:
+        _thread_failed("capture_thread", error, stop_evt)
 
 
 def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_q: Queue,
@@ -656,7 +634,6 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                     break
             out_q.put(out)
 
-    except Exception as e:
-        print("[inference_thread] ERROR:", repr(e))
-        traceback.print_exc()
+    except Exception as error:
+        _thread_failed("inference_thread", error, stop_evt)
 
