@@ -406,8 +406,22 @@ def _nearest_obstacle_m(objs):
     return min(ds) if ds else None
 
 
-def _multi_near_count(objs):
-    return sum(1 for o in objs if o.get("distance_bin") in ("very_close", "near"))
+def _multi_near_count(objs, caution_below_m):
+    """Counts objects measured closer than the caution distance.
+
+    Counted as `distance_bin in ("very_close", "near")` until 23 August 2026, which read a word
+    describing the measurement rather than the measurement. The two agree, the label being derived
+    from the same number by `distance_bin_from_m` moments earlier, and the count is unchanged:
+    very_close and near together are everything below 1.50 m, which is the caution distance itself.
+
+    The change is that a rule deciding motion no longer depends on a label it did not compute. It
+    also makes the statement in `pipeline.yaml` true, that the distance bands are for presentation
+    and nothing deciding motion reads them. That statement was written on 23 August 2026 and was
+    false when written, this rule being the exception.
+    """
+    return sum(1 for o in objs
+               if isinstance(o.get("distance_m"), (int, float))
+               and o["distance_m"] < caution_below_m)
 
 
 def compute_baseline_risk(facts: dict, cfg: dict) -> dict:
@@ -432,7 +446,7 @@ def compute_baseline_risk(facts: dict, cfg: dict) -> dict:
     caut = rules["caution"]
     if nearest_m is not None and nearest_m < caut["nearest_obstacle_m_lt"]:
         rf.append("caution:nearest_obstacle")
-    if _multi_near_count(objs) >= caut["multi_near_objects_count_gte"]:
+    if _multi_near_count(objs, caut["nearest_obstacle_m_lt"]) >= caut["multi_near_objects_count_gte"]:
         rf.append("caution:multi_near")
     # Depth coverage. `min_valid_depth_fraction` is absent from an older configuration, in which
     # case the rule is skipped rather than defaulted, so replaying an archived run does not apply a

@@ -215,9 +215,45 @@ def _bearing(value: Any) -> str:
     return "CENTRE"
 
 
-def _distance_bin(value: Any) -> str:
-    text = str(value or "unknown").upper()
-    return text if text in {"VERY_CLOSE", "NEAR", "MID", "FAR"} else "UNKNOWN"
+# The distance bands, in metres, as half-open intervals. These are the same bands as
+# `depth.metric_bins_m` in `config/pipeline.yaml`, which is where a retune belongs, and
+# `tests/test_runtime_authority.py` fails if the two disagree. They are repeated here rather than
+# read because `normalise_objects` is called before the configuration path reaches the packet
+# builder, and a band a detector supplied is no longer trusted, so this module has to be able to
+# work one out on its own.
+DISTANCE_BANDS_M = (
+    ("VERY_CLOSE", 0.0, 0.7),
+    ("NEAR", 0.7, 1.5),
+    ("MID", 1.5, 3.0),
+    ("FAR", 3.0, 99.0),
+)
+
+
+def _distance_bin(distance: Optional[float]) -> str:
+    """Derives the band from the measured distance.
+
+    The detector's own label was taken and merely checked against a list of permitted words until
+    23 August 2026, so the packet carried a measurement and a word describing that measurement with
+    nothing comparing them. They agreed, both coming from the same reading a moment apart, and no
+    disagreement appears in any archived record. The weakness was structural: a description of a
+    measurement was accepted rather than worked out from it, which is the arrangement that let the
+    ontology drift away from the detector.
+
+    The word reaches the person. It is the object's `state` in the permitted facts, so a caption may
+    describe an object as near, and nothing checked that against the metres.
+
+    A distance outside every band, which the D455f does not produce, is UNKNOWN rather than the band
+    meaning the most room.
+    """
+    if not isinstance(distance, (int, float)) or isinstance(distance, bool):
+        return "UNKNOWN"
+    value = float(distance)
+    if value != value or value in (float("inf"), float("-inf")):
+        return "UNKNOWN"
+    for name, low, high in DISTANCE_BANDS_M:
+        if low <= value < high:
+            return name
+    return "UNKNOWN"
 
 
 @dataclass
@@ -430,7 +466,7 @@ def normalise_objects(objects: Iterable[Mapping[str, Any]]) -> list[dict]:
                 }
                 else ("D455F_LOWER_BBOX_MEDIAN" if distance is not None else None)
             ),
-            "distance_bin": _distance_bin(source.get("distance_bin")) if distance is not None else "UNKNOWN",
+            "distance_bin": _distance_bin(distance),
             "grounding": "YOLO_D455F" if distance is not None else "YOLO_ONLY",
             "is_hazard": str(source.get("ontology_class") or "").lower() == "hazard",
             "motion_state": motion_state,

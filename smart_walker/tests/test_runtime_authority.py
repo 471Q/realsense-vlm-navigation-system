@@ -427,5 +427,110 @@ class ThresholdConsistencyTests(unittest.TestCase):
         self.assertEqual(recorded["sector_clear_at_or_above"], 1.2)
 
 
+class DistanceBandTests(unittest.TestCase):
+    """The band an object is described by, against the distance it was measured at.
+
+    Every object carries a distance in metres and a word for that distance: VERY_CLOSE, NEAR, MID or
+    FAR. The word reaches the person. It is the object's `state` in the permitted facts, so a caption
+    may describe an object as near.
+
+    Until 23 August 2026 the word was whatever the detector supplied, checked only against a list of
+    permitted spellings and never against the metres beside it. The two agreed, both being derived
+    from the same reading moments apart, and no disagreement appears in any archived record. The
+    weakness was structural: a description of a measurement was accepted rather than worked out from
+    it, which is the arrangement that let the ontology drift away from the detector.
+    """
+
+    def setUp(self):
+        import yaml
+
+        self.cfg = yaml.safe_load(
+            (support.CONFIG / "pipeline.yaml").read_text(encoding="utf-8")
+        )
+
+    def test_the_band_edges_agree_with_the_configuration(self):
+        """The bands are stated in `pipeline.yaml`, where a retune belongs, and in
+        `hdsg.DISTANCE_BANDS_M`, because `normalise_objects` runs before the configuration path
+        reaches the packet builder. Two copies of one set of numbers, so they are compared."""
+        configured = self.cfg["depth"]["metric_bins_m"]
+        self.assertEqual(
+            {name.upper(): (float(low), float(high)) for name, (low, high) in configured.items()},
+            {name: (low, high) for name, low, high in hdsg.DISTANCE_BANDS_M},
+        )
+
+    def test_a_distance_receives_the_band_that_contains_it(self):
+        for distance, expected in ((0.0, "VERY_CLOSE"), (0.69, "VERY_CLOSE"), (0.7, "NEAR"),
+                                   (1.49, "NEAR"), (1.5, "MID"), (2.99, "MID"), (3.0, "FAR"),
+                                   (98.9, "FAR")):
+            with self.subTest(distance):
+                self.assertEqual(expected, hdsg._distance_bin(distance))
+
+    def test_a_distance_outside_every_band_is_unknown(self):
+        """A reading below the lowest band or beyond the highest is one the bands have no opinion
+        about. The fallback was FAR, the band meaning the most room, which is the wrong way for a
+        fallback to fail."""
+        for distance in (-0.5, 99.0, 1000.0, None, float("nan"), float("inf"), "1.2", True):
+            with self.subTest(distance):
+                self.assertEqual("UNKNOWN", hdsg._distance_bin(distance))
+
+    def test_the_detectors_own_band_is_ignored(self):
+        """The defect itself. A detector reporting a band that contradicts its own distance no
+        longer has that band believed."""
+        objects = hdsg.normalise_objects([{
+            "id": 0, "track_id": 3, "raw_label": "chair", "canonical_class": "chair",
+            "ontology_class": "chair", "conf": 0.8, "bbox_xyxy": [10, 10, 90, 200],
+            "bearing": "LEFT", "distance_m": 4.20, "distance_bin": "very_close",
+            "distance_method": "D455F_LOWER_BBOX_MEDIAN",
+        }])
+        self.assertEqual(4.20, objects[0]["distance_m"])
+        self.assertEqual("FAR", objects[0]["distance_bin"])
+
+    def test_an_object_with_no_distance_has_no_band(self):
+        objects = support.detected_object(distance_m=None)
+        self.assertIsNone(objects[0]["distance_m"])
+        self.assertEqual("UNKNOWN", objects[0]["distance_bin"])
+
+
+class MultiNearRuleTests(unittest.TestCase):
+    """The caution rule that fires on two or more objects close by.
+
+    It counted objects whose band was very_close or near until 23 August 2026, which is a rule
+    deciding motion reading a word that describes a measurement rather than the measurement. The
+    count is unchanged: very_close and near together are everything below 1.50 m, which is the
+    caution distance itself. What changed is that the rule now computes its own answer.
+    """
+
+    def setUp(self):
+        from scripts import realsense_shared_control as sw
+
+        self.count = sw._multi_near_count
+
+    def test_objects_below_the_caution_distance_are_counted(self):
+        objects = [{"distance_m": 0.5}, {"distance_m": 1.2}, {"distance_m": 1.49}]
+        self.assertEqual(3, self.count(objects, 1.5))
+
+    def test_an_object_at_the_caution_distance_is_not_counted(self):
+        """The comparison is strictly less than, matching `nearest_obstacle_m_lt`."""
+        self.assertEqual(0, self.count([{"distance_m": 1.5}], 1.5))
+
+    def test_objects_beyond_the_caution_distance_are_not_counted(self):
+        self.assertEqual(0, self.count([{"distance_m": 2.0}, {"distance_m": 3.4}], 1.5))
+
+    def test_an_object_with_no_measurement_is_not_counted(self):
+        """An object the depth image gave no reading for is not evidence of a crowded scene. It was
+        previously counted whenever its band said so, and a band with no distance behind it is the
+        case this rule should be most careful with."""
+        for value in (None, "near", float("nan")):
+            with self.subTest(value):
+                self.assertEqual(0, self.count([{"distance_m": value}], 1.5))
+
+    def test_the_bands_are_ignored_entirely(self):
+        """A detector insisting an object is near, with a measurement saying otherwise, no longer
+        moves the walker."""
+        objects = [{"distance_m": 4.0, "distance_bin": "very_close"},
+                   {"distance_m": 5.0, "distance_bin": "near"}]
+        self.assertEqual(0, self.count(objects, 1.5))
+
+
 if __name__ == "__main__":
     unittest.main()

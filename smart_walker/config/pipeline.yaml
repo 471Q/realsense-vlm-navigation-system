@@ -27,10 +27,24 @@ depth:
   # many objects are close without a second threshold.
   #
   # These are presentation bands. They are not safety thresholds, and nothing that decides motion
-  # should read them. `blocked_threshold_m` was taken from `very_close[1]` until 23 August 2026,
-  # which meant retuning a display band for readability moved the distance at which a sector is
-  # declared impassable. It now reads `risk_rules_baseline.stop.nearest_obstacle_m_lt`, which holds
-  # the same number in the place that means it.
+  # reads them. Two things did, and both were corrected on 23 August 2026.
+  #
+  # `blocked_threshold_m` was taken from `very_close[1]`, so retuning a display band for readability
+  # moved the distance at which a sector is declared impassable. It now reads
+  # `risk_rules_baseline.stop.nearest_obstacle_m_lt`, which holds the same number in the place that
+  # means it.
+  #
+  # The `caution:multi_near` rule counted objects whose band was very_close or near, which is a rule
+  # deciding motion reading a word that describes a measurement rather than the measurement. It now
+  # counts objects measured below `risk_rules_baseline.caution.nearest_obstacle_m_lt`. The count is
+  # unchanged, very_close and near together being everything below 1.50 m, which is that same
+  # distance. The sentence above was written earlier the same day and was false when written; this
+  # rule was the exception to it.
+  #
+  # The bands are still repeated in `hdsg_runtime.DISTANCE_BANDS_M`, which derives an object's band
+  # from its measured distance rather than accepting the label the detector supplied.
+  # `tests/test_runtime_authority.py` fails if the two copies disagree, so a retune here that is not
+  # carried across is caught rather than silently ignored.
   metric_bins_m:
     very_close: [0.0, 0.7]
     near:       [0.7, 1.5]

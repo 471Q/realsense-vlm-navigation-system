@@ -777,12 +777,9 @@
           ]
         },
         "motion_decision": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "description": "Null was admitted here until 23 August 2026 and the runtime cannot carry it: the release builder reads ACTION_TEMPLATES[(motion_decision, selected_sector)], a table with no null key, so a packet holding null would raise KeyError rather than degrade. It was never produced. The value was sought 1260 ways across every combination of intent, advisory, response mode, object presence and sector reading, and appears in no archived record, so narrowing the enum invalidates nothing already written.",
+          "type": "string",
           "enum": [
-            null,
             "PROCEED",
             "SLOW",
             "REDIRECT",
