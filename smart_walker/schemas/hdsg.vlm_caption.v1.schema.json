@@ -35,7 +35,7 @@
         "fact_id": {"$ref": "#/definitions/fact_id"},
         "measurement_id": {"$ref": "#/definitions/measurement_id"},
         "stated_value": {
-          "description": "The value as written into the caption, which may be rounded. The release gate compares it with the measurement and rejects the candidate when the two differ by more than the frozen tolerance.",
+          "description": "The value as written into the caption. The release gate compares it against the measurement exactly, on the text as the deterministic renderer would display it, and rejects the candidate on any difference. There is no tolerance and no second acceptable spelling of the same value: a measurement displayed as 1.74 metres is accepted only as 1.74, and both 1.7449 and 1.7 are refused. The tolerance this field described until 23 August 2026 was removed when exactness on the written token replaced it.",
           "type": "number"
         }
       }
@@ -46,7 +46,12 @@
       "required": ["candidate_observation_id", "proposed_label", "bearing"],
       "properties": {
         "candidate_observation_id": {"type": "string", "pattern": "^visual:[1-9][0-9]*$"},
-        "proposed_label": {"type": "string", "pattern": "^[a-z][a-z0-9_ ]{0,47}$"},
+        "proposed_label": {
+          "description": "Lower case words separated by single spaces. The pattern held a character class containing a space until 23 August 2026, which admitted a trailing space and a run of spaces that the grammar has always refused; the label is rendered as prose, so a trailing space reached the display as a double space.",
+          "type": "string",
+          "maxLength": 48,
+          "pattern": "^[a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*$"
+        },
         "bearing": {"enum": ["LEFT", "CENTRE", "RIGHT"]}
       }
     },

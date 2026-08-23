@@ -894,8 +894,13 @@ def main():
         "pipeline_hash": hdsg.sha256_file(sw.PIPELINE_CFG),
         "request_catalogue_hash": hdsg.sha256_file(args.request_catalogue),
         "constraint_hash": constraint_hash,
+        # The grammar is loaded only when questions are answered and the diagnostic mode is off, so
+        # both conditions are named here. Until 23 August 2026 this tested only the first, and a
+        # diagnostic run recorded the digest of a constraint it had never loaded. A run header that
+        # names a constraint not in force is the defect the run header exists to prevent.
         "route_constraint_hash": (
-            hdsg.sha256_file(args.route_grammar) if args.answer_questions else None
+            hdsg.sha256_file(args.route_grammar)
+            if args.answer_questions and not args.unconstrained else None
         ),
         "clear_threshold_m": args.clear_threshold_m,
         "sector_choice_tolerance_m": args.sector_choice_tolerance_m,
@@ -1250,11 +1255,19 @@ def main():
         # can at worst be admitted when it should have been declined, and an admitted question is
         # still answered through the unchanged gate.
         if route is None:
+            # The classifier is safe to point at the person's raw text only because the decoder
+            # cannot emit anything outside the three tokens. Without the constraint the call is an
+            # unconstrained model reading untrusted input, which is a different thing entirely.
+            # `or ""` stood here until 23 August 2026 and would have sent no constraint at all. The
+            # caption path already refuses a missing constraint rather than degrading; this is the
+            # same guarantee and is now held to the same standard.
+            if not route_grammar_text:
+                raise RuntimeError("The approved question admission constraint is unavailable.")
             payload = build_text_chat_payload(
                 model=args.model,
                 system=questions.CLASSIFIER_SYSTEM_PROMPT,
                 text=questions.build_classifier_prompt(question),
-                grammar=route_grammar_text or "",
+                grammar=route_grammar_text,
                 temperature=0.0,
                 top_p=1.0,
                 max_tokens=48,

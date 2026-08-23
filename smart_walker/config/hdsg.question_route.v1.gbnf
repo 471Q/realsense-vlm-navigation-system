@@ -9,8 +9,15 @@
 # routing itself. Only IN_SCOPE reaches the answer pipeline, and it reaches it with the whole Fact
 # Packet, so no token here selects which facts may be described.
 #
-# This artifact is not part of hdsg.schemas.v2. It belongs in the next schema set together with
-# hdsg.question_route.v1 and its fixtures.
+# Frozen in hdsg.schemas.v5 alongside hdsg.question_route.v1 and its two fixtures. Until 23 August
+# 2026 this comment said the artifact awaited a future schema set; all three had already been
+# issued.
+#
+# The three tokens below are written out in four places: this grammar, the enum in
+# hdsg.question_route.v1.schema.json, ROUTES in hdsg_questions, and the fixtures.
+# tests/test_question_route_grammar.py fails if they disagree. Adding an outcome to the code alone
+# leaves it unreachable, since the decoder cannot emit it; adding it here alone has every reply
+# rejected and every question answered as out of scope. Neither shows up as an error.
 
 root ::= ws "{" ws schema-field "," ws route-field ws "}" ws
 

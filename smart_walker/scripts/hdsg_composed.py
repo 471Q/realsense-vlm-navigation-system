@@ -128,6 +128,27 @@ except ImportError:  # invoked as a plain script rather than as part of the pack
 # two definitions.
 CAPTION_SCHEMA = hdsg.CAPTION_SCHEMA
 
+# The two field shapes this module screens a candidate against. Both were written inline as literal
+# expressions until 23 August 2026, which put them beyond reference: the same two rules are stated in
+# `config/hdsg.vlm_caption.v1.gbnf`, which prevents the model writing anything else, and in
+# `schemas/hdsg.vlm_caption.v1.schema.json`, which is the frozen record. Three statements of one rule
+# in three notations, and nothing compared them. Naming them here lets
+# `tests/test_caption_grammar.py` probe all three with the same strings and fail when they disagree.
+#
+# The shapes are not merged, because they cannot be. The grammar is read by the decoder and must be
+# GBNF; the schema is read by a validator and must be JSON Schema; this is applied in Python to a
+# parsed candidate. What can be removed is the silence when they drift apart.
+VISUAL_ID_RE = re.compile(r"visual:[1-9][0-9]*")
+
+# Words separated by single spaces, rather than a class containing a space. `[a-z][a-z0-9_ ]{0,47}`
+# stood here until 23 August 2026 and admitted a trailing space and a run of spaces, which the
+# grammar has always refused. The label is rendered as "Possible <label> is visible in the
+# <bearing>", so a trailing space reached the display as a double space. The decoder could not
+# produce one, which is why it was never seen; the check that is supposed to be authoritative was
+# nonetheless looser than the constraint it backs up. The 48 character limit is kept, the grammar
+# imposing no length of its own.
+PROPOSED_LABEL_RE = re.compile(r"(?=.{1,48}$)[a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*")
+
 # Used when the profile states no limit of its own, which at present is always: no profile sets
 # max_text_chars. Read with an explicit test for absence rather than through `or`, so that a profile
 # setting a limit of zero is honoured instead of being silently replaced by this default.
@@ -951,7 +972,7 @@ def validate_caption_candidate(
         visual_id = visual.get("candidate_observation_id")
         label = visual.get("proposed_label")
         if not isinstance(visual_id, str) \
-                or not re.fullmatch(r"visual:[1-9][0-9]*", visual_id) \
+                or not VISUAL_ID_RE.fullmatch(visual_id) \
                 or visual_id in seen_visual_ids:
             errors.append("RG_SCHEMA_FAILURE")
         seen_visual_ids.add(str(visual_id))
@@ -976,7 +997,7 @@ def validate_caption_candidate(
                 "source": str(visual_id),
                 "outcome": "NAMED_ABSENT_CLASS",
             })
-        if not isinstance(label, str) or not re.fullmatch(r"[a-z][a-z0-9_ ]{0,47}", label):
+        if not isinstance(label, str) or not PROPOSED_LABEL_RE.fullmatch(label):
             errors.append("RG_UNAPPROVED_LANGUAGE_DETECTED")
         elif (hdsg.NUMBER_RE.search(label) or hdsg.ACTION_RE.search(label)
               or hdsg.COMMENTARY_RE.search(label)

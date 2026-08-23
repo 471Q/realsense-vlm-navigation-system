@@ -32,20 +32,40 @@ assertion-value-field ::= "\"stated_value\"" ws ":" ws number
 assertion-fact-field ::= "\"fact_id\"" ws ":" ws "\"" fact-id "\""
 assertion-measurement-field ::= "\"measurement_id\"" ws ":" ws "\"" measurement-id "\""
 
-fact-id ::= "sector:" sector-name | "object:" positive-integer | "condition:" lower-word
-measurement-id ::= "m:sector:" sector-name ":clearance" | "m:object:" positive-integer ":distance"
+# An object is numbered by its tracker identifier where it has one, and by its position in the
+# detection list otherwise, and that position counts from zero. `positive-integer` was used here
+# until 23 August 2026 and excludes zero, so `object:0` was a permitted fact the decoder could not
+# write. The model was then forced onto some other digit, naming an object that either did not exist
+# or was not the one measured, and the caption was rejected as an invalid reference or a value
+# mismatch. No archived run contains `object:0`, the tracker having issued identifiers from one in
+# all of them, so this had never fired; it is reachable whenever the tracker holds no identifier,
+# which is the opening frames of a run and any recovery after it loses every track.
+fact-id ::= "sector:" sector-name | "object:" object-index | "condition:" lower-word
+measurement-id ::= "m:sector:" sector-name ":clearance" | "m:object:" object-index ":distance"
 sector-name ::= "left" | "centre" | "right"
+object-index ::= "0" | [1-9] [0-9]*
 
 visual-array ::= "[" ws "]" | "[" ws visual-observation (ws "," ws visual-observation)* ws "]"
 visual-observation ::= "{" ws visual-id-field "," ws proposed-label-field "," ws bearing-field ws "}"
-visual-id-field ::= "\"candidate_observation_id\"" ws ":" ws "\"visual:" positive-integer "\""
-proposed-label-field ::= "\"proposed_label\"" ws ":" ws "\"" lower-word (" " lower-word)* "\""
-bearing-field ::= "\"bearing\"" ws ":" ws ("\"LEFT\"" | "\"CENTRE\"" | "\"RIGHT\"")
+# The three value shapes are named rather than written inline. Each is stated again in
+# hdsg.vlm_caption.v1.schema.json as a pattern or an enum, and the first two again in hdsg_composed
+# as VISUAL_ID_RE and PROPOSED_LABEL_RE. The three cannot be merged, the decoder requiring GBNF, a
+# validator requiring JSON Schema and the gate applying its check to a parsed object. Naming them
+# here makes them referenceable, and tests/test_caption_grammar.py offers the same strings to all
+# three and fails when they disagree. The language admitted is unchanged by the naming.
+visual-id-field ::= "\"candidate_observation_id\"" ws ":" ws "\"" visual-identifier "\""
+visual-identifier ::= "visual:" positive-integer
+proposed-label-field ::= "\"proposed_label\"" ws ":" ws "\"" proposed-label "\""
+proposed-label ::= lower-word (" " lower-word)*
+bearing-field ::= "\"bearing\"" ws ":" ws "\"" bearing-value "\""
+bearing-value ::= "LEFT" | "CENTRE" | "RIGHT"
 
 lower-word ::= [a-z] [a-z0-9_]*
 number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)?
 json-string ::= "\"" json-char* "\""
 json-char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
 hex ::= [0-9a-fA-F]
+# Retained for the visual observations alone, whose numbering the model invents and which the gate
+# requires to match visual:[1-9][0-9]*. Object indices use `object-index` above and permit zero.
 positive-integer ::= [1-9] [0-9]*
 ws ::= [ \t\n\r]*

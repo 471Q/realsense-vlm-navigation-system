@@ -19,7 +19,12 @@
     "hdsg.question_record.v1 added 23 August 2026. The telemetry record written for each typed question previously stamped itself hdsg.question_route.v1, the schema of the classifier's two-field reply, and failed validation against it. The reply schema is unchanged in shape; its enumeration went from eight topic tokens to three admission tokens when topic routing was withdrawn the same day, which is why its digest and the grammar's have moved.",
     "observation.depth_valid_fraction added 23 August 2026, optional so archives recorded before that date still validate. It replaces a low-light flag that was written as False on every frame; the share of the reasoning band carrying a usable depth reading separated the backlit staircase captures from ordinary room frames where mean brightness did not, the backlit frames being the brighter of the two.",
     "The request catalogue's recorded digest was reissued on 23 August 2026 without a schema-set bump. The edit touched only two _note fields, which no code reads: the question_answer note was cut from five sentences of withdrawn-feature history to the one fact a maintainer cannot get from the code, and the unconstrained_diagnostic note was corrected to say that the mode retains its safety system prompt and therefore measures the architecture against prompting alone rather than against a bare model. No prompt text, instruction or identifier changed, so no run's behaviour differs across the two digests. Provenance does not rest on this manifest in any case: the runtime hashes the catalogue itself into request_catalogue_hash on every run.",
-    "The `enabled` flag was removed from the three request profiles on 23 August 2026, and the digest reissued again. It was never set false in any revision of the catalogue, nothing wrote it, and the two blocks added later never carried it, so it described a capability the system did not have. Channels are switched with --answer_questions and --unconstrained, which the run header records. The startup check was extended in the same commit to cover the whole file rather than the three request profiles alone, and was extracted from main so that it can be tested; it could not be before, being one branch inside a function that opens a camera."
+    "The `enabled` flag was removed from the three request profiles on 23 August 2026, and the digest reissued again. It was never set false in any revision of the catalogue, nothing wrote it, and the two blocks added later never carried it, so it described a capability the system did not have. Channels are switched with --answer_questions and --unconstrained, which the run header records. The startup check was extended in the same commit to cover the whole file rather than the three request profiles alone, and was extracted from main so that it can be tested; it could not be before, being one branch inside a function that opens a camera.",
+    "The admission grammar's digest was reissued on 23 August 2026 for a comment change alone. Its closing comment had said the artifact awaited a future schema set; the grammar, the schema and both fixtures had already been issued in v5. The replacement records where the three outcome tokens are written and that tests/test_question_route_grammar.py fails if the four copies disagree. No rule changed, so the language the decoder admits is identical across the two digests.",
+    "The caption grammar admitted no object numbered zero, and the runtime numbers a detection the tracker holds no identifier for by its position in the list, counting from zero. `object:0` was therefore a permitted fact the decoder could not write: the model was forced onto another digit, naming an object that either did not exist or was not the one measured, and the caption was rejected as an invalid reference or a value mismatch with the reason code blaming the model. No archived run contains object:0, the tracker having issued identifiers from one throughout, so it had never fired; it is reachable in the opening frames of a run and after the tracker loses every track. `object-index` replaces `positive-integer` in fact-id and measurement-id and admits a bare zero but not a padded or signed one. `positive-integer` is retained for the visual observations, whose numbering the model invents and which the gate requires to start at one. The gate already accepted object:0 unchanged, so the grammar was the only obstruction. Both digests reissued 23 August 2026.",
+    "hdsg.vlm_caption.v1's stated_value described a tolerance removed when exactness on the written token replaced it. The description is corrected to state that the comparison is exact on the text as the deterministic renderer would display it, with no second acceptable spelling. No constraint changed; the schema validated the same documents before and after.",
+    "proposed_label admitted a trailing space and a run of spaces in the schema and in the gate, and never in the grammar, which has always required single spaces between words. The label is rendered as \"Possible <label> is visible in the <bearing>\", so a trailing space reached the display as a double space. The decoder could not produce one, which is why it was never seen; the check meant to be authoritative was nonetheless looser than the constraint it backs up. Both are tightened to the grammar's shape and the 48 character limit is stated as maxLength, the pattern no longer carrying it. Found by the agreement test rather than by reading: the three statements of each field shape, in GBNF, in JSON Schema and in Python, are now probed with the same strings and must return the same verdict.",
+    "Three value shapes in the caption grammar are named rules rather than inline expressions, so that the agreement test can reference them: visual-identifier, proposed-label and bearing-value. The language admitted is unchanged by the naming."
   ],
   "files": [
     {
@@ -35,7 +40,7 @@
     {
       "record_schema": "hdsg.vlm_caption.v1",
       "path": "hdsg.vlm_caption.v1.schema.json",
-      "sha256": "1ca9ec3b7cd34993c76f57e3f6971c79e7f019317441b0b200648726f4af77e0"
+      "sha256": "791b791a8ec4bb7ff7e031a0cbf99584a9790ce8d5c40efb0e4d6d7712aa2e9d"
     },
     {
       "record_schema": "hdsg.question_route.v1",
@@ -55,12 +60,12 @@
     {
       "record_schema": "hdsg.vlm_caption.v1",
       "path": "../config/hdsg.vlm_caption.v1.gbnf",
-      "sha256": "7a36aba4ff5576d246d662e1690bbd854c152de52f2cb528dae871cb133e64ba"
+      "sha256": "02a7cf737ab07ac543e21ff302db3846458a5daeb586693797e89c554b6708e7"
     },
     {
       "record_schema": "hdsg.question_route.v1",
       "path": "../config/hdsg.question_route.v1.gbnf",
-      "sha256": "58f75907c13f84e5ed0de6dfcd77689edb7b0d0b4fbd702491eea397ca9e6a35"
+      "sha256": "a546f0fc53887810fd5fcfb1c991cb545e37d2d127d5ce094e574df2aab309f2"
     },
     {
       "record_schema": "hdsg.request_catalogue.v1",
