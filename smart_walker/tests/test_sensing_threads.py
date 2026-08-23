@@ -14,6 +14,7 @@ from queue import Queue, Empty
 
 import numpy as np
 
+import support
 from support import ROOT  # noqa: F401
 from scripts import realsense_shared_control as sw  # noqa: E402
 
@@ -152,6 +153,120 @@ class InferenceThreadFailure(unittest.TestCase):
                      in_q, Queue(maxsize=1), stop_evt, 640, 0.25, False, None, True,
                      "botsort.yaml"))
         self.assertTrue(stop_evt.is_set())
+
+
+class FakeTensor:
+    """Stands in for the torch tensors the detector returns, which the thread moves off the GPU."""
+
+    def __init__(self, array):
+        self.array = np.asarray(array)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.array
+
+    def int(self):
+        return FakeTensor(self.array.astype(int))
+
+    def tolist(self):
+        return self.array.tolist()
+
+
+class FakeBoxes:
+    def __init__(self, xyxy, conf, cls, ids):
+        self.xyxy = FakeTensor(xyxy)
+        self.conf = FakeTensor(conf)
+        self.cls = FakeTensor(cls)
+        self.id = None if ids is None else FakeTensor(ids)
+
+    def __len__(self):
+        return len(self.xyxy.array)
+
+
+class FakeResult:
+    def __init__(self, boxes, names):
+        self.boxes = boxes
+        self.names = names
+
+
+class DetectingModel:
+    def __init__(self, boxes, names):
+        self.result = FakeResult(boxes, names)
+        self.names = names
+
+    def track(self, **kwargs):
+        return [self.result]
+
+    predict = track
+
+
+class DetectionsBecomeObjects(unittest.TestCase):
+    """What the detector's boxes turn into, which is the input every later stage reasons over."""
+
+    def detect(self, labels, ids, depth_value=1.5):
+        names = {index: label for index, label in enumerate(labels)}
+        boxes = FakeBoxes(xyxy=[[100.0, 100.0, 300.0, 400.0]] * len(labels),
+                          conf=[0.9] * len(labels),
+                          cls=list(range(len(labels))),
+                          ids=ids)
+        in_q: Queue = Queue(maxsize=1)
+        in_q.put(sw.FramePacket(color=np.zeros((480, 640, 3), dtype=np.uint8),
+                                depth_m=np.full((480, 640), depth_value, dtype=np.float32),
+                                ts_ms=0))
+        out_q: Queue = Queue(maxsize=1)
+        mapper = sw.OntologyMapper(support.CONFIG / "ontology.yaml")
+        cfg = {"bearing": {"left_max": 0.33, "right_min": 0.66},
+               "depth": {"metric_bins_m": {"very_close": [0.0, 0.7], "near": [0.7, 1.5],
+                                           "mid": [1.5, 3.0], "far": [3.0, 99.0]}}}
+        stop_evt = threading.Event()
+        thread = threading.Thread(
+            target=sw.inference_thread,
+            args=(cfg, mapper, DetectingModel(boxes, names), in_q, out_q, stop_evt,
+                  640, 0.25, False, None, True, "botsort.yaml"),
+            daemon=True)
+        thread.start()
+        try:
+            return out_q.get(timeout=1.0).objects
+        finally:
+            stop_evt.set()
+            thread.join(timeout=0.5)
+
+    def test_a_tracked_object_carries_its_tracker_number(self):
+        self.assertEqual("chair #7", self.detect(["chair"], [7])[0]["display_label"])
+
+    def test_an_untracked_object_carries_its_label_alone(self):
+        self.assertEqual("chair", self.detect(["chair"], None)[0]["display_label"])
+
+    def test_a_person_is_labelled_no_differently_from_anything_else(self):
+        """A branch treating "person" separately stood here until 24 August 2026 and produced this
+        same string for every label and every id, so the file stated a rule about people that did
+        nothing. Removed. This records that the behaviour did not change with it."""
+        self.assertEqual("person #7", self.detect(["person"], [7])[0]["display_label"])
+
+    def test_the_distance_is_measured_and_banded(self):
+        obj = self.detect(["chair"], [7], depth_value=1.5)[0]
+        self.assertEqual(1.5, obj["distance_m"])
+        self.assertEqual("mid", obj["distance_bin"])
+        self.assertEqual("D455F_LOWER_BBOX_MEDIAN", obj["distance_method"])
+
+    def test_an_unmeasurable_object_reports_no_distance_rather_than_a_far_one(self):
+        obj = self.detect(["chair"], [7], depth_value=0.0)[0]
+        self.assertIsNone(obj["distance_m"])
+        self.assertEqual("unknown", obj["distance_bin"])
+        self.assertIsNone(obj["distance_method"])
+
+    def test_something_that_cannot_be_an_obstacle_never_becomes_one(self):
+        """`not_obstacles` holds one COCO class, tie, which the detector reports on a person's
+        chest. Without this it would map to unknown_obstacle, which stops the walker at 0.70 m."""
+        self.assertEqual([], self.detect(["tie"], [7]))
+
+    def test_the_dropped_list_is_the_one_the_ontology_declares(self):
+        """Asserted so that a change of weights that empties the list is visible here rather than
+        only as a walker that stops for a necktie."""
+        mapper = sw.OntologyMapper(support.CONFIG / "ontology.yaml")
+        self.assertEqual({"tie"}, mapper.not_obstacles)
 
 
 class TheMotionSensorPathIsGone(unittest.TestCase):

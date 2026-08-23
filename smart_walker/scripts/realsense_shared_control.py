@@ -216,9 +216,12 @@ class OntologyMapper:
     def is_not_obstacle(self, raw_label: str) -> bool:
         """True where the label names something that cannot be an obstacle on the floor plane.
 
-        A window, a shirt and a person's hand are all reported by the detector and none of them is a
-        thing to be steered around. Without this the walker would stop for them, because a label the
-        ontology does not name becomes `unknown_obstacle`, which still stops the walker at 0.70 m.
+        Without this the walker would stop for them, because a label the ontology does not name
+        becomes `unknown_obstacle`, which still stops the walker at 0.70 m.
+
+        Under the shipped COCO weight the list holds one class, tie, which the detector reports on a
+        person's chest. The examples given here until 24 August 2026, a window and a shirt and a
+        person's hand, were Open Images labels and are not in the detector's vocabulary.
         """
         return bool(raw_label) and raw_label.strip().lower() in self.not_obstacles
 
@@ -605,8 +608,11 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                     )
                     d_bin = distance_bin_from_m(
                         d_m, cfg["depth"]["metric_bins_m"])
-                    base = f"{raw_label} #{tid}" if tid is not None and raw_label != "person" else \
-                        (f"person #{tid}" if tid is not None else raw_label)
+                    # The tracker's number for this object, where it gave one. A branch treating
+                    # "person" separately stood here until 24 August 2026 and produced the same
+                    # string as this one for every label and every id, so the file stated a rule
+                    # about people that did nothing.
+                    base = f"{raw_label} #{tid}" if tid is not None else raw_label
                     obj = {
                         "id": int(tid) if tid is not None else i,
                         "raw_label": raw_label,
