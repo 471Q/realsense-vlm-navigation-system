@@ -1353,7 +1353,23 @@ def build_prompt_packet(
             # HDSG_VERIFIED_GENERATION_POLICY.md section 10.4: four is unchanged, and so is the
             # order facts are added in. Spending three slots to repeat the first slot is not a
             # budget that anyone chose.
-            if not fact_packet["sectors"].get(sector.split(":", 1)[1], {}).get("valid"):
+            name = sector.split(":", 1)[1]
+            if not fact_packet["sectors"].get(name, {}).get("valid"):
+                continue
+            # A sector whose strip reads CLEAR while the decision excludes it from `clear_sectors`
+            # is one an object stands in. Rendering it here produced "The centre sector is clear for
+            # 3.00 metres" in the same answer as "A chair is detected in the centre at 0.40 metres",
+            # and immediately before "Select left or right". Both sentences are true, because a
+            # strip clearance and an object distance are measured differently, but they read as a
+            # contradiction and the clear one came last.
+            #
+            # The clause is dropped rather than reworded. The object is already named in the action
+            # binding with its own distance, which is the number the decision rests on, so nothing
+            # measured is lost. Saying what the strip read and what stands in it would mean
+            # publishing the object-adjusted status into the fact packet, which is frozen against a
+            # schema and feeds the contribution comparison.
+            if (fact_packet["sectors"][name].get("status") == "CLEAR"
+                    and name.upper() not in deterministic.get("clear_sectors", [])):
                 continue
             fact_ids.append(sector)
             requirements.append({
