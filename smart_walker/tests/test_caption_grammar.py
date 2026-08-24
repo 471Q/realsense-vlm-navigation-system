@@ -28,6 +28,7 @@ from support import (  # noqa: F401
     CONFIG,
     SCHEMAS,
     caption,
+    declares,
     declares_object,
     detected_object,
     event,
@@ -183,11 +184,18 @@ class GateAgreementTests(unittest.TestCase):
         objects = detected_object(track_id=None)
         distance = objects[0]["distance_m"]
         packet, prompt = event(objects=objects)
-        candidate = caption(f"A chair is {distance:.2f} metres away on the left.",
-                            [declares_object(0, round(distance, 2))])
+        # The centre clause carries the coverage check added on 25 August 2026: the default scene
+        # redirects because the centre narrows, so a caption naming only the chair states everything
+        # except the reason. Identifier zero is what this test is about.
+        centre = packet["sectors"]["centre"]["clearance_m"]
+        candidate = caption(f"The centre narrows to {centre:.2f} metres. "
+                            f"A chair is {distance:.2f} metres away on the left.",
+                            [declares("centre", round(centre, 2)),
+                             declares_object(0, round(distance, 2))])
         codes, scored = gate(candidate, packet, prompt)
         self.assertEqual([], codes)
-        self.assertEqual(["object:0"], [item["fact_id"] for item in scored])
+        self.assertEqual(["sector:centre", "object:0"],
+                         [item["fact_id"] for item in scored])
 
 
 class SchemaAgreementTests(unittest.TestCase):

@@ -402,8 +402,12 @@ class DeclarationScoringTests(unittest.TestCase):
         self.assertIn("RG_DIRECT_NUMBER_DETECTED", codes)
 
     def test_the_correct_pairing_is_accepted(self):
-        self.assertEqual([], self.score("The left side is clear for 3.13 metres.",
-                                        [declares("left", LEFT)])[0])
+        # The centre clause carries the coverage check added on 25 August 2026: the default scene
+        # redirects because the centre narrows, so a caption naming only the left states everything
+        # except the reason. The pairing under test is the left one.
+        self.assertEqual([], self.score(
+            "The centre narrows to 1.74 metres. The left side is clear for 3.13 metres.",
+            [declares("centre", CENTRE), declares("left", LEFT)])[0])
 
     def test_a_malformed_declaration_still_appears_in_the_count(self):
         """The count of what the model declared is the count of what it declared, including what
@@ -440,7 +444,17 @@ class AttributionTests(unittest.TestCase):
         return gate(caption(text, assertions), self.packet, self.prompt)[0]
 
     def assertAccepted(self, text, assertions):
-        self.assertEqual([], self.codes(text, assertions), msg=text)
+        """Accepted as far as attribution goes.
+
+        `RG_REQUIRED_FACT_MISSING` is excluded on 25 August 2026. This class fixes where a number
+        sits relative to the fact it belongs to, and several of its captions deliberately name one
+        sector only, which the coverage check added that day refuses in the default scene because
+        the decision rests on the centre. The two are orthogonal, and the alternative, prepending a
+        clause about the centre to every caption, would move the fact mentions these tests measure
+        distance between. Coverage has its own tests in test_binding_coverage.py.
+        """
+        self.assertEqual([], [code for code in self.codes(text, assertions)
+                              if code != "RG_REQUIRED_FACT_MISSING"], msg=text)
 
     def assertRefused(self, text, assertions):
         self.assertIn("RG_SUBJECT_MISMATCH", self.codes(text, assertions), msg=text)
@@ -536,8 +550,11 @@ class AttributionTests(unittest.TestCase):
     def test_the_required_form_for_an_object_is_accepted(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("A chair is 1.62 metres away on the left.",
-                                [declares_object(3, 1.62)]), packet, prompt)
+        # The centre clause carries the coverage check; the required form is what this is about.
+        codes, _ = gate(caption("The centre narrows to 1.74 metres. "
+                                "A chair is 1.62 metres away on the left.",
+                                [declares("centre", CENTRE), declares_object(3, 1.62)]),
+                        packet, prompt)
         self.assertEqual([], codes)
 
     def test_a_bearing_between_an_object_and_its_distance_is_refused(self):
@@ -840,8 +857,10 @@ class ProhibitedContentTests(unittest.TestCase):
         """The other side of the same rule. The prompt presents the object by its canonical name, so
         forbidding that name would ask the model for a word and refuse it in the same breath."""
         packet, prompt = event(objects=detected_object(track_id=3, label="chair"))
-        codes, _ = gate(caption("A chair is 1.62 metres away on the left.",
-                                [declares_object(3, 1.62)]),
+        # The centre clause carries the coverage check; the permitted name is what this is about.
+        codes, _ = gate(caption("The centre narrows to 1.74 metres. "
+                                "A chair is 1.62 metres away on the left.",
+                                [declares("centre", CENTRE), declares_object(3, 1.62)]),
                         packet, prompt, classes=("Chair", "Furniture"))
         self.assertEqual([], codes)
 
@@ -989,8 +1008,11 @@ class ProhibitedContentTests(unittest.TestCase):
     def test_a_reported_class_may_be_named(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("A chair stands 1.62 metres away on the left.",
-                                [declares_object(3, 1.62)]), packet, prompt)
+        # The centre clause carries the coverage check; the chair is what this test is about.
+        codes, _ = gate(caption("The centre narrows to 1.74 metres. "
+                                "A chair stands 1.62 metres away on the left.",
+                                [declares("centre", CENTRE), declares_object(3, 1.62)]),
+                        packet, prompt)
         self.assertEqual([], codes)
 
     def test_a_word_outside_the_detector_vocabulary_is_permitted(self):

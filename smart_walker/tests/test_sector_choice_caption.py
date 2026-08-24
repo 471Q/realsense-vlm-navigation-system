@@ -34,12 +34,17 @@ def scene(lane, objects=(), intent="FORWARD"):
 
 class TheBlockedSectorIsNamedAsASector(unittest.TestCase):
 
-    def test_an_object_blocking_the_centre_names_the_centre(self):
+    def test_an_object_blocking_the_centre_names_the_object(self):
+        """The sector was named in every case until later on 25 August 2026, when the binding
+        coverage check went in. "The centre sector is blocked" leaves a chair 0.40 metres from the
+        person unmentioned, and in this scene the centre strip measured 3.00 metres of clear floor.
+        It also left this sentence committing the fault the gate had just begun refusing model
+        captions for."""
         packet, caption_text = scene(ALL_CLEAR, detected_object(3, "chair", "CENTRE", 0.40))
         self.assertEqual("AWAITING_SECTOR_CHOICE", packet["deterministic"]["interaction_state"])
         self.assertEqual(
-            "Stop. The centre sector is blocked, while the left and right sectors are "
-            "similarly clear. Select left or right.", caption_text)
+            "Stop. A chair is detected in the centre at 0.40 metres, while the left and right "
+            "sectors are similarly clear. Select left or right.", caption_text)
 
     def test_the_detection_number_does_not_reach_the_sentence(self):
         """The number is what leaked. It is asserted directly because a tracker identifier that
@@ -49,7 +54,7 @@ class TheBlockedSectorIsNamedAsASector(unittest.TestCase):
                 _, caption_text = scene(ALL_CLEAR,
                                         detected_object(track_id, "chair", "CENTRE", 0.40))
                 self.assertNotIn(f"The {track_id} sector", caption_text)
-                self.assertIn("The centre sector is blocked", caption_text)
+                self.assertIn("A chair is detected in the centre at 0.40 metres", caption_text)
 
     def test_a_blocked_strip_still_names_the_same_sector(self):
         """The path that always worked, held. The object is what broke it, so a scene without one

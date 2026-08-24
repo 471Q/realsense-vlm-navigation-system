@@ -1066,6 +1066,18 @@ def validate_caption_candidate(
     if no_measurement_stated(caption, prompt_packet, fact_packet):
         errors.append("RG_NO_MEASUREMENT_STATED")
 
+    # And it must state the ones the decision rests on.
+    #
+    # Chapter3_And_5_Revision_Notes.md section 2.0, option (a), chosen by Atiq on 25 August 2026.
+    # Until then the gate guaranteed what a caption may not contain and nothing about what it must,
+    # so a walker stopping for a chair 0.40 m ahead accepted and released "The right sector is clear
+    # for 3.00 metres." Every word true, the reason absent, and the person told to move without
+    # being told what for. The `binding()` docstring in hdsg_runtime states this failure exactly and
+    # the check that would catch it was never built.
+    for fact_id, entry in uncovered_binding_facts(prompt_packet, fact_packet, scored).items():
+        errors.append("RG_REQUIRED_FACT_MISSING")
+        scored.append(entry)
+
     seen_visual_ids: set[str] = set()
     for visual in visuals:
         if not isinstance(visual, Mapping) \
@@ -1259,6 +1271,72 @@ def declaration_example(prompt_packet: Mapping[str, Any], fact_packet: Mapping[s
         "measurement_id": item["measurement"]["measurement_id"],
         "stated_value": hdsg.display_value(value),
     })
+
+
+def uncovered_binding_facts(
+    prompt_packet: Mapping[str, Any],
+    fact_packet: Mapping[str, Any],
+    scored: Sequence[Mapping[str, Any]],
+) -> dict[str, dict]:
+    """Returns the measured facts the decision rests on that the caption does not state.
+
+    **The property this restores.** Under template selection the gate rejected a candidate that left
+    a required binding uncovered. The composed gate performed no such check, so an event binding on
+    a chair 0.40 m ahead accepted a caption describing only the right sector: the person was told
+    the walker had stopped and given a reason about a different part of the scene. Property 3 of
+    Chapter 3 is that the released explanation binds to the decision, and an explanation that need
+    not mention the binding fact does not support it.
+
+    **No prose is read.** The rationale recorded for retiring `RG_REQUIRED_FACT_MISSING` was that
+    establishing prose coverage of a required fact needs linguistic inference the architecture keeps
+    outside the safety boundary. Under the composed contract the model declares each measurement it
+    states, with the fact identifier it belongs to, so this is a comparison of identifiers.
+
+    **The causal element only, not every element of the binding.** `accepted_fact_ids` is ordered
+    and `primary_fact_id` is what caused the decision; the entries after it are the context, which
+    for a redirect is the destination and for a choice is the options. The specification in
+    Chapter3_And_5_Revision_Notes.md section 2.0 required every measured entry, written before
+    anyone had read what `determine_authority` puts in the list, and against the whole suite that
+    reading refuses 47 further captions whose only fault is not repeating a direction. The person
+    has already heard the direction: the action sentence is deterministic, always shown, and reads
+    "Change direction and continue towards the left." before the model's explanation begins.
+    Requiring the model to say it again spends one of three clauses on something already said.
+
+    **Only a fact carrying a measurement is required.** A declaration is made of a measurement, so a
+    causal fact with no usable clearance cannot be declared and must not be demanded. That excludes
+    the `condition:` facts, which carry none, and any sector or object whose own measurement failed.
+    The scene in which every strip fails is therefore not made unreportable by this check.
+
+    **A declaration alone is not coverage; the caption must state the value.** Section 2.0 compares
+    declared identifiers only. That is strengthened here by `stated_in_caption`, which the gate
+    already computes, because a declaration whose value the prose never writes is metadata rather
+    than explanation, and the property being restored is about what the person is told.
+    """
+    binding = fact_packet.get("deterministic", {}).get("action_binding", {})
+    primary = binding.get("primary_fact_id")
+    required = [str(primary)] if primary else []
+    if not required:
+        return {}
+    carries_measurement = {
+        str(item["fact_id"]) for item in prompt_packet.get("permitted_facts", [])
+        if isinstance(item.get("measurement"), Mapping)
+    }
+    covered = {
+        str(entry.get("fact_id")) for entry in scored
+        if entry.get("outcome") == "AGREES" and entry.get("stated_in_caption")
+    }
+    uncovered: dict[str, dict] = {}
+    for fact_id in required:
+        if fact_id not in carries_measurement or fact_id in covered:
+            continue
+        uncovered[fact_id] = {
+            "fact_id": fact_id,
+            "measurement_id": None,
+            "stated_value": None,
+            "source": "action_binding",
+            "outcome": "BINDING_FACT_NOT_STATED",
+        }
+    return uncovered
 
 
 def no_measurement_stated(caption: str, prompt_packet: Mapping[str, Any],

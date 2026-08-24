@@ -257,6 +257,17 @@ REASON_CODE_ORDER = (
     # so a caption failing this and anything else reported the other as its primary reason. It sorted
     # behind RG_INTERNAL_GATE_ERROR, which exists to be last.
     "RG_SUBJECT_MISMATCH",
+    # The caption does not state the measurement the decision rests on. Sorted ahead of the value
+    # and unit failures because it is a failure about what the caption omitted rather than about
+    # what it got wrong, and a caption that never mentions the cause is the more basic fault.
+    #
+    # Retired with the templated contract on 21 August 2026 and revived on 25 August 2026, in the
+    # same way and for the same reason as RG_SUBJECT_MISMATCH above. The rationale recorded for
+    # retiring it, that establishing prose coverage of a required fact would need linguistic
+    # inference the architecture keeps outside the safety boundary, does not apply to the composed
+    # contract: the model declares each measurement it states with a fact identifier, so the check
+    # is a comparison of identifiers and reads no prose.
+    "RG_REQUIRED_FACT_MISSING",
     # A declared value disagrees with the measurement it names. The central failure mode of the
     # composed-caption design and the one code it adds beyond the frozen v1 enumeration, which
     # hdsg.schemas.v4 must therefore carry.
@@ -814,14 +825,24 @@ def determine_authority(
         The transparency metric therefore asks which element caused the behaviour, not only whether
         each statement is true.
 
-        `accepted_fact_ids` carries every element a caption could name and be equally correct: two
-        objects at the same distance, or a sector tied with the object standing in it. Scoring
-        accepts any of them rather than privileging an arbitrary one.
+        **`accepted_fact_ids` is ordered, not a set of alternatives.** `primary_fact_id` is the
+        element that caused the decision and everything after it is the context that decision was
+        taken in, in the four shapes the branches below build:
 
-        This paragraph was written for `identify_binding_fact` in the canonical client, a first
-        implementation of the same idea that nothing called and that was deleted on 25 August 2026.
-        It is kept here, beside the code that does the work, because the argument is about the
-        metric rather than about either implementation.
+            [cause]                     continuing into a sector that is passable but constrained
+            [cause, destination]        redirecting
+            [cause, option, option]     asking the person to choose a side
+            [cause, condition]          nothing forward is passable
+
+        Nothing here produces two elements that are equally the reason.
+
+        The paragraph above was written for `identify_binding_fact` in the canonical client, a first
+        implementation that nothing called and that was deleted on 25 August 2026. It is kept
+        because the argument is about the metric rather than about either implementation. A second
+        paragraph came with it, describing that function's handling of ties between equally correct
+        elements, and it was removed on 25 August 2026: this function has no such handling, and
+        having the description sit beside code that does not do it led to the list being read as
+        alternatives when the gate's coverage check was written.
         """
         return {
             "primary_fact_id": fact_ids[0] if fact_ids else None,
@@ -1672,10 +1693,34 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
         # written out as "left and right" in the same sentence, which is what the policy offers when
         # the intent is forward and is not the only pair it can offer.
         options = [str(name).lower() for name in deterministic.get("selection_options") or []]
-        blocked = _blocked_sector_name(fact_packet, action_ids)
         pair = " and ".join(options) if options else "other"
-        return (f"The {blocked} sector is blocked, while the {pair} sectors are similarly clear.",
-                action_ids, scene_ids, substitutions)
+        tail = f", while the {pair} sectors are similarly clear."
+        # Where an object is what blocks the way, the object is named with its own distance rather
+        # than only the sector it stands in.
+        #
+        # The sentence named the sector in every case until 25 August 2026. That was correct as far
+        # as it went, and it is not what caused the stop: "The centre sector is blocked" leaves a
+        # chair 0.40 metres from the person unmentioned, and the centre strip in that scene measured
+        # 3.00 metres of clear floor. It also left the deterministic fallback committing the fault
+        # the gate had just begun refusing model captions for, so a caption rejected as
+        # RG_REQUIRED_FACT_MISSING fell back to a sentence that did not name the cause either.
+        primary = deterministic["action_binding"].get("primary_fact_id") or ""
+        blocking = _object_fact(fact_packet, primary) if primary.startswith("object:") else None
+        if blocking is not None:
+            label = blocking.get("canonical_label") or blocking.get("raw_label") or "object"
+            bearing = str(blocking.get("bearing") or "CENTRE").lower()
+            bearing_text = "in the centre" if bearing == "centre" else f"on the {bearing}"
+            distance = blocking.get("distance_m")
+            formatted = None
+            if distance is not None:
+                formatted = _format_measurement(distance)
+                substitutions.append({
+                    "measurement_id": f"m:object:{primary.split(':', 1)[1]}:distance",
+                    "formatted_value": formatted})
+            sentence = object_sentence(label, "is detected", bearing_text, formatted)
+            return (f"{sentence.rstrip('.')}{tail}", action_ids, scene_ids, substitutions)
+        blocked = _blocked_sector_name(fact_packet, action_ids)
+        return (f"The {blocked} sector is blocked{tail}", action_ids, scene_ids, substitutions)
     if decision == "STOP" and "condition:no_clear_sector" in action_ids:
         # The widest sector is named by its own measurement, not by a description of its role.
         #

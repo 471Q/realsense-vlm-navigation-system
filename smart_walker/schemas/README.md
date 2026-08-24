@@ -68,10 +68,24 @@ A seventh code, `RG_SUBJECT_MISMATCH`, was retired with the six and revived on 2
 the composed contract, where it means a clause states a number without naming the fact the number
 was declared against. It stays.
 
-`RG_REQUIRED_FACT_MISSING` has no composed equivalent by design. Establishing that free prose
-covered a required fact would need the linguistic inference the architecture excludes from the
-safety boundary, which is the same reason the model declares its values rather than the gate
-parsing them out.
+An eighth, `RG_REQUIRED_FACT_MISSING`, was revived on 25 August 2026 in the same way. It means the
+caption does not state the measurement the decision rests on. Five codes are therefore unreachable
+rather than six.
+
+The reason recorded here for retiring it was that establishing prose coverage of a required fact
+would need the linguistic inference the architecture keeps outside the safety boundary. That was
+true of the templated contract, where the gate would have had to read the sentence. It is not true
+of the composed one, and the clause that stated it named the reason it is not: the model declares
+its values rather than the gate parsing them out, so each stated measurement arrives with the fact
+identifier it belongs to and the check compares identifiers. What the gate guaranteed until then was
+only what a caption may not contain. A walker stopping for a chair 0.40 m ahead accepted and
+released "The right sector is clear for 3.00 metres", which is true, permitted, correctly attributed
+and says nothing about the reason for stopping.
+
+The requirement is on the causal element alone, `action_binding.primary_fact_id`, and only where it
+carries a measurement. The entries after it are the context the decision was taken in, which for a
+redirect is the destination, and the person has already heard that in the deterministic action
+sentence.
 
 The freeze test binds the remaining direction: every code the runtime can emit must appear in the
 enumeration.
