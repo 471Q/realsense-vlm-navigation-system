@@ -2210,9 +2210,14 @@ def main():
             stats = recorder.stop()
             record("recording_summary", stats)
             state = "complete" if stats["complete"] else "INCOMPLETE"
+            # `offered` is printed beside the rest so the three can be checked against it rather
+            # than believed. A count that goes missing is as much a failure of the record as a
+            # write that did, and until 25 August 2026 a truncated recording reported itself
+            # complete because nothing compared them.
             print(
                 f"[hdsg] RGB-D recording {state}: {stats['written']} written, "
-                f"{stats['dropped']} dropped, {stats['failed']} failed"
+                f"{stats['dropped']} dropped, {stats['failed']} failed, "
+                f"of {stats['offered']} offered"
             )
             if not stats["complete"]:
                 print("[hdsg] warning: this recording has gaps and is not a faithful replay source.")

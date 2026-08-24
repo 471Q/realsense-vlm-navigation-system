@@ -82,6 +82,7 @@ class ObservationRecorder:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._offered = 0
         self._written = 0
         self._dropped = 0
         self._failed = 0
@@ -99,8 +100,17 @@ class ObservationRecorder:
 
     def record(self, observation_id: str, colour: Any, depth_m: Any,
                timestamp_ms: float) -> bool:
-        """Queues one observation. Returns False if the queue was full and it was dropped."""
+        """Queues one observation. Returns False if it could not be queued and was dropped.
+
+        A call before `start` or after `stop` counts as a drop. It returned False and incremented
+        nothing until 25 August 2026, so an observation offered to a recorder that was not running
+        left no trace in the counters and the run still reported itself complete.
+        """
+        with self._lock:
+            self._offered += 1
         if self._thread is None:
+            with self._lock:
+                self._dropped += 1
             return False
         try:
             self._queue.put_nowait(
@@ -113,21 +123,57 @@ class ObservationRecorder:
             return False
 
     def stop(self, timeout_s: float = 10.0) -> dict:
-        """Drains outstanding writes and returns the run's recording counters."""
+        """Drains outstanding writes and returns the run's recording counters.
+
+        **What is still queued when the join times out is counted as dropped.** Until 25 August 2026
+        the timeout was allowed to pass in silence: the thread was abandoned, the queue was not
+        looked at, and the counters were returned as they stood. Ten observations queued behind a
+        slow writer produced `written: 1, dropped: 0, complete: True` with one frame on disk.
+
+        The writer is a daemon thread, so whatever it has not finished at process exit is lost, and
+        it writes two PNGs per observation, one of them 16-bit, while the detector and the model are
+        both running. The moment this matters is the end of a laboratory session, which is when the
+        window is closed and the summary is believed.
+
+        One observation may be counted as dropped and then written anyway, the one the writer was
+        part way through when the join gave up. The count errs towards reporting the recording
+        incomplete, which is the direction a record of evidence should err in.
+        """
         if self._thread is not None:
             self._queue.put(None)
             self._thread.join(timeout=timeout_s)
             self._thread = None
         self._stop.set()
+        abandoned = 0
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except Empty:
+                break
+            if item is not None:
+                abandoned += 1
+        if abandoned:
+            with self._lock:
+                self._dropped += abandoned
+            print(f"[hdsg] the recording ended with {abandoned} observation(s) unwritten")
         return self.stats()
 
     def stats(self) -> dict:
+        """The run's recording counters.
+
+        `offered` is every observation the sensing loop handed over, and it is reported so that the
+        other three can be checked against it rather than believed. `complete` requires the four to
+        agree: a count that goes missing is as much a failure of the record as a write that did.
+        """
         with self._lock:
+            accounted = self._written + self._dropped + self._failed
             return {
+                "offered": self._offered,
                 "written": self._written,
                 "dropped": self._dropped,
                 "failed": self._failed,
-                "complete": self._dropped == 0 and self._failed == 0,
+                "complete": (self._dropped == 0 and self._failed == 0
+                             and accounted == self._offered),
             }
 
     def _drain(self) -> None:
@@ -151,11 +197,20 @@ class ObservationRecorder:
         depth_path = self.directory / depth_filename(item.observation_id)
 
         depth = np.asarray(item.depth_m, dtype=np.float32)
-        # Values above the 16-bit ceiling are beyond any distance the guidance policy acts on,
-        # and non-finite readings are already treated as absent by the sector logic, so both
-        # collapse to zero, the same value the sensor reports for an invalid pixel.
+        # Values above the 16-bit ceiling are beyond any distance the guidance policy acts on, and
+        # non-finite readings are already treated as absent by the sector logic, so both collapse to
+        # zero, the same value the sensor reports for an invalid pixel.
+        #
+        # Written as `np.clip(..., 0, UINT16_MAX)` until 25 August 2026, which stored an
+        # out-of-range value as 65535 rather than as zero. The reader turns 65535 back into zero, so
+        # the round trip was right and nothing downstream was wrong; the file was not. Anyone
+        # opening the PNG with another tool, and these frames are Chapter 5's evidence, saw
+        # 65.535 metres where the walker saw nothing. That is the sentinel confusion removed from
+        # `capture_thread` on 24 August, preserved on disk.
         millimetres = np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0) * MILLIMETRES_PER_METRE
-        millimetres = np.clip(np.rint(millimetres), 0, UINT16_MAX).astype(np.uint16)
+        millimetres = np.rint(millimetres)
+        millimetres = np.where((millimetres < 0) | (millimetres >= UINT16_MAX), 0.0, millimetres)
+        millimetres = millimetres.astype(np.uint16)
 
         if not cv2.imwrite(str(colour_path), item.colour):
             raise RuntimeError(f"could not write {colour_path}")
