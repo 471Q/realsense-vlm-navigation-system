@@ -290,19 +290,32 @@ def deterministic_answer(fact_packet: Mapping[str, Any], requirements: list[dict
         # order followed the requirement list until 25 August 2026, which puts the action binding
         # first, so a scene with no usable depth strip and a chair at 1.20 m opened by saying the
         # free space could not be measured and mentioned the chair afterwards.
-        (unmeasured if _states_no_measurement(rendered) else measured).append(rendered)
+        (measured if _carries_a_measurement(fact_packet, fact_id) else unmeasured).append(rendered)
     parts = measured + unmeasured
     return " ".join(parts) if parts else NO_MEASUREMENT_TEXT
 
 
-def _states_no_measurement(sentence: str) -> bool:
-    """True where a rendered fact reports an absence rather than a value.
+def _carries_a_measurement(fact_packet: Mapping[str, Any], fact_id: str) -> bool:
+    """True where the fact behind a sentence has a value, read from the fact and not the sentence.
 
-    Keyed on the shared wording rather than on the fact identifier, because the sentence is the
-    thing being ordered and a sector, a condition and a future fact type all reach it by different
-    routes. `hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT` and the per-sector form share the same stem.
+    The first version of this searched the rendered sentence for "cannot measure the free space",
+    which decides whether a fact carries a measurement by reading the words written about it. That
+    is the fault this audit has caught four times elsewhere, the distance band standing in for the
+    measurement among them, and it was introduced here on the same day. It also breaks on the next
+    rewording, which is exactly what these sentences had just had.
     """
-    return "cannot measure the free space" in sentence
+    if fact_id.startswith("sector:"):
+        sector = fact_packet.get("sectors", {}).get(fact_id.split(":", 1)[1]) or {}
+        return sector.get("clearance_m") is not None
+    if fact_id.startswith("object:"):
+        return any(item.get("fact_id") == fact_id and item.get("distance_m") is not None
+                   for item in fact_packet.get("objects", []))
+    if fact_id == "condition:no_clear_sector":
+        # It states the greatest measured clearance where one exists, and otherwise reports that
+        # nothing could be measured at all.
+        return any(sector.get("clearance_m") is not None
+                   for sector in fact_packet.get("sectors", {}).values())
+    return True
 
 
 def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
@@ -342,9 +355,10 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
         bearing = str(fact.get("bearing") or "CENTRE").lower()
         placing = "in the centre" if bearing == "centre" else f"on the {bearing}"
         verb = "is moving" if fact.get("motion_state") == "MOVING" else "is detected"
-        if fact.get("distance_m") is not None:
-            return f"A {label} {verb} {placing} at {hdsg._format_measurement(fact['distance_m'])}."
-        return f"A {label} {verb} {placing}."
+        distance = fact.get("distance_m")
+        return hdsg.object_sentence(
+            label, verb, placing,
+            None if distance is None else hdsg._format_measurement(distance))
 
     if fact_id.startswith("condition:"):
         # The two derived conditions are given plain sentences. Rendering the identifier

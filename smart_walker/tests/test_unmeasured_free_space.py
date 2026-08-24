@@ -177,3 +177,89 @@ class TheSentenceSaysWhichMeasurementIsMissing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheObjectSentenceHasOneHomeAndTheRightArticle(unittest.TestCase):
+    """Written as a literal "A" in two renderers until 25 August 2026.
+
+    Six of the eighty COCO class names begin with a vowel, and four of them occur indoors: an oven
+    is a kitchen and an umbrella is a hallway. A grammar slip rather than a wrong measurement, and
+    one spoken aloud to someone who may be listening rather than reading, on the deterministic path
+    where the model cannot be blamed for it.
+    """
+
+    def test_a_vowel_takes_an(self):
+        for label in ("apple", "orange", "oven", "umbrella", "airplane", "elephant"):
+            with self.subTest(label):
+                self.assertTrue(
+                    hdsg.object_sentence(label, "is detected", "on the left").startswith("An "),
+                    label)
+
+    def test_a_consonant_takes_a(self):
+        for label in ("chair", "person", "tv", "bed", "potted plant"):
+            with self.subTest(label):
+                self.assertTrue(
+                    hdsg.object_sentence(label, "is detected", "on the left").startswith("A "),
+                    label)
+
+    def test_every_class_the_detector_can_report_reads_correctly(self):
+        """Derived from the ontology, which is generated from the detector's own class names, so a
+        change of weights that introduces a silent h or a sounded u fails here."""
+        import yaml
+
+        cfg = yaml.safe_load((support.CONFIG / "ontology.yaml").read_text(encoding="utf-8"))
+        names = [c for bucket in cfg["ontology"] for c in bucket.get("canonical", [])]
+        names += [str(name) for name in cfg.get("not_obstacles", []) or ()]
+        wrong = [name for name in names
+                 if hdsg.indefinite_article(name) != ("an" if name[0] in "aeiou" else "a")]
+        self.assertEqual([], wrong)
+        self.assertEqual({}, hdsg._ARTICLE_EXCEPTIONS,
+                         "an exception was added; extend this test to cover the sound rule")
+
+    def test_both_renderers_produce_the_same_sentence(self):
+        """`hdsg_contribution` measures what the model added by comparing against the question
+        renderer, so two renderers that drift apart measure themselves.
+
+        The object has to bind the decision for the guidance caption to name it at all: that
+        fallback reports what the walker stopped for, while the answer reports every permitted
+        fact. An oven at 0.50 m in the sector the person is heading for binds; the same oven at
+        1.62 m does not, nor does one beside the intended direction, and the first two versions of
+        this test compared against a caption that mentioned only the sectors.
+        """
+        packet, prompt = event(objects=detected_object(3, "oven", "CENTRE", 0.5),
+                               object_advisory="STOP",
+                               lane=sectors(left=3.13, centre=1.2, right=1.16))
+        release = composed.build_composed_release(
+            packet, prompt, release_id="release_1", candidate=None,
+            scored_assertions=[], failure_codes=["RG_MODEL_UNAVAILABLE"])
+        answer = questions.deterministic_answer(packet, prompt["requirements"])
+        sentence = "An oven is detected in the centre at 0.50 metres."
+        self.assertIn(sentence, answer)
+        self.assertIn(sentence, release["content"]["caption_text"])
+
+
+class TheOrderIsReadOffTheFactNotTheSentence(unittest.TestCase):
+    """The first version of the ordering searched the rendered sentence for a phrase.
+
+    That decides whether a fact carries a measurement by reading the words written about it, which
+    is the fault this audit has caught four times elsewhere and which was introduced here on the
+    same day. It also breaks on the next rewording, which these sentences had just had.
+    """
+
+    def test_rewording_the_sentence_does_not_change_the_order(self):
+        original = hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT
+        hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT = "The free space is beyond me at present."
+        try:
+            packet, prompt, _, _ = scene(NO_STRIPS, CHAIR)
+            answer = questions.deterministic_answer(packet, prompt["requirements"])
+            self.assertTrue(answer.startswith("A chair is detected"), answer)
+        finally:
+            hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT = original
+
+    def test_the_measured_fact_leads_in_every_arrangement(self):
+        for name, lane in (("no strip", NO_STRIPS), ("one strip", ONE_STRIP_FAILED)):
+            with self.subTest(name):
+                packet, prompt, _, _ = scene(lane, CHAIR)
+                answer = questions.deterministic_answer(packet, prompt["requirements"])
+                first = answer.split(". ")[0]
+                self.assertNotIn("cannot measure", first, answer)

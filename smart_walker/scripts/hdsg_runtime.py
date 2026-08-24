@@ -154,6 +154,44 @@ SECTORS = ("LEFT", "CENTRE", "RIGHT")
 NO_FREE_SPACE_MEASUREMENT_TEXT = "I cannot measure the free space around me."
 
 
+# Class names whose article the letter test gets wrong. Empty under the shipped COCO weight, whose
+# eighty names carry no silent h, no sounded u and no initial acronym. Kept as the thing to extend,
+# because the rule below is about spelling and the article is about sound: a "unicycle" takes "a"
+# and an "hour" takes "an", and neither is decidable from the first letter.
+_ARTICLE_EXCEPTIONS: dict[str, str] = {}
+
+
+def indefinite_article(word: str) -> str:
+    """Returns "a" or "an" for a detector label.
+
+    Written out as a literal "A" in both renderers until 25 August 2026, so six of the eighty COCO
+    class names produced "A apple", "A orange", "A oven", "A umbrella", "A airplane" and "A
+    elephant". The first four occur indoors: an oven is a kitchen and an umbrella is a hallway. It
+    is a grammar slip rather than a wrong measurement, and it is spoken aloud to someone who may be
+    listening rather than reading, on the deterministic path where the model cannot be blamed for
+    it.
+    """
+    first = str(word or "").strip().lower()
+    if not first:
+        return "a"
+    override = _ARTICLE_EXCEPTIONS.get(first.split()[0])
+    if override:
+        return override
+    return "an" if first[0] in "aeiou" else "a"
+
+
+def object_sentence(label: str, verb: str, placing: str, distance_text: Optional[str] = None) -> str:
+    """One sentence naming a detected object, its bearing and its distance.
+
+    One home for a sentence two renderers write. `hdsg_questions.render_fact` produces the answer to
+    a typed question and `_fallback_reason` below produces the guidance caption, and until 25 August
+    2026 each built this string itself. `hdsg_contribution` measures what the model added by
+    comparing against the first of those, so two renderers that drift apart measure themselves.
+    """
+    tail = f" at {distance_text}" if distance_text else ""
+    return f"{indefinite_article(label).capitalize()} {label} {verb} {placing}{tail}."
+
+
 def no_free_space_text(sector_name: Optional[str] = None) -> str:
     """The sentence for free space that could not be measured, for one sector or for the scene.
 
@@ -1447,9 +1485,10 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
                 measurement_id = f"m:object:{token}:distance"
                 formatted = _format_measurement(distance)
                 substitutions.append({"measurement_id": measurement_id, "formatted_value": formatted})
-                reason_parts.append(f"A {label} is detected {bearing_text} at {formatted}.")
+                reason_parts.append(
+                    object_sentence(label, "is detected", bearing_text, formatted))
             else:
-                reason_parts.append(f"A {label} is detected {bearing_text}.")
+                reason_parts.append(object_sentence(label, "is detected", bearing_text))
             continue
         if not fact_id.startswith("sector:"):
             continue
