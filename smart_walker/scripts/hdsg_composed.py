@@ -63,14 +63,23 @@ may name several facts, because two objects of a class share a label, and "the c
 two chairs is one phrase referring to whichever the declaration names rather than an ambiguity
 between them.
 
-**This enforces the form the prompt asks for, and non-compliance is a result rather than a defect.**
-The prompt instructs the model to name a thing and then give its distance with no other place or
-object named in between, which is exactly what nearest-name attribution measures. A caption reading
-"The chair on the left is 1.62 metres away" is true and does not follow that instruction, so it is
-refused and recorded as `FORM_NOT_FOLLOWED`, kept apart from `MISATTRIBUTED`, where the fact a
-number belongs to is never named in its sentence at all. The first is a model ignoring an
-instruction and the second is a model stating a measured value of something it does not mention;
-Chapter 5 reports them separately.
+**This measures the form the prompt asks for. It records and does not refuse.** The prompt
+instructs the model to name a thing and then give its distance with no other place or object named
+in between, which is exactly what nearest-name attribution measures. A caption reading "The chair on
+the left is 1.62 metres away" is true and does not follow that instruction, so it is recorded as
+`FORM_NOT_FOLLOWED`, kept apart from `MISATTRIBUTED`, where the fact a number belongs to is never
+named in its sentence at all. The first is a model ignoring an instruction and the second is a model
+stating a measured value of something it does not mention; Chapter 5 reports them separately.
+
+Refusing until 25 August 2026, when Atiq decided it should record instead. Every other check in this
+gate decides its question exactly, from declared identifiers and measured values. This one reads the
+prose, which is the inference `hdsg.vlm_caption.v1.gbnf` states the gate does not perform, and a
+heuristic cannot be completed by adding shapes to it: the two attempts below are what that looks
+like. It therefore catches the swaps whose phrasing falls inside the rule and misses the rest, and a
+refusal rate built on it mixes a real property with an accident of phrasing. The cost is that a
+caption placing a number on the wrong sector now reaches the person, which is why the two outcomes
+are recorded apart. Argued at Chapter3_And_5_Revision_Notes.md section 2.11, and the same decision
+as the absent-class check at section 10.15 of HDSG_VERIFIED_GENERATION_POLICY.md.
 
 Two rules were written to admit the first case rather than record it, one keyed on a preposition
 before the sector word and one on the presence of any other subject in the sentence. Both were
@@ -425,8 +434,8 @@ def _fact_mentions(caption: str, fact_packet: Mapping[str, Any]) -> list[Mention
     something else is. No attempt is made to tell the two apart. Two attempts were made and both
     were wrong, and the second refused the frozen fixture; the reason they were being made at all
     was to admit captions that put a second place-name between a thing and its distance, which the
-    prompt instructs the model not to write. Such a caption is refused and recorded as not following
-    the required form, which is a result to report rather than a phrasing to rescue.
+    prompt instructs the model not to write. Such a caption is recorded as not following the required
+    form, which is a result to report rather than a phrasing to rescue.
 
     Identifiers are masked first, so a model quoting "sector:centre" into the prose does not thereby
     name the centre. Quoting an identifier is not describing a place.
@@ -504,6 +513,11 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
     sector word and one on any subject in the sentence, and both were wrong: the first missed "the
     chair ahead" and "the chair in front", and the second refused the frozen fixture. The rate at
     which a model ignores the instruction is a result worth reporting, not a defect in the gate.
+
+    Those two attempts are also the argument for why the caller records this rather than refusing on
+    it, decided on 25 August 2026. A rule over English cannot be completed by adding shapes, so the
+    check finds the departures whose phrasing falls inside it and not the others, which is a
+    measurement and not an enforceable boundary.
 
     **Nearest mention rather than clause membership.** An earlier implementation cut the caption
     into clauses on punctuation and coordinating words and required the fact to be named inside the
@@ -1033,25 +1047,39 @@ def validate_caption_candidate(
     if foreign_units(caption):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
-    # A number must sit in a clause that names the fact it was declared against. Without this a
-    # caption could declare all three sector clearances correctly and write each one against the
-    # wrong sector, which every other check passes and which is false in every clause.
+    # Where each number sits relative to the fact it was declared against. Recorded, not refused.
+    # Decided by Atiq on 25 August 2026, argued at Chapter3_And_5_Revision_Notes.md section 2.11.
     #
-    # RG_SUBJECT_MISMATCH is the code for it. Under the templated contract it meant a clause whose
-    # subject was not the fact the clause was chosen for, which is the same failure read off a
-    # sentence the runtime had written rather than one the model composed. Reviving it keeps the
-    # enumeration unchanged and names the failure accurately.
+    # **What it is for.** A caption can declare all three sector clearances correctly and write each
+    # one against the wrong sector, which every other check passes and which is false in every
+    # clause. Nothing else detects that.
     #
-    # Each failure is recorded rather than only counted. The check distinguishes four outcomes and
-    # the module header states that Chapter 5 reports MISATTRIBUTED and FORM_NOT_FOLLOWED apart,
-    # which it could not do until 24 August 2026: the caller tested the list for emptiness and
-    # discarded it, so a run recorded that some caption failed attribution and nothing about how.
-    # The same gap was found and closed for the absent-class check on 22 August, and this follows
-    # it, an entry in the scored list carrying the failure as its outcome.
-    misattributions = attribution_failures(caption, scored, fact_packet)
-    if misattributions:
-        errors.append("RG_SUBJECT_MISMATCH")
-    for failure in misattributions:
+    # **Why it no longer refuses.** Every other check here decides its question exactly, from
+    # declared identifiers and measured values. This one reads the prose: each number is attributed
+    # to the nearest fact the caption names within its own sentence, measured in characters. That is
+    # the linguistic inference `config/hdsg.vlm_caption.v1.gbnf` states the gate does not perform,
+    # and the reason the model declares its attributions rather than the gate recovering them.
+    #
+    # A heuristic cannot be made complete by adding shapes to it. Two were tried and both were
+    # wrong, recorded in `attribution_failures`: one keyed on a preposition before the sector word,
+    # which missed "the chair ahead" and "the chair in front", and one keyed on any subject in the
+    # sentence, which refused the frozen fixture. So the check catches the swaps whose phrasing
+    # happens to fall inside the rule and misses the rest, and a refusal rate built on it mixes a
+    # real property with an accident of phrasing and is not interpretable.
+    #
+    # This is the decision already taken for the absent-class check on 23 August 2026, recorded at
+    # section 10.15 of `HDSG_VERIFIED_GENERATION_POLICY.md`, and taken here for the same reason:
+    # what cannot be checked completely should not be enforced partially.
+    #
+    # **The cost, stated rather than hidden.** A caption that puts the numbers on the wrong sectors
+    # now reaches the person. The two outcomes are recorded apart so Chapter 5 can report how often
+    # that happened, MISATTRIBUTED being the false case and FORM_NOT_FOLLOWED being the model
+    # ignoring an instruction while stating nothing untrue.
+    #
+    # RG_SUBJECT_MISMATCH becomes unreachable. It stays in the enumeration and in
+    # REASON_CODE_ORDER, because the archived runs written between 22 and 25 August 2026 contain it
+    # and a frozen schema that cannot validate its own archive is of no use as evidence.
+    for failure in attribution_failures(caption, scored, fact_packet):
         scored.append({
             "fact_id": failure["declared_for"][0] if failure["declared_for"] else None,
             "measurement_id": None,

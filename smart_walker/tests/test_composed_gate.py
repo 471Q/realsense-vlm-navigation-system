@@ -456,36 +456,49 @@ class AttributionTests(unittest.TestCase):
         self.assertEqual([], [code for code in self.codes(text, assertions)
                               if code != "RG_REQUIRED_FACT_MISSING"], msg=text)
 
-    def assertRefused(self, text, assertions):
-        self.assertIn("RG_SUBJECT_MISMATCH", self.codes(text, assertions), msg=text)
+    def assertRecorded(self, text, assertions):
+        """The finding is written into the scored list and the caption is released.
+
+        This asserted RG_SUBJECT_MISMATCH until 25 August 2026, when the check stopped refusing.
+        What it guards is unchanged: the departure must still be detected and told apart from a
+        caption whose numbers sit correctly. That the caption now reaches the person is the cost of
+        the decision at Chapter3_And_5_Revision_Notes.md section 2.11 and is stated there.
+        """
+        codes, scored = gate(caption(text, assertions), self.packet, self.prompt)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes, msg=text)
+        outcomes = [item.get("outcome") for item in scored]
+        self.assertTrue(any(str(outcome).startswith("ATTRIBUTION_") for outcome in outcomes),
+                        msg=f"{text} -> {outcomes}")
 
     # The failures the check exists for.
 
     def test_every_value_moved_one_sector_along(self):
-        self.assertRefused(
+        self.assertRecorded(
             "The left side measures 1.16 metres, the centre 3.13 metres and the right 1.74 metres.",
             self.all_three)
 
     def test_a_single_value_on_the_wrong_side(self):
-        self.assertRefused("The left side measures 1.16 metres.", [declares("right", RIGHT)])
+        self.assertRecorded("The left side measures 1.16 metres.", [declares("right", RIGHT)])
 
     def test_a_swap_behind_a_synonym(self):
-        self.assertRefused("There is 1.16 metres of clear space ahead.", [declares("right", RIGHT)])
+        self.assertRecorded("There is 1.16 metres of clear space ahead.", [declares("right", RIGHT)])
 
     def test_a_pairwise_swap(self):
-        self.assertRefused("The left gives 1.16 metres and the right gives 3.13 metres.",
+        self.assertRecorded("The left gives 1.16 metres and the right gives 3.13 metres.",
                            [declares("left", LEFT), declares("right", RIGHT)])
 
     def test_a_number_naming_no_fact_at_all(self):
-        self.assertRefused("There is 1.74 metres of clear floor.", [declares("centre", CENTRE)])
+        self.assertRecorded("There is 1.74 metres of clear floor.", [declares("centre", CENTRE)])
 
     def test_an_object_given_another_fact_s_distance(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("A chair is 1.74 metres away on the left.",
-                                [declares_object(3, 1.62), declares("centre", CENTRE)]),
-                        packet, prompt)
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        codes, scored = gate(caption("A chair is 1.74 metres away on the left.",
+                                     [declares_object(3, 1.62), declares("centre", CENTRE)]),
+                             packet, prompt)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertTrue(any(str(item.get("outcome")).startswith("ATTRIBUTION_")
+                            for item in scored))
 
     # Ordinary phrasing the check must not refuse. The first implementation cut the caption into
     # clauses on punctuation and coordinating words and refused four of these, because a
@@ -557,7 +570,7 @@ class AttributionTests(unittest.TestCase):
                         packet, prompt)
         self.assertEqual([], codes)
 
-    def test_a_bearing_between_an_object_and_its_distance_is_refused(self):
+    def test_a_bearing_between_an_object_and_its_distance_is_recorded(self):
         """True, and not in the form the prompt asks for. Recorded as FORM_NOT_FOLLOWED so the rate
         at which the model ignores the instruction can be reported apart from the rate at which it
         states something false."""
@@ -565,7 +578,7 @@ class AttributionTests(unittest.TestCase):
                                                        bearing="LEFT", distance_m=1.62))
         text = "The chair on the left is 1.62 metres away."
         codes, scored = gate(caption(text, [declares_object(3, 1.62)]), packet, prompt)
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
         self.assertEqual(["FORM_NOT_FOLLOWED"],
                          [f["reason"] for f in composed.attribution_failures(text, scored, packet)])
 
@@ -576,7 +589,7 @@ class AttributionTests(unittest.TestCase):
                                                        bearing="LEFT", distance_m=1.62))
         text = "There is 1.62 metres to the left."
         codes, scored = gate(caption(text, [declares_object(3, 1.62)]), packet, prompt)
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
         self.assertEqual(["MISATTRIBUTED"],
                          [f["reason"] for f in composed.attribution_failures(text, scored, packet)])
 
@@ -592,12 +605,14 @@ class AttributionTests(unittest.TestCase):
             "The way ahead narrows to 1.74 metres, with 3.13 metres of space to the left.",
             [declares("centre", CENTRE), declares("left", LEFT)])
 
-    def test_a_sector_taking_an_object_distance_is_refused(self):
+    def test_a_sector_taking_an_object_distance_is_recorded(self):
         packet, prompt = event(objects=detected_object(track_id=3, label="chair",
                                                        bearing="LEFT", distance_m=1.62))
-        codes, _ = gate(caption("The left is 1.62 metres wide.", [declares_object(3, 1.62)]),
-                        packet, prompt)
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        codes, scored = gate(caption("The left is 1.62 metres wide.", [declares_object(3, 1.62)]),
+                             packet, prompt)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertIn("ATTRIBUTION_MISATTRIBUTED",
+                      [item.get("outcome") for item in scored])
 
     def test_a_sentence_ending_in_a_number_still_ends(self):
         """The full stop after 3.13 has a digit in front of it. Excluding a boundary on that basis
@@ -606,7 +621,7 @@ class AttributionTests(unittest.TestCase):
                             [declares("left", LEFT), declares("centre", CENTRE)])
 
     def test_a_swap_across_a_sentence_ending_in_a_number(self):
-        self.assertRefused("The left is 1.16. The centre is 1.74.",
+        self.assertRecorded("The left is 1.16. The centre is 1.74.",
                            [declares("right", RIGHT), declares("centre", CENTRE)])
 
     def test_two_objects_of_one_class_are_one_mention_of_both(self):
@@ -630,7 +645,7 @@ class AttributionTests(unittest.TestCase):
 
     def test_a_quoted_identifier_does_not_name_a_fact(self):
         """Quoting sector:centre is not describing a place, so it must not satisfy the check."""
-        self.assertRefused("A clearance of 1.74 metres is recorded at sector:centre.",
+        self.assertRecorded("A clearance of 1.74 metres is recorded at sector:centre.",
                            [declares("centre", CENTRE)])
 
 
@@ -659,7 +674,7 @@ class AttributionIsRecordedTests(unittest.TestCase):
     def test_a_fact_the_sentence_never_names_is_recorded_as_misattributed(self):
         codes, summary = self.summarise("The left is clear for 1.74 metres.",
                                         [declares("centre", CENTRE)])
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
         self.assertEqual({"MISATTRIBUTED": 1}, dict(summary["attribution_reasons"]))
 
     def test_a_fact_named_with_something_nearer_is_recorded_as_form_not_followed(self):
@@ -668,7 +683,7 @@ class AttributionIsRecordedTests(unittest.TestCase):
         codes, summary = self.summarise(
             "The left is clear for 1.74 metres and the centre for 3.13 metres.",
             [declares("centre", CENTRE), declares("left", LEFT)])
-        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
         self.assertEqual({"FORM_NOT_FOLLOWED": 2}, dict(summary["attribution_reasons"]))
 
     def test_a_sentence_naming_no_fact_at_all_is_recorded(self):
@@ -1412,8 +1427,14 @@ class PromptTests(unittest.TestCase):
                     self.assertEqual([], codes)
             for text in refused:
                 with self.subTest(refuse=text):
-                    codes, _ = gate(caption(text, [declaration]), packet, prompt)
-                    self.assertIn("RG_SUBJECT_MISMATCH", codes)
+                    # The prompt still instructs the model not to write these. Since 25 August 2026
+                    # the gate records the departure rather than refusing it, so what the example
+                    # must still do is be detected, which is what makes it worth showing.
+                    codes, scored = gate(caption(text, [declaration]), packet, prompt)
+                    self.assertEqual([], codes)
+                    self.assertTrue(
+                        any(str(item.get("outcome")).startswith("ATTRIBUTION_")
+                            for item in scored), text)
 
     def test_the_examples_use_this_scene_and_no_invented_object(self):
         """A model copied "a chair is 1.62 metres away on the left" out of the prompt into a release,

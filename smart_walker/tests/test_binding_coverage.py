@@ -189,3 +189,77 @@ class TheCodeIsDeclaredWhereItMustBe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AttributionRecordsAndDoesNotRefuse(unittest.TestCase):
+    """Decided by Atiq on 25 August 2026, argued at Chapter3_And_5_Revision_Notes.md section 2.11.
+
+    Every other check in the gate decides its question exactly, from declared identifiers and
+    measured values. Attribution reads the prose: each number goes to the nearest fact the caption
+    names within its own sentence, measured in characters. That is the inference
+    `hdsg.vlm_caption.v1.gbnf` states the gate does not perform, and a heuristic over English cannot
+    be completed by adding shapes to it, so it finds the departures whose phrasing falls inside the
+    rule and misses the rest. A refusal rate built on it mixes a real property with an accident of
+    phrasing. The same decision as the absent-class check, at section 10.15 of
+    HDSG_VERIFIED_GENERATION_POLICY.md.
+
+    Placed in this file because the two decisions are opposite halves of one question: what the gate
+    may enforce is what it can decide exactly, and naming the causal fact is decidable from
+    identifiers while placing a number beside it is not.
+    """
+
+    def setUp(self):
+        self.packet, self.prompt = event()
+
+    def run_gate(self, text, assertions):
+        return gate(caption(text, assertions), self.packet, self.prompt)
+
+    def test_a_swapped_pair_is_released(self):
+        """The cost of the decision, asserted rather than left implicit. This caption is false in
+        both clauses and the person now hears it."""
+        codes, _ = self.run_gate(
+            "The centre narrows to 3.13 metres and the left is clear for 1.74 metres.",
+            [declares("centre", 1.74), declares("left", 3.13)])
+        self.assertNotIn("RG_SUBJECT_MISMATCH", codes)
+
+    def test_the_swap_is_still_recorded(self):
+        """Releasing it is not the same as missing it. Chapter 5 reports how often this happened."""
+        _, scored = self.run_gate(
+            "The centre narrows to 3.13 metres and the left is clear for 1.74 metres.",
+            [declares("centre", 1.74), declares("left", 3.13)])
+        outcomes = [item.get("outcome") for item in scored]
+        self.assertIn("ATTRIBUTION_FORM_NOT_FOLLOWED", outcomes)
+
+    def test_the_two_outcomes_stay_apart(self):
+        """The reason the check is worth keeping at all. One is false, the other is only unwanted
+        word order, and a single figure adding them answers no question."""
+        _, misattributed = self.run_gate("The left is clear for 1.74 metres.",
+                                         [declares("centre", 1.74)])
+        _, form = self.run_gate("The centre, wider than the left, is 1.74 metres.",
+                                [declares("centre", 1.74)])
+        self.assertEqual({"MISATTRIBUTED": 1},
+                         dict(composed.assertion_summary(misattributed)["attribution_reasons"]))
+        self.assertEqual({"FORM_NOT_FOLLOWED": 1},
+                         dict(composed.assertion_summary(form)["attribution_reasons"]))
+
+    def test_no_caption_is_refused_for_attribution_alone(self):
+        """`RG_SUBJECT_MISMATCH` is emitted by nothing. Held against the source rather than by
+        enumerating captions, because absence cannot be shown by example."""
+        source = (support.ROOT / "scripts" / "hdsg_composed.py").read_text(encoding="utf-8")
+        emitted = [line for line in source.splitlines()
+                   if "RG_SUBJECT_MISMATCH" in line and "errors.append" in line]
+        self.assertEqual([], emitted)
+
+    def test_the_code_stays_in_the_enumeration(self):
+        """The archived runs written between 22 and 25 August 2026 contain it, and a frozen schema
+        that cannot validate its own archive is of no use as evidence."""
+        import json
+        schema = json.loads((support.ROOT / "schemas" / "hdsg.release.v2.schema.json")
+                            .read_text(encoding="utf-8"))
+        self.assertIn("RG_SUBJECT_MISMATCH", schema["definitions"]["reason_code"]["enum"])
+        self.assertIn("RG_SUBJECT_MISMATCH", hdsg.REASON_CODE_ORDER)
+
+    def test_the_exactly_decidable_checks_still_refuse(self):
+        """The decision is about one check and must not have loosened the others."""
+        codes, _ = self.run_gate("The centre narrows to 1.70 metres.", [declares("centre", 1.70)])
+        self.assertIn("RG_STATED_VALUE_MISMATCH", codes)

@@ -15,15 +15,16 @@ recording the SHA-256 of every one.
 
 ## What v5 changed and why
 
-The gate now reads the caption's prose for one purpose. A clause stating a number must name the
-fact that number was declared against, so a caption cannot declare all three sector clearances
-correctly and write each one against the wrong sector. That caption satisfied every other check
-and was false in every clause. Attribution is still taken from the declaration, so the reading can
-only refuse and never admit.
+The gate now reads the caption's prose for one purpose, and reports what it finds rather than
+acting on it. A clause stating a number should name the fact that number was declared against, since
+a caption can otherwise declare all three sector clearances correctly and write each one against the
+wrong sector, which satisfies every other check and is false in every clause. Attribution is still
+taken from the declaration, so the reading never admits anything on the strength of prose.
 
-`RG_SUBJECT_MISMATCH` carries the failure. It was retired with the templated contract a day
-earlier, where it meant a clause whose subject was not the fact the clause was chosen for. The
-enumeration is unchanged; only that member's description is corrected.
+`RG_SUBJECT_MISMATCH` carried the failure between 22 and 25 August 2026 and no longer does. The
+finding is written into the scored assertions as `ATTRIBUTION_MISATTRIBUTED` or
+`ATTRIBUTION_FORM_NOT_FOLLOWED` and the caption is released. The reasoning is below, under what was
+retained for the archive. The enumeration is unchanged throughout; only descriptions moved.
 
 v5 also settles how a measurement is compared. A caption states it as the deterministic renderer
 displays it, character for character, so `1.7449 metres` and `two metres` are both refused against
@@ -66,7 +67,18 @@ they were kept for. The one surviving run is from 22 August and contains no occu
 
 A seventh code, `RG_SUBJECT_MISMATCH`, was retired with the six and revived on 22 August 2026 for
 the composed contract, where it means a clause states a number without naming the fact the number
-was declared against. It stays.
+was declared against. It stays in the enumeration and is no longer emitted. On 25 August 2026 the
+attribution check stopped refusing and began only recording its finding into the scored assertions,
+as `ATTRIBUTION_MISATTRIBUTED` and `ATTRIBUTION_FORM_NOT_FOLLOWED`. The code is kept because the
+archived runs written between 22 and 25 August 2026 contain it.
+
+The reason it stopped refusing is that it is the one check here that reads the prose. Each number is
+attributed to the nearest fact the caption names within its own sentence, measured in characters,
+which is the linguistic inference `hdsg.vlm_caption.v1.gbnf` states the gate does not perform. A
+heuristic over English cannot be completed by adding shapes to it, so the check finds the departures
+whose phrasing falls inside the rule and misses the rest, and a refusal rate built on it mixes a real
+property with an accident of phrasing. That is the same decision, for the same reason, as the
+absent-class check above. Argued at Chapter3_And_5_Revision_Notes.md section 2.11.
 
 An eighth, `RG_REQUIRED_FACT_MISSING`, was revived on 25 August 2026 in the same way. It means the
 caption does not state the measurement the decision rests on. Five codes are therefore unreachable
