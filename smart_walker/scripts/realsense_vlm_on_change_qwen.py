@@ -1993,7 +1993,14 @@ def main():
                         previous_rank = hdsg.RESTRICTION_ORDER.get(
                             (confirmed_authority or {}).get("motion_decision"), 0
                         )
-                        persistence = 0.15 if current_rank > previous_rank else 0.50
+                        # The same two numbers `build_fact_packet` records, read from one place so
+                        # the record cannot describe a timing the run did not apply. Milliseconds
+                        # there because the record is in milliseconds, seconds here because
+                        # `time.monotonic` is.
+                        persistence = (
+                            hdsg.RESTRICTIVE_TRANSITION_PERSISTENCE_MS
+                            if current_rank > previous_rank
+                            else hdsg.RECOVERY_TRANSITION_PERSISTENCE_MS) / 1000.0
                         ready = material_signature != confirmed_signature and now - pending_since >= persistence
                         is_escalation = ready and current_rank > previous_rank
                     if (ready and not pending_reassessment and not handled_reassessment

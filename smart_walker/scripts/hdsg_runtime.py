@@ -136,6 +136,19 @@ HAZARD_STOP_AT_OR_BELOW_M = 2.0
 # already collected. The value itself is not settled; it awaits a measurement at the laboratory.
 SECTOR_CLEAR_AT_OR_ABOVE_M = 1.8
 
+# How long a change of restriction rank must hold before the walker acts on it, asymmetric by
+# HDSG_HYBRID_CAPTION_POLICY.md section 4: short for a move to a more restrictive rank so a hazard is
+# not delayed, longer for recovery so a value sitting near a threshold does not oscillate.
+#
+# One pair of numbers rather than two. The client applied its own literals in seconds while
+# `build_fact_packet` recorded its own in milliseconds, and the two agreed only because nobody had
+# changed either. HDSG_HYBRID_CAPTION_POLICY.md section 4 says the final periods will be chosen
+# during pilot testing, which is exactly when one copy would move and the archive would start
+# describing settings the run did not use. That is the fault already found in this record with
+# `binding_tie_margin`, which stated a tie threshold no line of code read.
+RESTRICTIVE_TRANSITION_PERSISTENCE_MS = 150.0
+RECOVERY_TRANSITION_PERSISTENCE_MS = 500.0
+
 SEVERITY = {"SAFE": 0, "CAUTION": 1, "STOP": 2}
 SECTORS = ("LEFT", "CENTRE", "RIGHT")
 # What the person is told when the depth strips return nothing usable.
@@ -1130,6 +1143,8 @@ def build_fact_packet(
     post_reorientation_max_variation_m: float = 0.10,
     reassessment_cooldown_ms: float = 1500.0,
     more_detail_freshness_ms: float = 5000.0,
+    restrictive_transition_persistence_ms: float = RESTRICTIVE_TRANSITION_PERSISTENCE_MS,
+    recovery_transition_persistence_ms: float = RECOVERY_TRANSITION_PERSISTENCE_MS,
     scenario_id: Optional[str] = None,
     input_method: str = "SYSTEM",
     control_id: Optional[str] = None,
@@ -1173,12 +1188,23 @@ def build_fact_packet(
         "observation": {
             "captured_at_utc": utc_now(),
             "sensor_timestamp_ms": float(timestamp_ms),
+            # Stated rather than read from the device, by decision on 25 August 2026. The camera's
+            # real name and serial are available three lines from where the client reads the depth
+            # scale, so deriving them is cheap, but this study runs on one D455f that is not
+            # changing. The model is a `const` in the schema, so a record naming any other camera
+            # would not validate; the device identifier is a label rather than the unit's serial, so
+            # the archive attributes a run to the study's camera and not to a physical device. Both
+            # are limitations to state in Chapter 4 rather than defects.
             "camera_model": "Intel RealSense D455f",
             "device_id": "d455f_01",
             "rgb_ref": rgb_ref,
             "depth_ref": depth_ref,
             "mirror_view": bool(mirror_view),
             "depth_aligned_to_rgb": True,
+            # True rather than derived, checked on 25 August 2026 and kept. The capture thread stops
+            # the run when a colour frame cannot be read, so no packet is built from a bad one and
+            # there is no scene in the evaluation that makes this false. `depth_valid` beside it is
+            # derived, because a depth frame can arrive and still measure nothing.
             "rgb_valid": True,
             "depth_valid": depth_valid,
             # How much of the reasoning band carried a usable reading, recorded on every
@@ -1248,8 +1274,8 @@ def build_fact_packet(
                 "lost_after_observations": int(motion_tracker.lost_after_observations),
             },
             "timing_ms": {
-                "restrictive_transition_persistence": 150,
-                "recovery_transition_persistence": 500,
+                "restrictive_transition_persistence": restrictive_transition_persistence_ms,
+                "recovery_transition_persistence": recovery_transition_persistence_ms,
                 "reassessment_cooldown": float(reassessment_cooldown_ms),
                 "more_detail_freshness": float(more_detail_freshness_ms),
             },
