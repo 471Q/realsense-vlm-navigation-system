@@ -117,6 +117,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import math
 import re
 from typing import Any, Iterable, Mapping, NamedTuple, Optional, Sequence
 
@@ -283,10 +284,15 @@ def foreign_units(caption: str) -> list[str]:
 
 
 def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
-    """Parses a composed reply without repairing it."""
+    """Parses a composed reply without repairing it.
+
+    `hdsg.loads_strict` rather than `json.loads`, so a reply carrying the bare token NaN, Infinity
+    or -Infinity is a parse failure rather than a number. It is a parse failure: the JSON format
+    defines none of the three, and Python accepting them is an extension.
+    """
     try:
-        value = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
+        value = hdsg.loads_strict(raw)
+    except (TypeError, ValueError):
         return None, ["RG_PARSE_FAILURE"]
     if not isinstance(value, dict):
         return None, ["RG_SCHEMA_FAILURE"]
@@ -918,7 +924,13 @@ def validate_caption_candidate(
         fact_id = item.get("fact_id")
         measurement_id = item.get("measurement_id")
         stated = item.get("stated_value")
-        if not isinstance(stated, (int, float)) or isinstance(stated, bool):
+        # Finite as well as numeric. NaN and infinity are floats, so they passed the type test and
+        # carried through into `absolute_error_m`, and from there into the event's mean, which one
+        # such declaration turns into NaN. The parse now refuses the tokens that produce them, and
+        # this stands behind it so the guarantee does not rest on every caller having parsed
+        # strictly.
+        if not isinstance(stated, (int, float)) or isinstance(stated, bool) \
+                or not math.isfinite(stated):
             errors.append("RG_SCHEMA_FAILURE")
             scored.append({"index": index, "fact_id": fact_id,
                            "measurement_id": measurement_id, "outcome": "MALFORMED"})

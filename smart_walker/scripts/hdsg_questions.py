@@ -201,7 +201,7 @@ def build_answer_instruction(question: str, fixed_instruction: str) -> str:
 def parse_route(raw: str) -> tuple[Optional[str], Optional[str]]:
     """Parses a classifier reply into an outcome, or returns the reason it could not be read."""
     try:
-        payload = json.loads(str(raw))
+        payload = hdsg.loads_strict(str(raw))
     except (TypeError, ValueError) as error:
         return None, f"route reply was not JSON: {error}"
     if not isinstance(payload, Mapping):

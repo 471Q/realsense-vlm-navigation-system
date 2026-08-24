@@ -154,16 +154,21 @@ def parse_baseline_response(raw: str) -> tuple[Optional[dict], Optional[str]]:
     """
     if not isinstance(raw, str) or not raw.strip():
         return None, "empty response"
+    # `loads_strict` rather than `json.loads`. Python accepts the bare tokens NaN, Infinity and
+    # -Infinity, which JSON does not define, and its encoder writes them out again, so one of them
+    # in a reply reached the telemetry as a bare word and left a log line no strict reader can
+    # parse. These two baselines carry no grammar by design and no gate at all, so nothing else
+    # stands between the reply and the file.
     try:
-        return json.loads(raw), None
-    except json.JSONDecodeError:
+        return hdsg.loads_strict(raw), None
+    except ValueError:
         pass
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         return None, "no JSON object found"
     try:
-        value = json.loads(match.group(0))
-    except json.JSONDecodeError:
+        value = hdsg.loads_strict(match.group(0))
+    except ValueError:
         return None, "JSON object did not parse"
     return (value, None) if isinstance(value, dict) else (None, "response was not an object")
 

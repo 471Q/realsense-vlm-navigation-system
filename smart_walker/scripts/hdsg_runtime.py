@@ -259,6 +259,44 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _reject_json_constant(token: str):
+    """Refuses the three bare tokens Python accepts in JSON and the format does not define."""
+    raise ValueError(f"{token} is not a JSON value")
+
+
+def _finite_float(token: str) -> float:
+    """Converts a JSON number, refusing one whose digits overflow to infinity."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"{token[:24]}... is not a finite number")
+    return value
+
+
+def loads_strict(raw: str):
+    """Parses a model reply, refusing any value that is not a finite number.
+
+    Two ways in, and both end with a non-finite float in the telemetry. Python's decoder accepts the
+    bare tokens NaN, Infinity and -Infinity, which JSON does not define, and its encoder writes them
+    out again. Separately, a number whose digits exceed what a float can hold converts to infinity
+    without complaint, so "1" followed by four hundred zeros and a fractional part parses as inf.
+
+    Either leaves a log line Python reads back and a strict reader cannot, and that file is the
+    evidence Chapter 5 rests on. A non-finite declared value also poisons the event's
+    `mean_absolute_error_m`, and one such event turns an average across events into NaN or drops it,
+    depending on the tool.
+
+    The bare tokens are reachable only where no grammar constrains the reply: the `--unconstrained`
+    diagnostic mode, and the C0 and C1 baselines, which carry no gate either. The overflow is
+    reachable everywhere, the caption grammar placing no bound on the digits of a number. Both are
+    refused here rather than only in the scorer, so a reply the parser accepted holds no value the
+    arithmetic downstream cannot use.
+
+    Raises `ValueError`, which `json.JSONDecodeError` subclasses, so a caller already handling a
+    parse failure handles this one without change.
+    """
+    return json.loads(raw, parse_constant=_reject_json_constant, parse_float=_finite_float)
+
+
 def sha256_text(value: str) -> str:
     """Returns a labelled SHA-256 digest for a text value."""
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
