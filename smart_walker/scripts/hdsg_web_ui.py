@@ -23,7 +23,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 import threading
 import time
 from typing import Any, Optional
@@ -127,10 +127,23 @@ class _Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_error(400)
             return
+        accepted = True
         if isinstance(payload, dict):
-            self._inbound.put(payload)
-        body = b'{"ok":true}'
-        self.send_response(200)
+            try:
+                # Non-blocking, matching the frame channel. A plain `put` stood here until
+                # 25 August 2026, and the queue holds 64: once the main loop stopped draining it,
+                # every further press blocked in the handler and the request never returned. The
+                # page froze, not the one button, because every control posts to this endpoint.
+                #
+                # The way in is ordinary. The loop stops draining, a press does nothing, so the
+                # person presses again, and sixty-four presses is not many when a button looks
+                # dead. A dropped press they can repeat beats an interface that stops answering.
+                self._inbound.put_nowait(payload)
+            except Full:
+                accepted = False
+                self.server.record_dropped_input()
+        body = b'{"ok":true}' if accepted else b'{"ok":false,"reason":"input queue full"}'
+        self.send_response(200 if accepted else 503)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -203,6 +216,21 @@ class _Server(ThreadingHTTPServer):
         self.shared_state = shared_state
         self.inbound = inbound
         self.stop_event = stop_event
+        self.dropped_inputs = 0
+        self._drop_lock = threading.Lock()
+
+    def record_dropped_input(self) -> None:
+        """Counts one input the loop was too far behind to accept, and says so once.
+
+        Printed on the first drop only. A frozen interface produced no message at all, and a
+        message per press would bury the run console under exactly the repeated pressing the
+        situation provokes.
+        """
+        with self._drop_lock:
+            self.dropped_inputs += 1
+            first = self.dropped_inputs == 1
+        if first:
+            print("[hdsg] the interface input queue is full; presses are being dropped")
 
 
 class WebInterface:
@@ -229,6 +257,13 @@ class WebInterface:
         return f"http://{self.host}:{self.port}/"
 
     def start(self) -> "WebInterface":
+        # The page, the camera stream and the input endpoint carry no authentication, so a host
+        # other than the loopback address puts the camera and the walker's controls on the network
+        # for anyone who can reach the port. The default is safe and the flag is not restricted;
+        # what is not acceptable is doing it silently.
+        if self.host not in ("127.0.0.1", "localhost", "::1"):
+            print(f"[hdsg] warning: the interface is bound to {self.host}, so the camera stream "
+                  f"and the walker's controls are reachable by anyone on this network")
         self._server = _Server(
             (self.host, self.port), _Handler, self._shared, self._inbound, self._stop_event
         )
@@ -275,6 +310,11 @@ class WebInterface:
             "mode": mode,
             "at": time.strftime("%H:%M:%S"),
         })
+
+    @property
+    def dropped_inputs(self) -> int:
+        """How many browser inputs were refused because the loop had not drained them."""
+        return 0 if self._server is None else self._server.dropped_inputs
 
     def poll_events(self) -> list[dict]:
         """Returns the browser input received since the previous call."""

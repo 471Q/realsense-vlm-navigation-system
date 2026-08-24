@@ -264,12 +264,27 @@ let renderedTurns = 0;
 let pendingDirty = false;
 let lastChatLog = [];
 
+// A press the walker could not accept, and when the message about it expires. The server answers
+// 503 when its input queue is full, which happens when the sensing loop has stopped draining it.
+// Saying nothing was the old behaviour and it was worse than it sounds: the press vanished, so the
+// natural response was to press again, which is the pressing that filled the queue.
+let localNotice = '';
+let localNoticeUntil = 0;
+
 function send(payload) {
   fetch('/input', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)
-  }).catch(() => {});
+  }).then(response => {
+    if (!response.ok) {
+      localNotice = 'The walker did not take that press. Try again in a moment.';
+      localNoticeUntil = Date.now() + 4000;
+    }
+  }).catch(() => {
+    localNotice = 'No connection to the walker.';
+    localNoticeUntil = Date.now() + 4000;
+  });
 }
 
 // Sector bands and object boxes are drawn here, from the same structured values the telemetry
@@ -357,8 +372,11 @@ function applyState(state) {
     caption.textContent = 'No movement intent expressed.';
   }
 
+  // A refused press takes precedence over the run's own notice while it lasts. It is the more
+  // urgent of the two, being about the control the person just used and not about the scene.
   const notice = document.getElementById('notice');
-  if (state.notice) { notice.textContent = state.notice; notice.style.display = 'block'; }
+  const message = (Date.now() < localNoticeUntil && localNotice) || state.notice;
+  if (message) { notice.textContent = message; notice.style.display = 'block'; }
   else { notice.style.display = 'none'; }
 
   const enabled = state.controls_enabled || {};
