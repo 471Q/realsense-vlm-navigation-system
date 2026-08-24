@@ -1951,7 +1951,12 @@ def main():
                 ]
                 signature_authority["_measurement_state"] = measurement_state
                 material_signature = hdsg.guidance_signature(
-                    signature_authority, measurement_state, latest_objects
+                    signature_authority, measurement_state, latest_objects,
+                    # The same two thresholds passed to determine_authority above. Left to the
+                    # defaults, a run with an overridden threshold would band a moving object at one
+                    # distance and decide against it at another.
+                    object_stop_below_m=blocked_threshold_m,
+                    object_caution_below_m=object_caution_below_m,
                 )
                 latest_material_signature = material_signature
 

@@ -994,12 +994,63 @@ def determine_authority(
     }
 
 
+def object_distance_band(
+    distance_m: Any,
+    stop_below_m: float = OBJECT_STOP_BELOW_M,
+    caution_below_m: float = OBJECT_CAUTION_BELOW_M,
+) -> str:
+    """Which of the three deterministic distance states an object's distance falls in.
+
+    The same two thresholds `determine_authority` applies, so a band change and a status change are
+    the same event described twice rather than two rules that can disagree.
+    """
+    distance = _finite(distance_m)
+    if distance is None:
+        return "UNMEASURED"
+    if distance < stop_below_m:
+        return "STOP"
+    if distance < caution_below_m:
+        return "CAUTION"
+    return "SAFE"
+
+
 def guidance_signature(
     authority: Mapping[str, Any],
     measurement_state: str,
     objects: Optional[Iterable[Mapping[str, Any]]] = None,
+    object_stop_below_m: float = OBJECT_STOP_BELOW_M,
+    object_caution_below_m: float = OBJECT_CAUTION_BELOW_M,
 ) -> str:
-    """Builds the material-change signature used by the hybrid caption policy."""
+    """Builds the material-change signature used by the hybrid caption policy.
+
+    An unchanged signature leaves the existing caption on screen and calls no model, so anything the
+    signature omits is something the walker can fail to react to.
+
+    **Distances are omitted, and that is the approved baseline.** A chair closing from 0.45 m to
+    0.05 m produces an identical signature and no new caption.
+    HDSG_HYBRID_CAPTION_POLICY.md section 5 states this, and states that a material-distance-change
+    trigger within one decision state is not part of the approved baseline and must be defined and
+    evaluated separately before it is enabled.
+
+    **A moving object is the exception, and it is carried as a band rather than a distance.**
+    HDSG_MOVING_OBJECT_DISPLAY_POLICY.md section 4 requires a new caption when a moving object
+    enters a different deterministic distance state. That crossing usually changes the motion
+    decision as well, but not always: with the centre already blocked by a wall, a moving person on
+    the left closing from 0.90 m to 0.40 m crosses the 0.70 m stop threshold while the decision
+    stays STOP, and the signature did not change until 25 August 2026. The person walked into stop
+    range and the walker kept whatever it had already said. The band is the same three-way split
+    `determine_authority` applies, so the trigger cannot disagree with the status that caused it.
+    A stationary object carries no band, which keeps the general case on the approved baseline.
+
+    **A tracker identifier is deliberately not in the token.** Objects are described as
+    label, bearing and movement state rather than by their number, so a tracker that renumbers the
+    same chair does not re-announce it. The cost is that identity is invisible: a person leaving on
+    the left and a different person arriving at the same bearing produce the same token and no new
+    caption. Kept because renumbering is frequent and a swap at the same bearing and distance band
+    is not, and because a caption repeated on every renumber is the behaviour the signature exists
+    to prevent. HDSG_MOVING_OBJECT_DISPLAY_POLICY.md section 4 says "the same tracked object", which
+    reads as though identity is carried; the divergence is recorded rather than resolved here.
+    """
     object_tokens: dict[str, str] = {}
     for item in objects or ():
         fact_id = str(item.get("fact_id") or "")
@@ -1007,8 +1058,13 @@ def guidance_signature(
             continue
         label = str(item.get("canonical_label") or item.get("raw_label") or "object").lower()
         bearing = _bearing(item.get("bearing"))
-        motion = "MOVING" if item.get("motion_state") == "MOVING" else "PRESENT"
-        object_tokens[fact_id] = f"object:{label}:{bearing}:{motion}"
+        moving = item.get("motion_state") == "MOVING"
+        motion = "MOVING" if moving else "PRESENT"
+        token = f"object:{label}:{bearing}:{motion}"
+        if moving:
+            token += ":" + object_distance_band(
+                item.get("distance_m"), object_stop_below_m, object_caution_below_m)
+        object_tokens[fact_id] = token
 
     def stable_tokens(binding: Mapping[str, Any]) -> list[str]:
         return [
@@ -1092,7 +1148,12 @@ def build_fact_packet(
     authority = dict(authority)
     moving_ids = [item["fact_id"] for item in objects if item.get("motion_state") == "MOVING"]
     authority["moving_object_fact_ids"] = moving_ids
-    signature = guidance_signature(authority, measurement_state, objects)
+    # `blocked_threshold_m` is the object stop distance this packet was decided against, so the
+    # moving-object band in the signature is computed from it rather than from the module default.
+    signature = guidance_signature(
+        authority, measurement_state, objects,
+        object_stop_below_m=blocked_threshold_m,
+        object_caution_below_m=object_caution_below_m)
     if recording_dir:
         rgb_ref = f"{recording_dir}/{observation_id}.color.png"
         depth_ref = f"{recording_dir}/{observation_id}.depth_mm.png"
