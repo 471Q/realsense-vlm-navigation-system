@@ -152,9 +152,18 @@ class UnitScreenTests(unittest.TestCase):
         self.assertEqual([], self.codes("The centre is clear for 1.74m."))
 
     def test_an_ordinary_word_containing_a_unit_is_not_a_unit(self):
-        """"warm" ends in m and "into" contains in. Admitting the abbreviations only after a digit
-        or a space is what keeps them out."""
+        """"warm" ends in m and "into" contains in. Admitting an abbreviation only where no letter
+        precedes it is what keeps them out."""
         self.assertEqual([], composed.unquantified_units("A warm room, walking into the centre."))
+        self.assertEqual([], composed.unquantified_units("The programme is 1.74 m ahead."))
+
+    def test_a_unit_opening_the_caption_is_seen(self):
+        """The abbreviations were admitted only after a digit or a space until 24 August 2026, so
+        nothing at all was seen at the start of a caption or after a bracket: "m of space ahead",
+        "cm ahead" and "(m ahead)" reached neither this screen nor any other."""
+        for text in ("m of space ahead.", "cm ahead.", "(m ahead)", "a two-m gap"):
+            with self.subTest(text):
+                self.assertTrue(composed.unquantified_units(text), msg=text)
 
     def test_prose_with_no_unit_at_all_does_not_trip_the_unit_screen(self):
         """The screen looks for a unit without a numeral, and this caption has neither.
@@ -168,6 +177,52 @@ class UnitScreenTests(unittest.TestCase):
         codes = self.codes("The floor is level and the space ahead is quiet.")
         self.assertNotIn("RG_DIRECT_NUMBER_DETECTED", codes)
         self.assertIn("RG_NO_MEASUREMENT_STATED", codes)
+
+
+class ForeignUnitTests(unittest.TestCase):
+    """A measurement is stated in the unit it was measured in.
+
+    The unit went unchecked until 24 August 2026. Two screens stood between an invented distance and
+    the display and neither looked at it: the numeral 1.74 equals the measured centre clearance
+    written as displayed, and the unit carries a numeral, so "The centre is clear for 1.74 feet" was
+    released. So were inches, centimetres, millimetres, kilometres and yards.
+
+    The measurement was 1.74 metres. In feet the sentence claims 0.53 m and in centimetres 0.02 m,
+    both of which read as far less room than there is, and the deterministic fallback writes
+    "1.74 metres" for that same reading.
+
+    Never observed. The archive holds one run whose eight pieces of prose all say metres, and the
+    prompt asks for metres. The property at the head of `hdsg_composed.py` is nonetheless stated
+    categorically, and it held of the digits rather than of the sentence.
+    """
+
+    def setUp(self):
+        self.packet, self.prompt = event()
+
+    def codes(self, text):
+        return gate(caption(text, [declares("centre", CENTRE)]), self.packet, self.prompt)[0]
+
+    def test_a_measurement_stated_in_another_unit_is_refused(self):
+        for unit in ("feet", "foot", "inches", "inch", "cm", "mm", "km",
+                     "centimetres", "millimetres", "kilometres", "yards"):
+            with self.subTest(unit):
+                self.assertIn("RG_DIRECT_NUMBER_DETECTED",
+                              self.codes(f"The centre is clear for {CENTRE} {unit}."))
+
+    def test_every_spelling_of_the_measured_unit_is_accepted(self):
+        """The value is right and so is the unit, so nothing here may refuse."""
+        for unit in ("metres", "metre", "m", "meters", "meter"):
+            with self.subTest(unit):
+                self.assertEqual([], self.codes(f"The centre is clear for {CENTRE} {unit}."))
+
+    def test_the_check_reports_the_offending_unit(self):
+        """Returned as written, so an analysis of an archived run can quote what the model said."""
+        self.assertEqual(["feet"], composed.foreign_units("The centre is clear for 1.74 feet."))
+
+    def test_an_identifier_is_not_read_as_a_unit(self):
+        """Identifiers are masked before the scan, as they are for every other screen here."""
+        self.assertEqual([], composed.foreign_units(
+            "The centre is clear for 1.74 metres, m:sector:centre:clearance."))
 
 
 class UndeclaredNumberTests(unittest.TestCase):

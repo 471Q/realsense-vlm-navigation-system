@@ -24,9 +24,12 @@ candidate violating any of them is rejected and the deterministic fallback is re
    without excluding it: a phrasing outside that vocabulary, such as "the wider side is the easier
    one", is not caught. Only the first half of this property is categorical.
 2. Every number reaching the display is a measured value written character for character as the
-   deterministic renderer would display it. There is no tolerance and no alternative spelling, so
-   one sensor reading reaches the user in one form whether the gate accepted a caption or fell
-   back. A measurement of 2.00 is written "2.00"; "2 metres" and "two metres" are rejected.
+   deterministic renderer would display it, in the unit it was measured in. There is no tolerance
+   and no alternative spelling, so one sensor reading reaches the user in one form whether the gate
+   accepted a caption or fell back. A measurement of 2.00 is written "2.00"; "2 metres" and "two
+   metres" are rejected. The unit went unchecked until 24 August 2026, so this property held of the
+   digits and not of the sentence: "1.74 feet" for a measurement of 1.74 metres passed both number
+   screens and was released, claiming 0.53 m of room where there was 1.74 m.
 3. Every number the caption states is declared, so an undeclared one cannot pass unchecked. Two
    checks hold this between them. Every numeral must be a declared measurement written as
    displayed, and every unit of length must carry a numeral immediately in front of it. The second
@@ -202,14 +205,25 @@ _IDENTIFIER_RE = re.compile(
     r"\b(?:m:)?(?:visual|object|sector):[A-Za-z0-9_]+(?::[a-z_]+)?\b", re.IGNORECASE
 )
 
-# Every way of writing a unit of length. The abbreviations are admitted only where a digit or a
-# space precedes them, which is what keeps the "m" of "warm" and the "in" of "into" out.
+# Every way of writing a unit of length. An abbreviation is admitted only where no letter precedes
+# it, which is what keeps the "m" of "warm" out.
+#
+# The condition was that a digit or a space precede the abbreviation, until 24 August 2026. It
+# therefore saw nothing at the very start of a caption or after a bracket, so "m of space ahead",
+# "cm ahead" and "(m ahead)" reached neither this screen nor any other. Requiring the absence of a
+# letter admits those three and a hyphenated "two-m" as well, while still refusing to read "warm",
+# "into" and "programme" as units.
 _DISTANCE_UNIT_RE = re.compile(
     r"\b(?:metres?|meters?|centimetres?|centimeters?|millimetres?|millimeters?|kilometres?"
     r"|kilometers?|feet|foot|inches|inch|yards?)\b"
-    r"|(?<=[0-9\s])(?:cm|mm|km|m)\b",
+    r"|(?<![A-Za-z])(?:cm|mm|km|m)\b",
     re.IGNORECASE,
 )
+
+# The only unit any measurement in this system carries. Every value in the Fact Packet is a distance
+# in metres, `hdsg_runtime.format_measurement` writes "<value> metres", and the prompt asks for
+# metres, so a caption naming any other unit is stating a quantity no measurement supports.
+_METRE_SPELLINGS = frozenset({"m", "metre", "metres", "meter", "meters"})
 
 # A numeral written immediately before a unit, allowing for the space or hyphen between them.
 _VALUE_BEFORE_UNIT_RE = re.compile(r"(?:\d+(?:\.\d+)?|\.\d+)[\s\-]*$")
@@ -242,6 +256,30 @@ def unquantified_units(caption: str) -> list[str]:
             continue
         found.append(caption[max(0, match.start() - 20):match.end()].strip())
     return found
+
+
+def foreign_units(caption: str) -> list[str]:
+    """Returns each place the caption states a distance in a unit no measurement was taken in.
+
+    **The unit was not checked at all until 24 August 2026.** Two screens stood between an invented
+    distance and the display, and neither looked at the unit. `undeclared_numbers` requires every
+    numeral to equal a measured value written as displayed, and 1.74 does. `unquantified_units`
+    requires every unit to carry a numeral, and it does. So "The centre is clear for 1.74 feet" was
+    released, as were the same sentence in inches, centimetres, millimetres, kilometres and yards.
+
+    The measurement was 1.74 metres. In feet the sentence claims 0.53 m and in centimetres 0.02 m,
+    both of which read as far less room than there is, and the deterministic fallback would have
+    written "1.74 metres" for the same reading. The property stated at the head of this module, that
+    one sensor reading reaches the user in one form whether the gate accepted a caption or fell back,
+    held of the digits and not of the sentence.
+
+    Every value in the Fact Packet is a distance in metres, so any other unit names a quantity no
+    measurement supports and the check needs no arithmetic. Never observed: the archive holds one
+    run whose eight pieces of prose all say metres, and the prompt asks for metres.
+    """
+    masked = _mask_identifiers(caption)
+    return [caption[match.start():match.end()] for match in _DISTANCE_UNIT_RE.finditer(masked)
+            if match.group(0).lower() not in _METRE_SPELLINGS]
 
 
 def parse_caption_candidate(raw: str) -> tuple[Optional[dict], list[str]]:
@@ -946,6 +984,14 @@ def validate_caption_candidate(
     # untouched and reached the display undeclared. Screening the unit catches the class rather than
     # the spellings of it. Same code: a distance with no provenance is what both checks find.
     if unquantified_units(caption):
+        errors.append("RG_DIRECT_NUMBER_DETECTED")
+
+    # And the unit must be the one the measurement was taken in. Both checks above pass a caption
+    # reading "The centre is clear for 1.74 feet": the numeral equals a measured value written as
+    # displayed, and the unit carries a numeral. Nothing asked whether 1.74 feet is a distance the
+    # walker measured, and it is not. Same code again, for the same reason: a distance stated in a
+    # unit no measurement carries has no provenance.
+    if foreign_units(caption):
         errors.append("RG_DIRECT_NUMBER_DETECTED")
 
     # A number must sit in a clause that names the fact it was declared against. Without this a
