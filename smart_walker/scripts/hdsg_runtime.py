@@ -138,6 +138,32 @@ SECTOR_CLEAR_AT_OR_ABOVE_M = 1.8
 
 SEVERITY = {"SAFE": 0, "CAUTION": 1, "STOP": 2}
 SECTORS = ("LEFT", "CENTRE", "RIGHT")
+# What the person is told when the depth strips return nothing usable.
+#
+# Written as "Reliable depth measurements are not currently available." until 25 August 2026, and
+# each sector as "has no reliable measurement". Both were confusing beside a measured object, which
+# the same scene can carry: an object's distance is taken from the depth inside its own box, where a
+# chair's texture gives stereo something to work with, while a sector clearance is taken across a
+# third of the view, where a blank wall or a washed-out floor gives it nothing. So the walker can
+# know where a chair is and not know how much room there is around it, and saying "no reliable
+# measurement" beside "a chair is 1.20 metres away" reads as a contradiction.
+#
+# Naming free space says which of the two is missing. The words are the person's, not the code's:
+# `free_space` in `pipeline.yaml` is the unimplemented corridor-width measurement, a different thing,
+# and no sentence here is a claim about it.
+NO_FREE_SPACE_MEASUREMENT_TEXT = "I cannot measure the free space around me."
+
+
+def no_free_space_text(sector_name: Optional[str] = None) -> str:
+    """The sentence for free space that could not be measured, for one sector or for the scene.
+
+    One home for both forms. "on the centre" does not read, so the sector is named as a sector, in
+    the same shape as "The centre sector is clear for 1.74 metres" beside it.
+    """
+    if not sector_name:
+        return NO_FREE_SPACE_MEASUREMENT_TEXT
+    return f"I cannot measure the free space in the {sector_name} sector."
+
 PROFILE_LIMITS = {
     "AUTOMATIC": (3, 0, False),
     "MORE_DETAIL": (4, 2, True),
@@ -1209,6 +1235,19 @@ def build_prompt_packet(
         for index, sector in enumerate(("sector:left", "sector:centre", "sector:right")):
             if sector in fact_ids or minimum_required_clauses + detail_count >= max_reasons:
                 continue
+            # A sector that measured nothing does not earn a clause. The `no_clear_sector`
+            # condition above has already said so once, and three further clauses repeating it
+            # filled the budget and displaced the objects, which are measured a different way and
+            # can succeed where the strips fail. In a scene with no usable strip and a chair at
+            # 1.20 m the prompt offered four facts, all of them the absence of a measurement, and
+            # the chair was not among them.
+            #
+            # This does not settle the clause budget, which is deferred at
+            # HDSG_VERIFIED_GENERATION_POLICY.md section 10.4: four is unchanged, and so is the
+            # order facts are added in. Spending three slots to repeat the first slot is not a
+            # budget that anyone chose.
+            if not fact_packet["sectors"].get(sector.split(":", 1)[1], {}).get("valid"):
+                continue
             fact_ids.append(sector)
             requirements.append({
                 "requirement_id": f"detail_sector_{index}",
@@ -1391,7 +1430,7 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
             substitutions.append({"measurement_id": f"m:sector:{widest[0]}:clearance",
                                   "formatted_value": _format_measurement(value)})
             return f"No forward sector is currently clear. The greatest measured clearance is {_format_measurement(value)}.", action_ids, scene_ids, substitutions
-        return "Reliable depth measurements are not currently available.", action_ids, scene_ids, substitutions
+        return NO_FREE_SPACE_MEASUREMENT_TEXT, action_ids, scene_ids, substitutions
 
     reason_parts: list[str] = []
     for fact_id in action_ids:
@@ -1418,16 +1457,18 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
         value = fact.get("clearance_m")
         status = fact.get("status")
         if value is None:
-            reason_parts.append(f"The {name} sector measurement is unavailable.")
+            reason_parts.append(no_free_space_text(name))
             continue
         measurement_id = f"m:sector:{name}:clearance"
         formatted = _format_measurement(value)
         substitutions.append({"measurement_id": measurement_id, "formatted_value": formatted})
+        if status == "UNKNOWN":
+            reason_parts.append(no_free_space_text(name))
+            continue
         predicate = {
             "CLEAR": f"is clear for {formatted}",
             "CONSTRAINED": f"has limited clearance at {formatted}",
             "BLOCKED": f"is blocked at {formatted}",
-            "UNKNOWN": "has no reliable measurement",
         }[status]
         reason_parts.append(f"The {name} sector {predicate}.")
     if deterministic.get("scene_fact_required"):
@@ -1440,7 +1481,7 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
                 formatted = _format_measurement(fact["clearance_m"])
                 substitutions.append({"measurement_id": f"m:sector:{name}:clearance", "formatted_value": formatted})
                 reason_parts.append(f"The {name} sector has limited clearance at {formatted}." if fact["status"] == "CONSTRAINED" else f"The {name} sector is blocked at {formatted}.")
-    return " ".join(reason_parts) or "Reliable depth measurements are not currently available.", action_ids, scene_ids, substitutions
+    return " ".join(reason_parts) or NO_FREE_SPACE_MEASUREMENT_TEXT, action_ids, scene_ids, substitutions
 
 
 def _interaction_text(state: str) -> Optional[str]:

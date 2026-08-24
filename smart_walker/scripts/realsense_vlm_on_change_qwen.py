@@ -1773,6 +1773,7 @@ def main():
                     args.unconstrained or questions.measurement_is_answerable(
                         latest_sector_facts, observation_age_ms,
                         args.more_detail_freshness_s * 1000.0,
+                        latest_objects,
                     )
                 )
                 if not answerable:

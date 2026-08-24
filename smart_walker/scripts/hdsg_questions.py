@@ -47,6 +47,7 @@ unbuilt until the looser form has been measured.
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Mapping, Optional
 
@@ -82,7 +83,7 @@ OUT_OF_SCOPE_TEXT = (
     "left, right, or ahead, or whether anything nearby needs caution."
 )
 NO_MEASUREMENT_TEXT = (
-    "I do not have a reliable measurement of the area right now. Select Reassess for a fresh look."
+    "I cannot measure the free space around me right now. Select Reassess for a fresh look."
 )
 REASSESS_TEXT = "Select Reassess for a fresh look at the scene."
 
@@ -154,19 +155,40 @@ def measurement_is_answerable(
     sectors: Mapping[str, Mapping[str, Any]],
     observation_age_ms: Optional[float],
     more_detail_freshness_ms: float,
+    objects: Optional[Any] = None,
 ) -> bool:
     """Reports whether the current measurement can support any answer.
 
-    The condition is that no sector carries a valid clearance, or the most recent observation is
-    older than the More detail freshness window. An observation exactly at the window counts as
-    fresh, matching the caption path, which reuses this same condition rather than introducing a
-    second notion of what counts as unmeasurable.
+    Answerable when something was measured and the observation is fresh. An observation exactly at
+    the More detail freshness window counts as fresh, matching the caption path, which reuses this
+    condition rather than introducing a second notion of what counts as unmeasurable.
+
+    **Objects count, and did not until 25 August 2026.** The test read the three sector strips
+    alone. An object's distance is taken from the depth inside its own bounding box and a sector
+    clearance from the depth across a third of the view, so the two fail independently: a chair has
+    the texture stereo needs and a blank wall does not. A scene with no usable strip and a chair
+    measured at 1.20 m was declined, and the person was told there was no reliable measurement of
+    the area while the packet held the chair's distance. Those scenes are not rare, 114 of the 1,480
+    frames of the archived run leaving no strip measurable, and poor depth and working detection go
+    together because the detector reads the colour image.
     """
-    if not any(bool(sector.get("valid")) for sector in sectors.values()):
+    measured = any(bool(sector.get("valid")) for sector in sectors.values())
+    if not measured:
+        measured = any(_finite_distance(item) for item in (objects or []))
+    if not measured:
         return False
     if observation_age_ms is None:
         return False
     return float(observation_age_ms) <= float(more_detail_freshness_ms)
+
+
+def _finite_distance(item: Any) -> bool:
+    """True where a detected object carries a distance an answer could state."""
+    if not isinstance(item, Mapping):
+        return False
+    distance = item.get("distance_m")
+    return isinstance(distance, (int, float)) and not isinstance(distance, bool) \
+        and math.isfinite(float(distance))
 
 
 def classify_keywords(question: str) -> Optional[str]:
@@ -257,12 +279,30 @@ def deterministic_answer(fact_packet: Mapping[str, Any], requirements: list[dict
     stopping. This renders every fact the answer was permitted to describe.
     """
     fact_ids = [fact_id for item in requirements for fact_id in item["fact_ids"]]
-    parts: list[str] = []
+    measured: list[str] = []
+    unmeasured: list[str] = []
     for fact_id in dict.fromkeys(fact_ids):
         rendered = render_fact(fact_packet, fact_id)
-        if rendered:
-            parts.append(rendered)
+        if not rendered:
+            continue
+        # What was measured is said first and what could not be measured last, so the answer reads
+        # as a statement with a qualification rather than as an apology with a fact after it. The
+        # order followed the requirement list until 25 August 2026, which puts the action binding
+        # first, so a scene with no usable depth strip and a chair at 1.20 m opened by saying the
+        # free space could not be measured and mentioned the chair afterwards.
+        (unmeasured if _states_no_measurement(rendered) else measured).append(rendered)
+    parts = measured + unmeasured
     return " ".join(parts) if parts else NO_MEASUREMENT_TEXT
+
+
+def _states_no_measurement(sentence: str) -> bool:
+    """True where a rendered fact reports an absence rather than a value.
+
+    Keyed on the shared wording rather than on the fact identifier, because the sentence is the
+    thing being ordered and a sector, a condition and a future fact type all reach it by different
+    routes. `hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT` and the per-sector form share the same stem.
+    """
+    return "cannot measure the free space" in sentence
 
 
 def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
@@ -285,13 +325,13 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
             return None
         clearance = fact.get("clearance_m")
         if clearance is None:
-            return f"The {name} sector has no reliable measurement."
+            return hdsg.no_free_space_text(name)
         distance = hdsg._format_measurement(clearance)
         return {
             "CLEAR": f"The {name} sector is clear for {distance}.",
             "CONSTRAINED": f"The {name} sector has limited clearance at {distance}.",
             "BLOCKED": f"The {name} sector is blocked at {distance}.",
-        }.get(str(fact.get("status")), f"The {name} sector has no reliable measurement.")
+        }.get(str(fact.get("status")), hdsg.no_free_space_text(name))
 
     if fact_id.startswith("object:"):
         fact = next((item for item in fact_packet.get("objects", [])
@@ -319,7 +359,7 @@ def render_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[str]:
                 default=None,
             )
             if best is None:
-                return "No sector has a reliable measurement."
+                return hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT
             return ("No sector is clear. The greatest measured clearance is "
                     f"{hdsg._format_measurement(best)}.")
         if name == "rear_unobserved":
