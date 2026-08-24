@@ -1646,12 +1646,39 @@ def build_generation_response_record(
     }
 
 
+class GenerationTimeout(Exception):
+    """The model server did not answer within the time allowed."""
+
+
+class ConstraintUnavailable(Exception):
+    """The approved generation constraint could not be supplied with the request."""
+
+
 def generation_failure_code(error: Exception) -> str:
-    """Maps generation failures to the stable release-gate catalogue."""
-    text = str(error).lower()
-    if "timeout" in text or isinstance(error, TimeoutError):
+    """Maps generation failures to the stable release-gate catalogue.
+
+    **By the type of the failure, not by the wording of it.** Until 25 August 2026 this searched
+    `str(error)` for the words "timeout", "grammar" and "constraint". The client wraps up to 200
+    characters of the model server's own error message inside the exception it raises, so the code
+    recorded in the release, and reported in Chapter 5, was decided by a substring search over text
+    written by llama.cpp. Two of six realistic failures came out wrong: an out-of-memory error was
+    recorded as a timeout because the server's advice mentioned a `--timeout` flag, and a model that
+    would not load was recorded as a constraint failure because the path contained the word
+    "grammar".
+
+    It is the same fault this pipeline has carried three times, a check reading a word that
+    describes a thing rather than the thing itself, and this instance decided what a run is reported
+    to have done.
+
+    A server rejecting the constraint it was sent is not distinguishable here from any other server
+    error, and is recorded as RG_MODEL_UNAVAILABLE. Telling the two apart means reading the server's
+    error contract rather than guessing at its wording, which is recorded in
+    `LAB_SESSION_CHECKLIST.md` section E together with the startup probe that would catch the case
+    at the beginning of a session instead of once per event.
+    """
+    if isinstance(error, (GenerationTimeout, TimeoutError)):
         return "RG_GENERATION_TIMEOUT"
-    if "grammar" in text or "constraint" in text:
+    if isinstance(error, ConstraintUnavailable):
         return "RG_CONSTRAINT_FAILURE"
     return "RG_MODEL_UNAVAILABLE"
 

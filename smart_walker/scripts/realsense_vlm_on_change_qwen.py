@@ -1,3 +1,35 @@
+"""The canonical run script: the loop the README starts and the only entry point in use.
+
+It owns the sequence and nothing else. A frame arrives from the perception layer, the deterministic
+layer decides what the walker does, a prompt packet is built from what the person is permitted to be
+told, the model is asked for a caption, the gate accepts or refuses it, and a release is written.
+Each of those steps lives in the module named for it; this file decides when each runs, what is
+recorded, and what the person sees in the meantime.
+
+**What must not move into this file.** The action the person acts on is produced by
+`hdsg_runtime.determine_authority` and is never derived from anything the model wrote. No check that
+a caption has to pass belongs here: they are all in `hdsg_composed`, so that one reading of the file
+lists them. A second decision policy living beside the first is the fault that put a 660-line
+prototype in `realsense_shared_control.py` until 24 August 2026, and a reader could not tell which
+of the two Chapter 3 described.
+
+**What this file alone is responsible for.**
+
+- Timing. The detector, the model and the person all run at different rates, and the loop must stay
+  responsive while a generation is in flight. Generation runs on its own thread and the loop never
+  waits on it.
+- Freshness. A caption describes the scene at the moment the frame was taken, and a release built
+  from a stale observation is withheld rather than shown late.
+- The record. Every packet, candidate, release and question is written to the telemetry file as it
+  happens, and that file is the evidence Chapter 5 rests on. A step that is not recorded did not
+  happen as far as the thesis is concerned.
+- The two sinks. An OpenCV window and a browser, which offer the same controls by different means.
+
+**Diagnostic modes are not the release path.** `--unconstrained` omits the generation constraint and
+the baselines omit the gate. Both exist to be compared against the release path and neither is it,
+so a reading of this file has to keep track of which one a code path serves.
+"""
+
 import argparse
 import base64
 from datetime import datetime
@@ -156,7 +188,9 @@ def _build_payload_from_image_array(img_bgr: np.ndarray, fmt: str, quality: int,
         return payload, f"{fmt}/q{quality} unconstrained"
     constraint = grammar or getattr(args, '_hdsg_grammar', None)
     if not constraint:
-        raise RuntimeError("The approved HDSG generation constraint is unavailable.")
+        # A named type rather than a RuntimeError whose wording the classifier then searched for.
+        raise hdsg.ConstraintUnavailable(
+            "The approved HDSG generation constraint is unavailable.")
     payload["grammar"] = constraint
     return payload, f"{fmt}/q{quality}"
 
@@ -562,9 +596,10 @@ def _call_vlm_with_fallbacks(endpoint: str, base_img: np.ndarray, args, *,
                 timeout=float(timeout_s if timeout_s
                               else getattr(args, "vlm_timeout_s", 20.0)),
             )
-            if desc != '':
-                print(
-                    f"[vlm_on_change_qwen] VLM accepted image encoding: {desc}")
+            # A line announcing the encoding the server accepted stood here until 25 August 2026,
+            # behind `if desc != ''`. `desc` is built as "<format>/q<quality>" and is never empty,
+            # so it printed on every successful call and said nothing the next line does not say
+            # better, that being the only interesting case: a fallback was needed.
             if (fmt, q, sz) != attempts[0]:
                 print(f"[vlm_on_change_qwen] the first encoding was refused; the model answered on "
                       f"{fmt}/q{q}/sz{sz}, and the prompt packet records that.")
@@ -591,8 +626,18 @@ _VLM_SESSION = requests.Session()
 
 
 def call_vlm(endpoint: str, payload: dict, timeout: int | tuple = 45) -> str:
+    """Sends one request to the model server and returns the reply text.
+
+    A timeout is re-raised as `hdsg.GenerationTimeout` so that the release records it as one by the
+    type of the failure. The server's own message is still carried, for the log, but no longer
+    decides the reason code: it used to, and an out-of-memory error whose advice mentioned a
+    `--timeout` flag was recorded as a timeout.
+    """
     url = endpoint.rstrip('/') + '/v1/chat/completions'
-    r = _VLM_SESSION.post(url, json=payload, timeout=timeout)
+    try:
+        r = _VLM_SESSION.post(url, json=payload, timeout=timeout)
+    except requests.exceptions.Timeout as error:
+        raise hdsg.GenerationTimeout(f"the model server did not answer in time: {error}") from error
     if r.status_code >= 400:
         raise RuntimeError(
             f"VLM request failed: {r.status_code} {r.text[:200]}")
