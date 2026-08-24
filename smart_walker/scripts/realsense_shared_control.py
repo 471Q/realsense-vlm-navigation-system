@@ -614,7 +614,19 @@ def inference_thread(cfg, mapper: OntologyMapper, model: YOLO, in_q: Queue, out_
                     # about people that did nothing.
                     base = f"{raw_label} #{tid}" if tid is not None else raw_label
                     obj = {
+                        # Two different things, kept apart since 25 August 2026. `id` numbers the
+                        # detection within this frame and always exists. `track_id` is the tracker's
+                        # claim that this is the same object as one seen before, and is None when it
+                        # makes no such claim.
+                        #
+                        # Both were collapsed into `id`, the tracker's number where there was one
+                        # and the position in the list where there was not. Both are small integers,
+                        # so an untracked detection at position 1 was indistinguishable from the
+                        # tracked object whose number is 1, and `MotionTracker` kept one history for
+                        # the two. The position jumping between them frame to frame reads as motion,
+                        # which puts a moving-object alert into the prompt and a box on the display.
                         "id": int(tid) if tid is not None else i,
+                        "track_id": None if tid is None else int(tid),
                         "raw_label": raw_label,
                         "display_label": base,
                         "canonical_class": mapped.canonical_class,

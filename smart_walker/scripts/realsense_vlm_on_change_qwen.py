@@ -849,8 +849,20 @@ def main():
     rs_cfg.enable_stream(rs.stream.depth, args.width, args.height, rs.format.z16, args.fps)
     profile = pipe.start(rs_cfg)
     depth_scale = float(profile.get_device().first_depth_sensor().get_depth_scale())
+    # The colour stream's horizontal focal length, in pixels. It converts a shift in pixels into a
+    # distance in metres, so it sets the scale of every motion score against the movement threshold.
+    #
+    # `MotionTracker` derived it from a hardcoded 87 degree field of view until 25 August 2026. That
+    # figure is the D455's depth field of view and the motion is measured on the colour frame, which
+    # has its own optics; at 640 wide the two give 337 and 466 pixels, so the same 20 pixel shift at
+    # 2 m reads as 0.119 m or 0.086 m against a threshold of 0.12. The camera reports the number and
+    # is asked for it here, beside the depth scale, rather than assumed.
+    colour_intrinsics = profile.get_stream(
+        rs.stream.color).as_video_stream_profile().get_intrinsics()
+    colour_focal_px = float(colour_intrinsics.fx)
     align = rs.align(rs.stream.color)
-    print(f"[hdsg] D455f depth scale = {depth_scale:.6f} m/unit")
+    print(f"[hdsg] D455f depth scale = {depth_scale:.6f} m/unit, "
+          f"colour focal length = {colour_focal_px:.1f} px")
 
     cap_q: "Queue[sw.FramePacket]" = Queue(maxsize=1)
     inf_in: "Queue[sw.FramePacket]" = Queue(maxsize=1)
@@ -912,6 +924,7 @@ def main():
         movement_threshold_m=args.movement_threshold_m,
         stationary_threshold_m=args.stationary_threshold_m,
         confirmation_observations=max(2, args.movement_confirmation_observations),
+        focal_px=colour_focal_px,
     )
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = f"run_{run_stamp}"

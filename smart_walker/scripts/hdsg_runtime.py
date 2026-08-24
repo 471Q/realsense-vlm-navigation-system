@@ -448,17 +448,32 @@ class MotionTracker:
     stationary_threshold_m: float = 0.05
     confirmation_observations: int = 4
     lost_after_observations: int = 12
+    # The colour stream's horizontal focal length in pixels, which converts a shift in pixels into a
+    # distance in metres and therefore scales every motion score against `movement_threshold_m`.
+    #
+    # The live caller reads it from the camera's own intrinsics at startup, beside the depth scale.
+    # It was derived here from a hardcoded 87 degree field of view until 25 August 2026, which is
+    # the D455's depth field of view while the motion is measured on the colour frame. At 640 wide
+    # the two give 337 and 466 pixels, so the same 20 pixel shift at 2 m reads as 0.119 m or
+    # 0.086 m against a threshold of 0.12: the difference between moving and not moving, on the
+    # same pixels. None of it needed to be assumed, the camera reporting the number.
+    #
+    # `horizontal_fov_deg` remains the fallback for a caller with no camera, a test or an offline
+    # replay, and is used only when `focal_px` is None.
+    focal_px: Optional[float] = None
     horizontal_fov_deg: float = 87.0
-    histories: dict[int, Deque[_TrackObservation]] = field(
+    # Keyed by the tracker's identifier where a detection has one, and by "untracked:<position>"
+    # where it does not, so the two kinds of key cannot collide. See `update`.
+    histories: dict[Any, Deque[_TrackObservation]] = field(
         default_factory=lambda: defaultdict(lambda: deque(maxlen=12))
     )
-    motion_scores: dict[int, Deque[float]] = field(
+    motion_scores: dict[Any, Deque[float]] = field(
         default_factory=lambda: defaultdict(lambda: deque(maxlen=12))
     )
-    moving_hits: dict[int, int] = field(default_factory=dict)
-    stationary_hits: dict[int, int] = field(default_factory=dict)
-    confirmed_states: dict[int, str] = field(default_factory=dict)
-    missed: dict[int, int] = field(default_factory=dict)
+    moving_hits: dict[Any, int] = field(default_factory=dict)
+    stationary_hits: dict[Any, int] = field(default_factory=dict)
+    confirmed_states: dict[Any, str] = field(default_factory=dict)
+    missed: dict[Any, int] = field(default_factory=dict)
     previous_gray: Optional[np.ndarray] = None
 
     def _global_motion(self, gray: np.ndarray) -> tuple[float, float, bool]:
@@ -491,15 +506,28 @@ class MotionTracker:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         global_dx, global_dy, compensated = self._global_motion(gray)
         image_width = max(1, int(frame_bgr.shape[1]))
-        focal_px = image_width / (2.0 * math.tan(math.radians(self.horizontal_fov_deg) / 2.0))
+        focal_px = self.focal_px if self.focal_px else (
+            image_width / (2.0 * math.tan(math.radians(self.horizontal_fov_deg) / 2.0)))
         seen: set[int] = set()
         enriched: list[dict] = []
 
         for index, source in enumerate(objects):
             item = dict(source)
-            track_id = item.get("id")
-            if not isinstance(track_id, int):
-                track_id = index
+            # `track_id` is the tracker's claim that this is the same object as one seen before, and
+            # it is the only thing a history may be keyed on. `id` numbers the detection within the
+            # frame and is not an identity: it was the tracker's number where there was one and the
+            # position in the list where there was not, and both are small integers, so an untracked
+            # detection at position 1 shared a history with the tracked object numbered 1. Two
+            # objects in one history, the position jumping between them frame to frame, which reads
+            # as motion and puts a moving-object alert into the prompt. The perception layer kept
+            # the two apart on 25 August 2026 and this reads the one that means identity.
+            #
+            # A detection carrying no claim is keyed by its position so it cannot borrow anyone's
+            # history, and is left unclassified below, because a history under a position is not a
+            # history of anything.
+            raw_id = item.get("track_id", item.get("id"))
+            tracked = isinstance(raw_id, int) and not isinstance(raw_id, bool)
+            track_id: Any = raw_id if tracked else f"untracked:{index}"
             seen.add(track_id)
             x1, y1, x2, y2 = [float(v) for v in item.get("bbox_xyxy", [0, 0, 0, 0])]
             current = _TrackObservation(
@@ -548,7 +576,16 @@ class MotionTracker:
             # must exceed movement_threshold_m, and it must persist for confirmation_observations
             # consecutive frames. If that is too loose it is a threshold to measure and tune, not a
             # class list to guess from.
-            if compensated and len(history) >= self.confirmation_observations:
+            if not tracked:
+                # An untracked detection is not classified at all. Its key is its position in the
+                # list, and index 1 is a different object from one frame to the next, so a history
+                # accumulated under it is not a history of anything. Reporting UNCONFIRMED says
+                # what is known; confirming MOVING from that history would be a state derived from
+                # whatever happened to sit at that index.
+                self.moving_hits[track_id] = 0
+                self.stationary_hits[track_id] = 0
+                reasons.append("MOTION_TRACK_IDENTITY_UNAVAILABLE")
+            elif compensated and len(history) >= self.confirmation_observations:
                 recent = list(history)[-self.confirmation_observations:]
                 recent_scores = list(self.motion_scores[track_id])[-(self.confirmation_observations - 1):]
                 accumulated_motion = sum(recent_scores)
@@ -625,7 +662,12 @@ def normalise_objects(objects: Iterable[Mapping[str, Any]]) -> list[dict]:
             motion_state = "UNCONFIRMED"
         result.append({
             "fact_id": f"object:{stable_id}",
-            "detection_id": int(source.get("id", detection_id)),
+            # `source.get("id", detection_id)` returns None where the key is present and null, so
+            # the default never applied and `int(None)` raised. The perception layer does not
+            # produce that shape today, numbering an untracked detection by its position, but a
+            # crash in the deterministic layer is not the way to find out that something else did.
+            "detection_id": int(source["id"]) if isinstance(source.get("id"), (int, float))
+            else detection_id,
             "track_id": track_id,
             "raw_label": str(source.get("raw_label") or "object"),
             "canonical_label": None if canonical is None else str(canonical),
