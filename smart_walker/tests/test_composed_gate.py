@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import unittest
 
+import support
 from support import DETECTOR_CLASSES, caption, declares, declares_object, detected_object, \
     event, fact_packet, gate, observation, prompt_packet, sectors
 from scripts import hdsg_composed as composed
@@ -616,6 +617,72 @@ class AttributionTests(unittest.TestCase):
                            [declares("centre", CENTRE)])
 
 
+class AttributionIsRecordedTests(unittest.TestCase):
+    """How a number failed attribution, not only that one did.
+
+    The check distinguishes four outcomes and `hdsg_composed`'s header states that Chapter 5 reports
+    MISATTRIBUTED and FORM_NOT_FOLLOWED apart. It could not, until 24 August 2026: the caller tested
+    the returned list for emptiness and discarded it, so a run recorded a bare RG_SUBJECT_MISMATCH
+    and nothing about how the caption failed. The distinction matters because the two are different
+    results about the model. A caption stating a measured value of something it never mentions is a
+    hallucination; a caption with the right facts in the wrong shape has ignored an instruction.
+
+    This is the third time the same gap has been found here. `named_absent_terms` closed it for the
+    absent-class check on 22 August and `not_stated_in_caption` for the unstated declarations on the
+    same date, both described in `assertion_summary` as a check whose result reached no aggregate.
+    """
+
+    def setUp(self):
+        self.packet, self.prompt = event()
+
+    def summarise(self, text, assertions):
+        codes, scored = gate(caption(text, assertions), self.packet, self.prompt)
+        return codes, composed.assertion_summary(scored)
+
+    def test_a_fact_the_sentence_never_names_is_recorded_as_misattributed(self):
+        codes, summary = self.summarise("The left is clear for 1.74 metres.",
+                                        [declares("centre", CENTRE)])
+        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertEqual({"MISATTRIBUTED": 1}, dict(summary["attribution_reasons"]))
+
+    def test_a_fact_named_with_something_nearer_is_recorded_as_form_not_followed(self):
+        """Both sectors are named and each value sits beside the wrong one, which is the swap the
+        check exists for, told apart from a caption that names neither."""
+        codes, summary = self.summarise(
+            "The left is clear for 1.74 metres and the centre for 3.13 metres.",
+            [declares("centre", CENTRE), declares("left", LEFT)])
+        self.assertIn("RG_SUBJECT_MISMATCH", codes)
+        self.assertEqual({"FORM_NOT_FOLLOWED": 2}, dict(summary["attribution_reasons"]))
+
+    def test_a_sentence_naming_no_fact_at_all_is_recorded(self):
+        _, summary = self.summarise("There is 1.74 metres of space in this room.",
+                                    [declares("centre", CENTRE), declares("left", LEFT)])
+        self.assertEqual({"FACT_NOT_NAMED": 1}, dict(summary["attribution_reasons"]))
+
+    def test_an_accepted_caption_records_no_attribution_failure(self):
+        codes, summary = self.summarise("The centre is clear for 1.74 metres.",
+                                        [declares("centre", CENTRE)])
+        self.assertEqual([], codes)
+        self.assertEqual(0, summary["attribution_failures"])
+        self.assertEqual({}, dict(summary["attribution_reasons"]))
+
+    def test_an_attribution_entry_is_not_counted_as_a_declaration(self):
+        """It is a departure the model did not declare. Counting it among the declarations would
+        inflate the denominator of the agreement rate with something that was never one."""
+        _, summary = self.summarise("The left is clear for 1.74 metres.",
+                                    [declares("centre", CENTRE)])
+        self.assertEqual(1, summary["declared"])
+        self.assertEqual(1, summary["comparable"])
+        self.assertEqual(1.0, summary["agreement_rate"])
+
+    def test_the_summary_survives_being_written_to_the_log(self):
+        """It is recorded as telemetry, and a Counter is a dict subclass rather than a plain dict."""
+        _, summary = self.summarise("The left is clear for 1.74 metres.",
+                                    [declares("centre", CENTRE)])
+        self.assertEqual({"MISATTRIBUTED": 1},
+                         json.loads(json.dumps(summary))["attribution_reasons"])
+
+
 class ProhibitedContentTests(unittest.TestCase):
     """What a caption may not contain, whatever its numbers say."""
 
@@ -880,6 +947,30 @@ class ProhibitedContentTests(unittest.TestCase):
         packet, prompt = event()
         self.assertEqual(["stair"], self.named("A stair is ahead.",
                                                classes=("Stairs", "Chair")))
+
+    def test_the_singular_of_a_plural_class_the_detector_can_report_is_refused(self):
+        """`skis` is a COCO class and is already plural, so the suffix rules derived "skises" and
+        left "ski" unguarded, which is the defect the entry above exists for. Found on 24 August
+        2026 by running the plural machinery over the vocabulary actually in use: the table had an
+        entry for `Stairs`, which the shipped weight cannot report, and none for `skis`, which it
+        can."""
+        self.assertEqual(["ski"], self.named("A ski is ahead.", classes=("skis", "chair")))
+
+    def test_every_plural_class_name_in_the_live_vocabulary_is_guarded(self):
+        """Checked against the ontology, which is generated from the detector's own class names, so
+        a change of weights that introduces another already-plural class fails here."""
+        import yaml
+
+        cfg = yaml.safe_load((support.CONFIG / "ontology.yaml").read_text(encoding="utf-8"))
+        names = [c for bucket in cfg["ontology"] for c in bucket.get("canonical", [])]
+        names += [str(name) for name in cfg.get("not_obstacles", []) or ()]
+        unguarded = [name for name in names
+                     if name.endswith("s")
+                     and not name.endswith(composed._SINGULAR_S_ENDINGS)
+                     and name not in composed._PLURAL_CLASS_SINGULARS
+                     and name not in composed._IRREGULAR_PLURALS]
+        self.assertEqual([], unguarded,
+                         "an already-plural class name whose singular nothing guards")
 
     def test_a_common_word_is_not_guarded_by_stripping_an_s(self):
         """The reason the singulars are written out rather than derived. Stripping a trailing "s"

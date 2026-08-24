@@ -568,6 +568,12 @@ def attribution_failures(caption: str, scored: Sequence[Mapping[str, Any]],
 # on 22 August 2026 with the swap to the Open Images vocabulary of 601 names, where the suffix rules
 # would otherwise produce "mans", "shelfs", "scarfs", "gooses", "deers", "potatos" and "tomatos" and
 # leave the real plurals unguarded. Only names the rules get wrong belong here.
+#
+# That swap was reverted and the shipped weight is COCO again, so thirteen of these entries guard
+# words the detector cannot report and are inert. They are kept rather than pruned because the
+# weight is not settled: `LAB_SESSION_CHECKLIST.md` section D holds three candidate vocabularies,
+# and a table entry costs nothing while a missing one is an unguarded word. Checked against the
+# vocabulary in use on 24 August 2026, which is how the missing `skis` below was found.
 _IRREGULAR_PLURALS = {
     "person": "people",
     "knife": "knives",
@@ -594,8 +600,14 @@ _IRREGULAR_PLURALS = {
 # here the class name is plural and the singular is.
 #
 # A caption in the run of 22 August 2026 reported "stair" as a sighting and was released, because
-# the detector's word is `Stairs` and nothing guarded the singular. It is the hazard word, so it is
-# the worst one to miss.
+# the detector's word was `Stairs` and nothing guarded the singular. That was the Open Images
+# vocabulary; the shipped COCO weight has no stairs class, so the entry now guards nothing and is
+# kept against the hazard decision recorded in `LAB_SESSION_CHECKLIST.md` section D.
+#
+# `skis` was added on 24 August 2026, checked against the vocabulary actually in use rather than
+# against the one this table was written for. It is a COCO class and it is already plural, so the
+# suffix rules derived "skises" and left "ski" unguarded, which is the same defect the "stairs"
+# entry exists for.
 #
 # Written out rather than derived by stripping a trailing "s", which would guard "short" from
 # `Shorts` and refuse "a short corridor", "jean" from `Jeans`, and "goggle" from `Goggles`. Only
@@ -603,6 +615,7 @@ _IRREGULAR_PLURALS = {
 _PLURAL_CLASS_SINGULARS = {
     "stairs": "stair",
     "scissors": "scissor",
+    "skis": "ski",
 }
 
 # A class ending in a sibilant takes "es", so "bus" pluralises to "buses" and not to "buss".
@@ -652,11 +665,15 @@ def _pluralise(word: str) -> set[str]:
 def _surface_forms(term: str) -> set[str]:
     """Returns the written forms of one detector class, singular and plural.
 
-    A class named with a bracketed sense yields the bare word as well. Eleven of the detector's
-    classes are named that way, and until 22 August 2026 each was matched only as the whole string
+    A class named with a bracketed sense yields the bare word as well. Eleven of the Open Images
+    classes were named that way, and until 22 August 2026 each was matched only as the whole string
     including its brackets, which no caption will ever contain. Worse, a word boundary cannot follow
     a closing bracket, so even the whole string could not match. All eleven were unguarded: with
     nothing detected a caption could say "a jaguar", "a drill" or "an organ" freely.
+
+    No COCO name carries a bracketed sense, so this branch is inert under the shipped weight. It is
+    kept because the weight is not settled, and because a vocabulary that distinguishes two senses
+    of a word is exactly the kind this system would want.
     """
     lowered = str(term).lower().strip()
     if not lowered:
@@ -681,8 +698,12 @@ def forbidden_entity_terms(fact_packet: Mapping[str, Any],
     prevent the model from naming that thing in other words. Measured on 22 August 2026 against an
     observation with nothing detected, the caption may still say "sofa", "settee", "armchair",
     "seating", "sideboard", "handrail", "banister", "staircase", "steps", "kerb", "pet", "puppy" or
-    "rollator", because none of those is one of the detector's 601 labels. Two of those, "staircase"
-    and "steps", name the hazard the whole stopping distance argument rests on.
+    "rollator", because none of those is one of the detector's labels. Two of those, "staircase" and
+    "steps", name the hazard the whole stopping distance argument rests on.
+
+    That measurement was taken against the Open Images vocabulary of 601 names. The shipped weight
+    is COCO's 80, so the hole is wider rather than narrower: "sofa" and "settee" are now unguarded
+    alongside the rest, COCO naming the class `couch`.
 
     This docstring previously said the check made object hallucination impossible rather than merely
     infrequent. That was wrong, and the word appeared in the thesis text as well. The bound is
@@ -1002,8 +1023,26 @@ def validate_caption_candidate(
     # subject was not the fact the clause was chosen for, which is the same failure read off a
     # sentence the runtime had written rather than one the model composed. Reviving it keeps the
     # enumeration unchanged and names the failure accurately.
-    if attribution_failures(caption, scored, fact_packet):
+    #
+    # Each failure is recorded rather than only counted. The check distinguishes four outcomes and
+    # the module header states that Chapter 5 reports MISATTRIBUTED and FORM_NOT_FOLLOWED apart,
+    # which it could not do until 24 August 2026: the caller tested the list for emptiness and
+    # discarded it, so a run recorded that some caption failed attribution and nothing about how.
+    # The same gap was found and closed for the absent-class check on 22 August, and this follows
+    # it, an entry in the scored list carrying the failure as its outcome.
+    misattributions = attribution_failures(caption, scored, fact_packet)
+    if misattributions:
         errors.append("RG_SUBJECT_MISMATCH")
+    for failure in misattributions:
+        scored.append({
+            "fact_id": failure["declared_for"][0] if failure["declared_for"] else None,
+            "measurement_id": None,
+            "stated_value": failure["number"],
+            "declared_for": failure["declared_for"],
+            "nearest_facts": failure.get("nearest", []),
+            "source": "caption",
+            "outcome": f"ATTRIBUTION_{failure['reason']}",
+        })
 
     # A caption offered measurements must state at least one of them.
     if no_measurement_stated(caption, prompt_packet, fact_packet):
@@ -1384,6 +1423,13 @@ def assertion_summary(scored: Sequence[Mapping[str, Any]]) -> dict:
     detector had not reported produced a bare reason code and reached no aggregate, so the one place
     Chapter 5 reads could report altered measurements and could not report named objects at all.
 
+    `attribution_failures` was added on 24 August 2026 for the same reason. A number stated away
+    from the fact it was declared against produced a bare `RG_SUBJECT_MISMATCH`, and the four-way
+    result the check computes was discarded by its caller, so a run recorded that attribution had
+    failed and nothing about how. Neither count belongs among the declarations: both are departures
+    the model did not declare, and counting them there would inflate the agreement rate's
+    denominator with something that was never a declaration.
+
     A repeated declaration of the same fact is counted once, on the same date and for the same
     reason. Every figure here is meant to describe what the caption claimed, and a caption claiming
     one thing twice claimed one thing. The repeats are reported as `duplicate_declarations` so the
@@ -1400,14 +1446,25 @@ def assertion_summary(scored: Sequence[Mapping[str, Any]]) -> dict:
     errors = [item["absolute_error_m"] for item in comparable
               if item["outcome"] == "DISAGREES"]
     named_absent = [item for item in counted if item.get("outcome") == "NAMED_ABSENT_CLASS"]
+    attribution = [item for item in counted
+                   if str(item.get("outcome", "")).startswith("ATTRIBUTION_")]
     return {
-        # Declarations only. An absent-class entry is a departure the model did not declare, so
-        # counting it here would inflate the denominator of the agreement rate with something that
-        # was never a declaration.
-        "declared": len(counted) - len(named_absent),
+        # Declarations only. An absent-class entry and an attribution entry are both departures the
+        # model did not declare, so counting either here would inflate the denominator of the
+        # agreement rate with something that was never a declaration.
+        "declared": len(counted) - len(named_absent) - len(attribution),
         "duplicate_declarations": len(duplicates),
         "named_absent_class": len(named_absent),
         "named_absent_terms": [item["named_term"] for item in named_absent],
+        # The four ways a number can fail attribution, counted apart. MISATTRIBUTED is a caption
+        # stating a measured value of something it never mentions and FORM_NOT_FOLLOWED is a caption
+        # with the right facts in the wrong shape, which are different results about the model. The
+        # check has distinguished them since it was written; the caller discarded the distinction
+        # until 24 August 2026, so Chapter 5 could report that attribution failed and nothing more.
+        "attribution_failures": len(attribution),
+        "attribution_reasons": Counter(
+            str(item["outcome"])[len("ATTRIBUTION_"):] for item in attribution
+        ),
         "comparable": len(comparable),
         "agreeing": len(agreeing),
         "disagreeing": len(comparable) - len(agreeing),
