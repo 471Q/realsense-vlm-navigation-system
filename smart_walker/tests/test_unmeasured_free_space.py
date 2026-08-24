@@ -128,22 +128,40 @@ class TheSentenceSaysWhichMeasurementIsMissing(unittest.TestCase):
         _, _, _, answer = scene(NO_STRIPS, CHAIR)
         self.assertEqual(
             "Stop. A chair is detected on the left at 1.20 metres. "
-            "I cannot measure the free space around me.", answer)
+            "The free space ahead cannot be measured.", answer)
 
     def test_a_single_failed_strip_is_named_as_a_sector(self):
         """"the free space on the centre" does not read, so the sector is named as a sector, in the
         same shape as "The centre sector is clear for 1.74 metres" beside it."""
         _, _, _, answer = scene(ONE_STRIP_FAILED, [])
-        self.assertIn("I cannot measure the free space in the centre sector.", answer)
+        self.assertIn("The free space in the centre sector cannot be measured.", answer)
         self.assertNotIn("on the centre", answer)
 
     def test_the_guidance_caption_uses_the_same_words(self):
         _, _, caption_text, _ = scene(NO_STRIPS, CHAIR)
-        self.assertEqual("Stop. I cannot measure the free space around me.", caption_text)
+        self.assertEqual("Stop. The free space ahead cannot be measured.", caption_text)
 
     def test_the_decline_uses_the_same_words(self):
-        self.assertIn("I cannot measure the free space around me",
+        self.assertIn("The free space ahead cannot be measured",
                       questions.NO_MEASUREMENT_TEXT)
+
+    def test_no_sentence_about_free_space_speaks_in_the_first_person(self):
+        """Wording corrected by Atiq on 25 August 2026: the walker is a device reporting on its own
+        sensing, and "I cannot measure" puts a speaker in the sentence who does not exist.
+
+        The out-of-scope decline is deliberately excluded. It answers a question the person typed,
+        where an addressed reply is the shape of the exchange, and it makes no claim about a
+        measurement.
+        """
+        import re
+
+        for sentence in (hdsg.NO_FREE_SPACE_MEASUREMENT_TEXT, hdsg.no_free_space_text("left"),
+                         hdsg.no_free_space_around_object_text("chair"),
+                         questions.NO_MEASUREMENT_TEXT):
+            # Whole words. A substring test for " me" matches " measured", which is most of the
+            # replacement wording.
+            words = set(re.findall(r"[A-Za-z']+", sentence.lower()))
+            self.assertEqual(set(), words & {"i", "me", "my", "myself"}, sentence)
 
     def test_no_sentence_still_calls_it_an_unreliable_measurement(self):
         """The wording that read as a contradiction, held gone across the files that produced it.
@@ -170,9 +188,55 @@ class TheSentenceSaysWhichMeasurementIsMissing(unittest.TestCase):
                     self.assertNotIn(phrase, literal, f"{name}: {phrase}")
 
     def test_the_sentence_has_one_home(self):
-        self.assertEqual("I cannot measure the free space around me.", hdsg.no_free_space_text())
-        self.assertEqual("I cannot measure the free space in the left sector.",
+        self.assertEqual("The free space ahead cannot be measured.", hdsg.no_free_space_text())
+        self.assertEqual("The free space in the left sector cannot be measured.",
                          hdsg.no_free_space_text("left"))
+        self.assertEqual("The free space around the chair cannot be measured.",
+                         hdsg.no_free_space_around_object_text("chair"))
+
+
+class AnObjectBlockingTheWayIsNamedEvenWithNoStripToMeasure(unittest.TestCase):
+    """The condition stood alone in the action binding until 25 August 2026.
+
+    A scene with every depth strip failed and a chair 0.40 metres directly ahead stopped the walker
+    for the chair and told the person only that the strips had failed. The distance was measured and
+    it was the reason for the stop. The question path named the chair because it walks the whole
+    packet; the guidance caption reads the action binding and so had nothing to name it with.
+    """
+
+    def caption(self, objects):
+        _, _, caption_text, _ = scene(NO_STRIPS, objects)
+        return caption_text
+
+    def test_the_caption_names_the_object_and_its_distance(self):
+        self.assertEqual(
+            "Stop. A chair is detected in the centre at 0.40 metres. "
+            "The free space around the chair cannot be measured.",
+            self.caption(detected_object(3, "chair", "CENTRE", 0.40)))
+
+    def test_the_object_joins_the_action_binding(self):
+        packet, _, _, _ = scene(NO_STRIPS, detected_object(3, "chair", "CENTRE", 0.40))
+        binding = packet["deterministic"]["action_binding"]
+        self.assertEqual(["object:3", "condition:no_clear_sector"], binding["accepted_fact_ids"])
+        self.assertEqual("object:3", binding["primary_fact_id"])
+
+    def test_the_stated_distance_is_declared_as_a_measurement(self):
+        """The caption states a number, so the gate has to be able to check it against the packet."""
+        packet, prompt, _, _ = scene(NO_STRIPS, detected_object(3, "chair", "CENTRE", 0.40))
+        _, _, _, substitutions = hdsg._fallback_reason(packet)
+        self.assertEqual([{"measurement_id": "m:object:3:distance",
+                           "formatted_value": "0.40 metres"}], substitutions)
+
+    def test_an_object_that_does_not_block_the_intended_sector_is_left_out(self):
+        """A chair on the left at 1.20 metres is not why the walker stopped, and naming a real but
+        non-causal fact is the failure the binding exists to prevent."""
+        packet, _, caption_text, _ = scene(NO_STRIPS, CHAIR)
+        self.assertEqual(["condition:no_clear_sector"],
+                         packet["deterministic"]["action_binding"]["accepted_fact_ids"])
+        self.assertEqual("Stop. The free space ahead cannot be measured.", caption_text)
+
+    def test_a_scene_with_no_object_at_all_is_unchanged(self):
+        self.assertEqual("Stop. The free space ahead cannot be measured.", self.caption([]))
 
 
 if __name__ == "__main__":

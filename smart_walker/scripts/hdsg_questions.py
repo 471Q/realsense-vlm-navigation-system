@@ -83,7 +83,7 @@ OUT_OF_SCOPE_TEXT = (
     "left, right, or ahead, or whether anything nearby needs caution."
 )
 NO_MEASUREMENT_TEXT = (
-    "I cannot measure the free space around me right now. Select Reassess for a fresh look."
+    "The free space ahead cannot be measured right now. Select Reassess for a fresh look."
 )
 REASSESS_TEXT = "Select Reassess for a fresh look at the scene."
 

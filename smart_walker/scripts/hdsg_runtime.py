@@ -151,7 +151,11 @@ SECTORS = ("LEFT", "CENTRE", "RIGHT")
 # Naming free space says which of the two is missing. The words are the person's, not the code's:
 # `free_space` in `pipeline.yaml` is the unimplemented corridor-width measurement, a different thing,
 # and no sentence here is a claim about it.
-NO_FREE_SPACE_MEASUREMENT_TEXT = "I cannot measure the free space around me."
+#
+# Written in the first person until 25 August 2026 ("I cannot measure the free space around me"),
+# which puts a speaker in a sentence that has none. The walker is a device reporting on its own
+# sensing, so the sentence states what could not be measured rather than who could not measure it.
+NO_FREE_SPACE_MEASUREMENT_TEXT = "The free space ahead cannot be measured."
 
 
 # Class names whose article the letter test gets wrong. Empty under the shipped COCO weight, whose
@@ -200,7 +204,19 @@ def no_free_space_text(sector_name: Optional[str] = None) -> str:
     """
     if not sector_name:
         return NO_FREE_SPACE_MEASUREMENT_TEXT
-    return f"I cannot measure the free space in the {sector_name} sector."
+    return f"The free space in the {sector_name} sector cannot be measured."
+
+
+def no_free_space_around_object_text(label: str) -> str:
+    """The same absence, stated against the object the walker stopped for.
+
+    Wording chosen by Atiq on 25 August 2026. What failed is the depth reading across a third of the
+    view rather than a reading taken around the object itself, so this names the object as the thing
+    the missing space surrounds and not as the thing that was measured. It follows a sentence that
+    has just given the object's own distance, which is the contrast it exists to draw: the object is
+    measured, the room around it is not.
+    """
+    return f"The free space around the {label} cannot be measured."
 
 PROFILE_LIMITS = {
     "AUTOMATIC": (3, 0, False),
@@ -763,10 +779,11 @@ def determine_authority(
         current = binding_object_by_sector.get(sector)
         if current is None or distance < float(current.get("distance_m", float("inf"))):
             binding_object_by_sector[sector] = item
+        # An object only ever reaches here as BLOCKED or CONSTRAINED, and both rank above CLEAR, so
+        # a clear sector is always caught by this comparison. A second branch for the clear case
+        # stood below it until 25 August 2026 and no combination of the two statuses could reach it.
         order = {"CLEAR": 0, "CONSTRAINED": 1, "BLOCKED": 2, "UNKNOWN": 3}
         if order[object_status] > order.get(effective_statuses.get(sector, "UNKNOWN"), 3):
-            effective_statuses[sector] = object_status
-        elif effective_statuses.get(sector) == "CLEAR":
             effective_statuses[sector] = object_status
     clear = [name for name in SECTORS if effective_statuses.get(name) == "CLEAR"]
     sector_advisory = "SAFE" if len(clear) == 3 else ("STOP" if not clear else "CAUTION")
@@ -886,6 +903,16 @@ def determine_authority(
                 decision, selected = "STOP", "NONE"
                 selection_status = "UNAVAILABLE"
                 action_ids = ["condition:no_clear_sector"]
+                if intended_object is not None:
+                    # An object blocking the intended sector is named alongside the condition.
+                    #
+                    # Until 25 August 2026 the condition stood alone here, so a scene whose depth
+                    # strips all failed while a chair 0.40 metres ahead measured cleanly produced a
+                    # caption that reported only the missing strips. The chair was measured, it was
+                    # the reason the walker stopped, and it was never mentioned. The question path
+                    # named it because it walks the whole packet; the guidance caption reads this
+                    # list and so had nothing to name it with.
+                    action_ids = [intended_binding_fact, "condition:no_clear_sector"]
                 rules.append({
                     "fact_id": "condition:no_clear_sector",
                     "rule_id": "sector.no_clear_alternative",
@@ -1476,6 +1503,27 @@ def _format_measurement(value: Any) -> str:
     return f"{float(value):.{MEASUREMENT_DECIMALS}f} metres"
 
 
+def _object_fact(fact_packet: Mapping[str, Any], fact_id: str) -> Optional[Mapping[str, Any]]:
+    return next((item for item in fact_packet.get("objects", [])
+                 if item.get("fact_id") == fact_id), None)
+
+
+def _blocked_sector_name(fact_packet: Mapping[str, Any], action_ids: list[str]) -> str:
+    """The sector the walker was heading into, named as a sector.
+
+    The first entry of the action binding is what bound the intended sector: the sector itself where
+    a depth strip blocked it, and the object where an object did. An object carries the direction as
+    its bearing, so both forms resolve to one of the three sector names.
+    """
+    primary = action_ids[0] if action_ids else ""
+    if primary.startswith("sector:"):
+        return primary.split(":", 1)[1]
+    fact = _object_fact(fact_packet, primary)
+    if fact is not None:
+        return str(fact.get("bearing") or "CENTRE").lower()
+    return "centre"
+
+
 def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], list[str], list[dict]]:
     deterministic = fact_packet["deterministic"]
     action_ids = list(deterministic["action_binding"]["accepted_fact_ids"])
@@ -1489,8 +1537,21 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
     if state == "POST_REORIENTATION_STABILISING":
         return "The new view is not yet stable.", action_ids, scene_ids, substitutions
     if state == "AWAITING_SECTOR_CHOICE":
-        intended = next((item for item in action_ids if _fact_from_packet(fact_packet, item) and _fact_from_packet(fact_packet, item).get("status") != "CLEAR"), "sector:centre")
-        return f"The {intended.split(':')[1]} sector is blocked, while the left and right sectors are similarly clear.", action_ids, scene_ids, substitutions
+        # The blocked sector and the offered pair are both read from the decision rather than
+        # searched for or written out.
+        #
+        # Until 25 August 2026 the name came from the first fact in the action binding whose status
+        # was not CLEAR. An object fact carries no status field at all, so `.get("status")` returned
+        # None, None is not "CLEAR", and an object won the search. The name was then taken as the
+        # text after the colon, which for `object:3` is the detection's number. A chair in a doorway
+        # with both sides open produced "The 3 sector is blocked", spoken aloud. The pair was
+        # written out as "left and right" in the same sentence, which is what the policy offers when
+        # the intent is forward and is not the only pair it can offer.
+        options = [str(name).lower() for name in deterministic.get("selection_options") or []]
+        blocked = _blocked_sector_name(fact_packet, action_ids)
+        pair = " and ".join(options) if options else "other"
+        return (f"The {blocked} sector is blocked, while the {pair} sectors are similarly clear.",
+                action_ids, scene_ids, substitutions)
     if decision == "STOP" and "condition:no_clear_sector" in action_ids:
         # The widest sector is named by its own measurement, not by a description of its role.
         #
@@ -1510,6 +1571,24 @@ def _fallback_reason(fact_packet: Mapping[str, Any]) -> tuple[str, list[str], li
             substitutions.append({"measurement_id": f"m:sector:{widest[0]}:clearance",
                                   "formatted_value": _format_measurement(value)})
             return f"No forward sector is currently clear. The greatest measured clearance is {_format_measurement(value)}.", action_ids, scene_ids, substitutions
+        # No strip measured, so there is no clearance to state. Where an object bound the decision it
+        # is named first with its own distance, and the absence is then stated against it.
+        blocking_id = next((item for item in action_ids if item.startswith("object:")), None)
+        blocking = None if blocking_id is None else _object_fact(fact_packet, blocking_id)
+        if blocking is not None:
+            label = blocking.get("canonical_label") or blocking.get("raw_label") or "object"
+            bearing = str(blocking.get("bearing") or "CENTRE").lower()
+            bearing_text = "in the centre" if bearing == "centre" else f"on the {bearing}"
+            distance = blocking.get("distance_m")
+            formatted = None
+            if distance is not None:
+                formatted = _format_measurement(distance)
+                substitutions.append({
+                    "measurement_id": f"m:object:{blocking_id.split(':', 1)[1]}:distance",
+                    "formatted_value": formatted})
+            sentence = object_sentence(label, "is detected", bearing_text, formatted)
+            return (f"{sentence} {no_free_space_around_object_text(label)}",
+                    action_ids, scene_ids, substitutions)
         return NO_FREE_SPACE_MEASUREMENT_TEXT, action_ids, scene_ids, substitutions
 
     reason_parts: list[str] = []
