@@ -624,12 +624,15 @@ _SIBILANT_ENDINGS = ("s", "x", "z", "ch", "sh")
 # Singular nouns that end in "s". A visual label is rendered into the release with a verb, and
 # testing only for a trailing "s" produced "Possible bus are visible in the left".
 #
-# Checked against the whole detector vocabulary on 22 August 2026. The endings decide correctly for
-# 600 of the 601 class names. The exception is `Maracas`, which "as" makes singular, giving "Possible
-# maracas is visible". The "as" ending is kept regardless, because this function is applied to the
-# label the model proposes rather than to a detector class name, and the model may propose "gas",
-# "canvas" or "atlas", which the ending protects. One wrong verb on a word no walker will meet is
-# the cheaper error.
+# Checked against the whole detector vocabulary on 22 August 2026, then against the shipped COCO
+# vocabulary on 24 August. Under Open Images the endings decided correctly for 600 of the 601 names,
+# the exception being `Maracas`, which "as" makes singular. Under COCO's 80 they decide correctly for
+# 79, and the exception is `skis`, which "is" makes singular, giving "Possible skis is visible".
+#
+# The endings are kept regardless. This function is applied to the label the model proposes rather
+# than to a class name, and the model may propose "gas", "canvas", "atlas", "axis" or "basis", which
+# the endings protect. One wrong verb in a sentence about skis is the cheaper error, and it is a
+# wrong verb rather than a wrong measurement. Recorded rather than special-cased.
 _SINGULAR_S_ENDINGS = ("ss", "us", "is", "as", "os")
 
 
@@ -762,7 +765,9 @@ def forbidden_terms_named(text: str, forbidden: Iterable[str]) -> list[str]:
     searched only when its first word is present in the text. A search for each of the forbidden
     forms in turn cost 0.37 ms against COCO's 159 forms and 19.9 ms against the 1220 the Open Images
     vocabulary produces, which is the same answer 54 times slower. This arrangement answers in
-    0.39 ms, back to what the check cost before the vocabulary grew.
+    0.39 ms, back to what the check cost before the vocabulary grew. COCO is the shipped vocabulary
+    again, so the arrangement now costs more than it saves; it is kept because the weight is not
+    settled and because it is the same answer either way.
     """
     lowered = str(text).lower()
     words = set(_WORD_RE.findall(lowered))
@@ -852,9 +857,10 @@ def validate_caption_candidate(
     if named_absent:
         # Recorded, not refused. Confirmed 23 August 2026.
         #
-        # The check sees the detector's own 601 words and their inflections. A synonym is not one of
-        # them, so a caption naming an absent chair is refused if it writes "chair" and released if
-        # it writes "sofa" or "seating". Refusing on that boundary punishes the cases the word list
+        # The check sees the detector's own class names and their inflections, 80 of them under the
+        # shipped COCO weight. A synonym is not one of them, so a caption naming an absent chair is
+        # refused if it writes "chair" and released if it writes "sofa" or "seating", the latter two
+        # being outside COCO entirely. Refusing on that boundary punishes the cases the word list
         # happens to cover and permits the rest, and the boundary has nothing to do with whether the
         # sentence is true. The refusal rate reported in Chapter 5 would then mix a real property
         # with an accident of vocabulary, and would not be interpretable.
