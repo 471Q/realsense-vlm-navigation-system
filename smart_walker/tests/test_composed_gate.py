@@ -1304,6 +1304,61 @@ class PromptTests(unittest.TestCase):
         packet, prompt = event(lane=sectors(centre=2.0))
         self.assertIn("2.00 metres", composed.build_composed_prompt(prompt, packet))
 
+    def unmeasurable(self):
+        """A scene where no sector could be measured. 114 of the 1,480 frames of the archived run of
+        22 August 2026, 7.7 per cent, recomputed through the current sector logic."""
+        return event(lane=sectors(left=None, centre=None, right=None,
+                                  statuses=("UNKNOWN", "UNKNOWN", "UNKNOWN")))
+
+    def test_a_scene_with_nothing_to_measure_is_not_asked_to_declare_a_measurement(self):
+        """Until 25 August 2026 the declaration paragraph printed regardless of whether the scene
+        held a measurement, so the model was pointed at "the first measurement below" when there was
+        none and shown an empty object as the worked declaration.
+
+        Nothing the person hears turned on it: the fallback for such a scene is already a good
+        sentence and the action is STOP either way. What it changed is what a refusal means. A model
+        fumbling an instruction it could not carry out was recorded as a model failing to follow one.
+        """
+        packet, prompt = self.unmeasurable()
+        text = composed.build_composed_prompt(prompt, packet)
+        for absent in ("For the first measurement below", "Then declare every number you wrote",
+                       "Give each measurement its own sentence", "  {}", "MEASUREMENTS:"):
+            self.assertNotIn(absent, text, absent)
+
+    def test_it_is_told_instead_that_nothing_could_be_measured(self):
+        packet, prompt = self.unmeasurable()
+        text = composed.build_composed_prompt(prompt, packet)
+        self.assertIn("Nothing in this scene could be measured", text)
+        self.assertIn("WHAT IS KNOWN:", text)
+
+    def test_the_prohibition_on_inventing_a_number_survives(self):
+        """It is the whole of what the removed block was protecting. With no measurement to declare,
+        any number in the caption is one the model invented, and the gate refuses it on that ground,
+        so the prompt must still say so."""
+        packet, prompt = self.unmeasurable()
+        text = composed.build_composed_prompt(prompt, packet)
+        self.assertIn("Do not state a distance", text)
+        self.assertIn("Any number in the caption causes it to be discarded", text)
+        codes, _ = gate(caption("The left is clear for 1.74 metres.",
+                                [declares("centre", CENTRE)]), packet, prompt)
+        self.assertIn("RG_DIRECT_NUMBER_DETECTED", codes)
+
+    def test_a_measured_scene_is_told_all_of_it(self):
+        """The condition governs one branch only. A scene with measurements keeps every sentence."""
+        text = composed.build_composed_prompt(self.prompt, self.packet)
+        for present in ("For the first measurement below", "Then declare every number you wrote",
+                        "Give each measurement its own sentence", "MEASUREMENTS:", "  Write:"):
+            self.assertIn(present, text, present)
+        self.assertNotIn("Nothing in this scene could be measured", text)
+
+    def test_an_honest_caption_for_an_unmeasurable_scene_is_accepted(self):
+        """The path the prompt now asks for has to be one the gate permits, or the change moves the
+        contradiction rather than removing it."""
+        packet, prompt = self.unmeasurable()
+        codes, _ = gate(caption("The view ahead cannot be measured at the moment."),
+                        packet, prompt)
+        self.assertEqual([], codes)
+
     def _examples(self, prompt, packet):
         """The Write and Not lines, read back out of the prompt the model is actually sent."""
         written, refused = [], []

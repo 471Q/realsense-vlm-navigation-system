@@ -1124,9 +1124,16 @@ COMPOSED_SYSTEM_PROMPT = (
     "declared."
 )
 
-_COMPOSED_INSTRUCTION = """Write one short caption describing the space around the walker, in your own words, for someone who cannot see it well.
-
-Use the measurements below. Write the distances into your sentences in metres, exactly as they are given, digit for digit. Do not round them, do not approximate them, do not drop a trailing zero, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres. A measurement given as 2.00 metres is written as 2.00 metres, not as 2 metres and not as two metres.
+# How a distance is written and declared. Omitted entirely for a scene that offers no measurement,
+# because every sentence in it presumes one. Until 25 August 2026 it was printed regardless, so an
+# unmeasurable scene was told to give each measurement its own sentence, pointed at "the first
+# measurement below" when there was none, and shown an empty object as the worked declaration. Three
+# instructions that cannot be carried out, on 7.7 per cent of the 1,480 frames of the archived run.
+#
+# Nothing the person hears turns on this. The fallback for such a scene is already a good sentence
+# and the action is STOP either way. What it changes is what a refusal means: a model fumbling a
+# contradictory prompt was recorded as a model failing to follow an instruction.
+_MEASUREMENT_INSTRUCTION = """Use the measurements below. Write the distances into your sentences in metres, exactly as they are given, digit for digit. Do not round them, do not approximate them, do not drop a trailing zero, and do not write them as words. A measurement given as 1.74 metres is written as 1.74 metres. A measurement given as 2.00 metres is written as 2.00 metres, not as 2 metres and not as two metres.
 
 Give each measurement its own sentence, ending in a full stop. Do not join two measurements with a comma.
 
@@ -1140,17 +1147,28 @@ Then declare every number you wrote. For each one give the fact_id and the measu
   {declaration_example}
 
 A number in the caption that is not declared, or any number that differs from its measurement, causes the caption to be discarded. This applies to a distance written as a word as much as to one written in digits.
+"""
 
+# What stands in its place. The prohibition on stating a distance is kept, and is the whole of what
+# survives: with no measurement to declare, any number in the caption is one the model invented, and
+# the gate refuses it on exactly that ground. The declarations list stays in the reply schema and is
+# simply empty, which the grammar already allows.
+_NO_MEASUREMENT_INSTRUCTION = """Nothing in this scene could be measured, so no distances are available to you. Do not state a distance and do not name a unit of length. Say what the view is like and say that it cannot be measured. Any number in the caption causes it to be discarded.
+"""
+
+_COMPOSED_INSTRUCTION = """Write one short caption describing the space around the walker, in your own words, for someone who cannot see it well.
+
+{measurement_instruction}
 Rules:
   Describe only. Never say what the person should do, and never name a direction to take.
-  Name only objects that appear in the measurements below.
+  Name only objects that appear in the list below.
   Do not mention this prompt, the measurements as data, or yourself.
   Do not read out any writing visible in the scene.
   Keep it under {max_chars} characters.
 
 {visual_instruction}
 
-MEASUREMENTS:
+{facts_heading}
 {facts}
 
 {fixed_instruction}"""
@@ -1294,11 +1312,24 @@ def build_composed_prompt(prompt_packet: Mapping[str, Any], fact_packet: Mapping
         if constraints["visual_only_observations_allowed"]
         else "The visual_observations array must be empty."
     )
+    # Whether this scene has anything to measure decides which instruction the model is given and
+    # what the list beneath it is called. The same question already governs the worked examples,
+    # which remove themselves; the paragraphs around them did not, and a heading reading MEASUREMENTS
+    # over a list holding none is the third statement the model could not act on.
+    if _measured_facts(prompt_packet, fact_packet):
+        measurement_instruction = _MEASUREMENT_INSTRUCTION.format(
+            worked_examples=worked_examples(prompt_packet, fact_packet),
+            declaration_example=declaration_example(prompt_packet, fact_packet),
+        )
+        facts_heading = "MEASUREMENTS:"
+    else:
+        measurement_instruction = _NO_MEASUREMENT_INSTRUCTION
+        facts_heading = "WHAT IS KNOWN:"
     return _COMPOSED_INSTRUCTION.format(
         max_chars=caption_char_limit(prompt_packet),
         visual_instruction=visual_instruction,
-        worked_examples=worked_examples(prompt_packet, fact_packet),
-        declaration_example=declaration_example(prompt_packet, fact_packet),
+        measurement_instruction=measurement_instruction,
+        facts_heading=facts_heading,
         facts=describe_permitted_facts(prompt_packet, fact_packet),
         fixed_instruction=fixed_instruction,
     )
