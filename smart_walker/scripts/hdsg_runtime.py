@@ -669,6 +669,24 @@ def determine_authority(
     rules: list[dict] = []
 
     def binding(fact_ids: list[str], source: str) -> dict:
+        """Names the measured elements that produced this decision, primary first.
+
+        **Why naming the cause is a separate requirement from telling the truth.** An output that
+        names a real but non-causal fact is faithful and still misleading. Reporting a wall at
+        1.2 metres when the system stopped for a chair at 0.5 metres is entailed by the Fact Packet,
+        passes every check the gate applies to a measurement, and sends the person into the chair.
+        The transparency metric therefore asks which element caused the behaviour, not only whether
+        each statement is true.
+
+        `accepted_fact_ids` carries every element a caption could name and be equally correct: two
+        objects at the same distance, or a sector tied with the object standing in it. Scoring
+        accepts any of them rather than privileging an arbitrary one.
+
+        This paragraph was written for `identify_binding_fact` in the canonical client, a first
+        implementation of the same idea that nothing called and that was deleted on 25 August 2026.
+        It is kept here, beside the code that does the work, because the argument is about the
+        metric rather than about either implementation.
+        """
         return {
             "primary_fact_id": fact_ids[0] if fact_ids else None,
             "accepted_fact_ids": fact_ids,
