@@ -1404,12 +1404,33 @@ def build_prompt_packet(
             })
             fact_ids.extend(scene_ids)
 
-    moving = [item["fact_id"] for item in fact_packet.get("objects", []) if item.get("motion_state") == "MOVING"]
+    # A moving object the caption is not otherwise required to name.
+    #
+    # Two faults met here until 25 August 2026, and both ended with a person walking towards the
+    # user going unmentioned in the sentence that asks the user to walk that way.
+    #
+    # The list held every moving object under ANY_OF, including ones the action binding already
+    # required. A chair blocking the way and a person moving on the left both count as moving, so
+    # the requirement was satisfied by naming the chair, which the caption had to name anyway, and
+    # the person was never mentioned. Only objects nothing else requires are listed now, and where
+    # that leaves the list empty the requirement is not added at all.
+    #
+    # The alert was also skipped whenever the budget was already full. In the sector-choice state
+    # the action binding takes all three of the automatic profile's clauses, so the alert was
+    # dropped, and dropping it removes the object from `permitted_facts` as well: the moving person
+    # was not merely unmentioned, naming them was refused by the gate as an invalid fact reference.
+    # Settled by Atiq on 25 August 2026: a moving object is always permitted, at the cost of a
+    # clause. This is a change to the budget deferred at HDSG_VERIFIED_GENERATION_POLICY.md
+    # section 10.4 and is recorded there.
+    required_elsewhere = set(fact_ids)
+    moving = [item["fact_id"] for item in fact_packet.get("objects", [])
+              if item.get("motion_state") == "MOVING"
+              and item["fact_id"] not in required_elsewhere]
     minimum_required_clauses = sum(
         len(item["fact_ids"]) if item["match"] == "ALL_OF" else 1
         for item in requirements
     )
-    if moving and minimum_required_clauses < max_reasons:
+    if moving:
         requirements.append({
             "requirement_id": "moving_object_alert",
             "role": "MOVING_OBJECT_ALERT",
