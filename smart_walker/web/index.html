@@ -286,11 +286,18 @@ function draw(state) {
   ctx.clearRect(0, 0, w, h);
   if (!state.sectors) return;
 
-  const y1 = Math.round(0.55 * h), y2 = Math.round(0.95 * h);
+  // The band drawn is the band measured. Until 25 August 2026 this hardcoded 0.55 and 0.95 and
+  // divided the width into exact thirds, so it drew neither the configured rows nor the columns
+  // the bearing fractions imply, and under mirror view it put each label over the third the
+  // reading did not come from. Nothing is drawn when the geometry is absent, which is the same
+  // condition as having no sectors to draw.
+  const geometry = state.sector_bands;
+  if (!geometry) return;
+  const [y1, y2] = geometry.rows;
   SECTOR_ORDER.forEach((name, i) => {
     const sector = state.sectors[name];
     if (!sector) return;
-    const x1 = Math.round(i * w / 3), x2 = Math.round((i + 1) * w / 3);
+    const [x1, x2] = geometry.cols[i];
     const status = sector.status || 'UNKNOWN';
     ctx.fillStyle = SECTOR_COLOURS[status] || SECTOR_COLOURS.UNKNOWN;
     ctx.fillRect(x1, y1, x2 - x1, y2 - y1);

@@ -410,7 +410,7 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
                        left_max: float, right_min: float,
                        top_fraction: float = hdsg.SECTOR_BAND_TOP_FRACTION,
                        bottom_fraction: float = hdsg.SECTOR_BAND_BOTTOM_FRACTION,
-                       min_measured_fraction: float = 0.0) -> Optional[dict]:
+                       *, min_measured_fraction: float) -> Optional[dict]:
     """Partition the lower field of view into three depth bands and classify each.
 
     The column boundaries come from `bearing` in pipeline.yaml, the same fractions
@@ -420,12 +420,9 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
     likewise between 0.66 and 0.6667 on the other side. Two and four pixels at 640 wide, but the
     caption could place an object in a sector whose clearance was measured without it.
 
-    This is the single place lane clearance is computed. The risk override, the
-    VLM prompt, the band overlay and the safe-path badge all read this result, so
-    the bands the user sees are by construction the bands the system reasoned
-    over. The logic previously existed as four independent copies, which drifted:
-    two of them applied the mirror correction once and one applied it twice, so
-    under --mirror_view the badge and the caption named opposite directions.
+    This is the single place lane clearance is computed. The logic previously existed as four
+    independent copies, which drifted: two of them applied the mirror correction once and one
+    applied it twice, so under --mirror_view the badge and the caption named opposite directions.
 
     The row band comes from `sector.band_top_fraction` and `sector.band_bottom_fraction` in
     pipeline.yaml: below the horizon, above the immediate foreground where the walker's own frame
@@ -433,10 +430,26 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
     in `valid_depth_fraction` and in the configuration record that states how a run was measured.
     The three agreed and nothing compared them.
 
-    Returns None when depth is unavailable. Otherwise a dict carrying the band
-    geometry, the median depth per band, a three-way status per band, the
-    advisory implied by the clear/blocked pattern, and the deterministic
-    suggestion token.
+    **The two displays now read the geometry from here too, which they did not until 25 August
+    2026.** The docstring claimed they did, and both recomputed it instead, hardcoding 0.55 and 0.95
+    and dividing the width into exact thirds. Two copies of the row band survived the 23 August work
+    by being outside the reasoning path, and the thirds were the column fault described above, drawn
+    rather than measured. The cost while the configuration holds its current values is one pixel on
+    one boundary and three on the other; the cost on the day the band is retuned for the laboratory
+    is an overlay that draws the old band beside the new numbers.
+
+    Returned in the person's frame of reference. Under `--mirror_view` the columns are swapped
+    alongside the depths, because the picture is not flipped: a display reading `sectors["left"]`
+    and drawing it over the image's left third put the label and the clearance over the region they
+    were not measured from.
+
+    Returns None when depth is unavailable. Otherwise the band geometry, the median depth per band
+    and a three-way status per band. Seven further fields were returned until 25 August 2026 and
+    read by nothing: `clear_count`, `advisory`, `auto_suggest`, `finite_depths_m`,
+    `clear_threshold_m` and `blocked_threshold_m`. `advisory` was a second scene-level SAFE, CAUTION
+    or STOP beside `compute_baseline_risk`, and `auto_suggest` a seven-way movement suggestion,
+    including a suggestion to reverse, decided by six branches and consulted by nobody. Two decision
+    policies in one file is the fault removed from the perception layer on 24 August.
     """
     if depth_m is None or not isinstance(depth_m, np.ndarray):
         return None
@@ -460,10 +473,16 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
                                      min_coverage=min_measured_fraction)
         d_R = sw.median_depth_in_box(depth_m, xR1, y1, xR2, y2,
                                      min_coverage=min_measured_fraction)
+        cols = ((xL1, xL2), (xC1, xC2), (xR1, xR2))
         # Swapping here puts every downstream consumer in the user's frame of
         # reference. Do not mirror the derived token again later.
+        #
+        # The columns are swapped with the depths. They describe where each reading was taken, and
+        # the picture is not flipped by `--mirror_view`, so a display drawing `sectors["left"]` over
+        # the image's left third was labelling the region the reading did not come from.
         if mirror_view:
             d_L, d_R = d_R, d_L
+            cols = (cols[2], cols[1], cols[0])
 
         def _status(d):
             """blocked / constrained / clear. Unreadable depth is not free space.
@@ -479,55 +498,22 @@ def compute_lane_state(depth_m: Optional[np.ndarray], mirror_view: bool,
                 return 'constrained'
             return 'clear'
 
-        st_L, st_C, st_R = _status(d_L), _status(d_C), _status(d_R)
-
-        def _num(d):
-            try:
-                return float(d) if isinstance(d, (int, float)) and np.isfinite(d) else -1.0
-            except Exception:
-                return -1.0
-
-        is_L = _num(d_L) >= clear_t
-        is_C = _num(d_C) >= clear_t
-        is_R = _num(d_R) >= clear_t
-        clear_count = sum([is_L, is_C, is_R])
-
-        # Advisory from the clear/blocked pattern alone.
-        if clear_count == 3:
-            advisory = 'SAFE'
-        elif clear_count == 0:
-            advisory = 'STOP'
-        else:
-            advisory = 'CAUTION'
-
-        if clear_count == 0:
-            auto_suggest = 'back'
-        elif clear_count == 3:
-            auto_suggest = 'continue'
-        elif clear_count == 1:
-            auto_suggest = 'continue' if is_C else ('left' if is_L else 'right')
-        else:  # exactly two bands clear
-            if is_C and is_L:
-                auto_suggest = 'mid-left'
-            elif is_C and is_R:
-                auto_suggest = 'mid-right'
-            else:
-                auto_suggest = 'left-right'
-
-        finite = [v for v in (_num(d_L), _num(d_C), _num(d_R)) if v >= 0]
         return {
             'rows': (y1, y2),
-            'cols': ((xL1, xL2), (xC1, xC2), (xR1, xR2)),
+            'cols': cols,
             'depths': (d_L, d_C, d_R),
-            'status': (st_L, st_C, st_R),
-            'clear_count': clear_count,
-            'advisory': advisory,
-            'auto_suggest': auto_suggest,
-            'finite_depths_m': finite,
-            'clear_threshold_m': float(clear_t),
-            'blocked_threshold_m': float(blocked_t),
+            'status': (_status(d_L), _status(d_C), _status(d_R)),
         }
-    except Exception:
+    except (AttributeError, IndexError, TypeError, ValueError) as error:
+        # Narrowed on 25 August 2026. A bare `except Exception` here returned None for any fault at
+        # all, and None means the camera gave no depth, which becomes three unknown sectors and a
+        # stop. A defect in this function was therefore recorded as a blind camera and was
+        # indistinguishable from one, which matters because an unmeasurable scene is a real state:
+        # 114 of the 1,480 frames of the archived run, 7.7 per cent, produce it honestly.
+        #
+        # These four are the failures a malformed frame can raise. Anything else is a defect and is
+        # allowed to reach the thread's handler, which ends the run and says so.
+        print(f"[hdsg] the depth frame could not be read: {error!r}")
         return None
 
 
@@ -1607,6 +1593,10 @@ def main():
     display_color: Optional[np.ndarray] = None
     latest_objects: list[dict] = []
     latest_sector_facts: Optional[dict] = None
+    # The rows and columns the clearances were measured across, in the person's frame of reference,
+    # carried to both displays so that the band drawn is the band measured rather than a second
+    # statement of the same geometry.
+    latest_lane_geometry: Optional[tuple] = None
     latest_authority: Optional[dict] = None
     # None until the first depth frame arrives, and recorded as None in any packet built before it,
     # which is the honest value: no frame was measured, rather than a coverage of zero.
@@ -2039,6 +2029,8 @@ def main():
                     min_measured_fraction=sector_min_measured,
                 )
                 latest_sector_facts = hdsg.sectors_from_lane_state(lane_state)
+                latest_lane_geometry = (
+                    (lane_state["rows"], lane_state["cols"]) if lane_state else None)
                 # Recorded on every observation, whether or not it crosses the caution threshold.
                 # The threshold is provisional and set from seven frames; only the distribution the
                 # archive accumulates can settle it.
@@ -2230,6 +2222,15 @@ def main():
                         }
                         for name, item in (latest_sector_facts or {}).items()
                     },
+                    # Where each clearance was measured, so the browser draws the band the system
+                    # reasoned over instead of its own copy of the geometry. It hardcoded 0.55 and
+                    # 0.95 and exact thirds until 25 August 2026, the same two faults as the OpenCV
+                    # overlay and with the same consequence under `--mirror_view`.
+                    "sector_bands": (
+                        {"rows": list(latest_lane_geometry[0]),
+                         "cols": [list(pair) for pair in latest_lane_geometry[1]]}
+                        if latest_lane_geometry else None
+                    ),
                     "objects": [
                         {
                             "label": item.get("canonical_label") or item.get("raw_label") or "object",
@@ -2255,12 +2256,16 @@ def main():
 
             if use_opencv_ui and display_color is not None:
                 vis = display_color.copy()
-                if latest_sector_facts is not None and args.debug_lanes:
-                    height, width = vis.shape[:2]
-                    y1, y2 = int(0.55 * height), int(0.95 * height)
+                if latest_sector_facts is not None and args.debug_lanes and latest_lane_geometry:
+                    # The band drawn is the band measured, read from the lane state rather than
+                    # recomputed. Until 25 August 2026 this hardcoded 0.55 and 0.95 and divided the
+                    # width into exact thirds, so it drew neither the configured rows nor the
+                    # columns `bearing` implies, and under `--mirror_view` it put each label over
+                    # the third the reading did not come from.
+                    (y1, y2), band_cols = latest_lane_geometry
                     colours = {"CLEAR": (0, 180, 0), "CONSTRAINED": (0, 190, 255), "BLOCKED": (0, 0, 200), "UNKNOWN": (120, 120, 120)}
                     for index, name in enumerate(("left", "centre", "right")):
-                        x1, x2 = int(index * width / 3), int((index + 1) * width / 3)
+                        x1, x2 = band_cols[index]
                         sector = latest_sector_facts[name]
                         colour = colours[sector["status"]]
                         overlay = vis.copy()
